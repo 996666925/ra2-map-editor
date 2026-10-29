@@ -1,0 +1,19 @@
+# Keep source, scripts and documentation consistent across platforms.
+* text=auto eol=lf
+
+# Binary assets must never undergo newline conversion.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.7z binary
+*.exe binary
+*.dll binary
+*.pdb binary
+*.mix binary
+*.shp binary
+*.vxl binary
+*.hva binary
+*.pal binary

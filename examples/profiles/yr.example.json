@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "name": "My YR resource profile",
+  "schema": "vera20k-pinned-yr-v1",
+  "game_dir": "../../../game",
+  "playtest_exe": "../../../game/vera20k.exe"
+}

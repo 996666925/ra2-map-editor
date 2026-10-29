@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "profile": "../profiles/yr.example.json",
+  "output": "../../target/published-maps",
+  "max_edge": 4096,
+  "strict": false,
+  "dependencies": true
+}

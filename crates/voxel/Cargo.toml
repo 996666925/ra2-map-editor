@@ -1,0 +1,16 @@
+[package]
+name = "ra2-map-voxel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The included engine modules have in-crate tests depending on its full client.
+# Editor integration tests exercise this adapter through the assets crate.
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+vera20k-core.workspace = true
+glam.workspace = true

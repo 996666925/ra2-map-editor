@@ -1,0 +1,3 @@
+[submodule "vera20k"]
+	path = vendor/vera20k
+	url = https://github.com/YuriPlanet/vera20k.git

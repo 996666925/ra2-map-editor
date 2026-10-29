@@ -1,0 +1,28 @@
+# Cargo build output and machine-specific configuration
+/target/
+/.cargo/
+
+# Private development documents (kept locally)
+/docs/
+/ARCHITECTURE.md
+
+# Local editor settings
+/.idea/
+/.vscode/
+/.vs/
+
+# Local verification, playtest and recovery output
+*.log
+/playtest/
+/recovery/
+*.yrrec
+*.yr-editor-*.bak
+
+# Temporary files and operating system metadata
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,325 @@
+//! Map geometry planning and read-only lighting previews.
+use crate::{editing::Editor, map::MapScene};
+use eframe::egui;
+use ra2_map_document::{
+    document::{MapDocument, Snapshot},
+    lighting::{COMPONENTS, Draft, Profile},
+    map_settings::{self, Footprints, Options, Plan},
+};
+use std::time::{Duration, Instant};
+
+#[derive(Default)]
+pub(crate) struct MapSettingsUi {
+    pub open: bool,
+    pub tab: u8,
+    identity: Option<(u64, u64)>,
+    options: Option<Options>,
+    original: Option<Options>,
+    light: Option<Draft>,
+    original_light: Option<Draft>,
+    pub profile: Profile,
+    preview: bool,
+    due: Option<Instant>,
+    plan: Option<Plan>,
+    worker: Option<std::sync::mpsc::Receiver<anyhow::Result<Plan>>>,
+    message: String,
+}
+impl MapSettingsUi {
+    pub(crate) fn smoke_preview(&mut self, doc: &MapDocument, profile: Profile) {
+        self.load(doc);
+        self.open = true;
+        self.tab = 1;
+        self.profile = profile;
+        self.preview = true;
+        let light = self.light.as_mut().unwrap();
+        light.values.insert("IonAmbient".into(), "0.45".into());
+        light
+            .values
+            .insert("DominatorAmbient".into(), "0.25".into());
+        light.values.insert("IonBlue".into(), "0.7".into());
+        light.values.insert("DominatorRed".into(), "0.6".into());
+    }
+    pub(crate) fn apply_lighting(&self, doc: &mut MapDocument) -> anyhow::Result<()> {
+        self.light.as_ref().unwrap().apply(doc)
+    }
+    pub fn dirty(&self) -> bool {
+        self.options != self.original || self.light != self.original_light
+    }
+    pub fn allow_leave(&mut self) -> bool {
+        if self.dirty() {
+            self.open = true;
+            self.message = "地图设置有未应用草稿，请先应用或放弃。".into();
+            false
+        } else {
+            true
+        }
+    }
+    fn load(&mut self, doc: &MapDocument) {
+        self.identity = Some((doc.id, doc.state_id));
+        self.options = Some(Options::from_document(doc));
+        self.original = self.options.clone();
+        self.light = Some(Draft::read(doc));
+        self.original_light = self.light.clone();
+        self.plan = None;
+        self.worker = None;
+    }
+    pub fn preview_snapshot(&self, doc: &MapDocument) -> anyhow::Result<(Snapshot, Profile)> {
+        if self.open
+            && self.tab == 1
+            && self.preview
+            && let Some(light) = &self.light
+        {
+            Ok((light.snapshot(doc)?, self.profile))
+        } else {
+            Ok((doc.snapshot(), Profile::Normal))
+        }
+    }
+    pub fn show(&mut self, ctx: &egui::Context, editor: &mut Editor, scene: &MapScene) {
+        if !self.open {
+            return;
+        }
+        let Some(doc) = editor.doc.as_ref() else {
+            return;
+        };
+        if self.identity != Some((doc.id, doc.state_id)) {
+            self.load(doc);
+        }
+        if let Some(rx) = &self.worker {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.worker = None;
+                    match result {
+                        Ok(p) if Some(&p.options) == self.options.as_ref() => {
+                            self.plan = Some(p);
+                            self.message = "迁移预览完成，未改写地图。".into();
+                        }
+                        Ok(_) => self.message = "设置已改变，请重新检查迁移。".into(),
+                        Err(e) => self.message = format!("{e:#}"),
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.worker = None;
+                    self.message = "迁移检查线程意外结束。".into();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        let old_tab = self.tab;
+        let mut open = true;
+        let mut apply_map = false;
+        let mut apply_light = false;
+        let mut discard = false;
+        let mut changed = false;
+        let mut inspect = false;
+        let mut undo = false;
+        let mut redo = false;
+        crate::ui_theme::window(ctx,"地图设置与光照","map-properties",egui::vec2(750.,690.)).open(&mut open).show(ctx,|ui|{
+            ui.horizontal_wrapped(|ui|{
+                ui.add_enabled_ui(!self.dirty(),|ui|{
+                    changed|=ui.selectable_value(&mut self.tab,0,"尺寸与可玩区域").changed();
+                    changed|=ui.selectable_value(&mut self.tab,1,"光照").changed();
+                });
+                if self.dirty(){ui.colored_label(egui::Color32::YELLOW,"有未应用草稿");}
+            });
+            egui::ScrollArea::vertical().max_height((ui.available_height()-100.).max(140.)).show(ui,|ui|{
+                if self.tab==0 {
+                    let options=self.options.as_mut().unwrap();
+                    ui.label(format!("当前 Size：{} × {}；宽＋高 ≤ 512。平移以投影平面左/上为单位。",doc.base.header.width,doc.base.header.height));
+                    egui::Grid::new("map-dimensions").num_columns(2).show(ui,|ui|{
+                        for (name,value) in [("新宽度",&mut options.width),("新高度",&mut options.height)]{ui.label(name);changed|=ui.add(egui::DragValue::new(value).range(20..=492)).changed();ui.end_row();}
+                        ui.label("原图放置偏移（左、上）");ui.horizontal(|ui|{for value in &mut options.offset{changed|=ui.add(egui::DragValue::new(value).range(-512..=512)).changed();}});ui.end_row();
+                        ui.label("扩展区域清地高度");changed|=ui.add(egui::DragValue::new(&mut options.fill_level).range(0..=14)).changed();ui.end_row();
+                        ui.label("LocalSize 左、上、宽、高");ui.horizontal_wrapped(|ui|{for value in &mut options.local{changed|=ui.add(egui::DragValue::new(value).range(0..=512)).changed();}});ui.end_row();
+                    });
+                    ui.horizontal_wrapped(|ui|{
+                        if ui.button("可玩区域铺满有效边距").clicked(){options.local=[2,4,i32::from(options.width)-4,i32::from(options.height)-10];changed=true;}
+                        if ui.button("居中放置原图").clicked(){options.offset=[(i32::from(options.width)-doc.base.header.width as i32)/2,(i32::from(options.height)-doc.base.header.height as i32)/2];changed=true;}
+                    });
+                    changed|=ui.checkbox(&mut options.delete_outside,"应用时删除预览中允许删除的越界内容").changed();
+                    ui.small("裁切可删除越界对象、覆盖物、格子标签、基地节点和整条隧道。越界航点、桥梁、脚本目的格和任务可视矩形须先调整；共享 Tag 保留。建筑按活动 ART 占地检查。");
+                    if let Err(e)=options.validate(){ui.colored_label(egui::Color32::LIGHT_RED,e.to_string());}
+                    inspect=ui.add_enabled(self.worker.is_none(),egui::Button::new("检查迁移与越界预览")).clicked();
+                    if self.worker.is_some(){ui.spinner();}
+                    if let Some(plan)=&self.plan {
+                        let s=&plan.summary;ui.label(format!("地形新增 {} / 裁去 {}；移动对象 {}、任务引用 {}；越界 {} 项",s.terrain_added,s.terrain_removed,s.records_moved,s.references_moved,s.affected.len()));
+                        draw_preview(ui,doc,&plan.options,&plan.summary);
+                        for a in s.affected.iter().take(100){ui.colored_label(if a.blocking{egui::Color32::LIGHT_RED}else{egui::Color32::YELLOW},format!("{} {:?} · {}",a.source,a.cell,if a.blocking{"请先调整"}else{"将删除"}));}
+                        if s.affected.len()>100{ui.label("其余项目见预览统计；裁切前请检查边界内容。");}
+                        apply_map=ui.add_enabled(plan.can_apply(),egui::Button::new("应用地图设置（整笔撤销）")).clicked();
+                    }
+                }else{
+                    ui.horizontal_wrapped(|ui|{
+                        for p in Profile::ALL{changed|=ui.selectable_value(&mut self.profile,p,p.label()).changed();}
+                        changed|=ui.checkbox(&mut self.preview,"在画布实时预览").changed();
+                    });
+                    ui.small("修改后稍候更新画布；草稿与配置选择不改写地图。关闭面板恢复普通光照，保存/发布使用已应用参数。空值使用引擎默认值。");
+                    let light=self.light.as_mut().unwrap();
+                    egui::Grid::new("lighting-components").num_columns(2).show(ui,|ui|{
+                        for component in COMPONENTS{let key=format!("{}{component}",self.profile.prefix());ui.label(&key);changed|=ui.text_edit_singleline(light.values.get_mut(&key).unwrap()).changed();ui.end_row();}
+                        for key in ["DominatorAmbientChangeRate","NukeAmbientChangeRate"]{ui.label(key);changed|=ui.text_edit_singleline(light.values.get_mut(key).unwrap()).changed();ui.end_row();}
+                    });
+                    ui.small("Ambient / RGB 按 1%=1 单位量化；Ground / Level 按 0.001 量化。Dominator 顶部层高使用原生核爆 Level=0.1。过渡速率只编辑，不模拟动态淡入淡出。");
+                    if let Ok(p)=light.effective(doc,self.profile){ui.label(format!("实际量化：Ambient {}%，RGB {:?}%，Ground {} / Level {}（千分单位）",p.units.ambient_percent,[p.units.red_percent,p.units.green_percent,p.units.blue_percent],p.units.ground_units,p.units.level_units));}
+                    if let Err(e)=light.validate(){ui.colored_label(egui::Color32::LIGHT_RED,e.to_string());}
+                    ui.horizontal_wrapped(|ui|{
+                        if ui.button("所选配置使用引擎默认").clicked(){for c in COMPONENTS{light.values.insert(format!("{}{c}",self.profile.prefix()),String::new());}changed=true;}
+                        apply_light=ui.add_enabled(light.validate().is_ok(),egui::Button::new("应用光照参数（整笔撤销）")).clicked();
+                    });
+                }
+            });
+            ui.separator();
+            ui.horizontal_wrapped(|ui|{
+                discard=ui.button("放弃草稿并重载").clicked();
+                undo=ui.add_enabled(!self.dirty(),egui::Button::new("撤销")).clicked();
+                redo=ui.add_enabled(!self.dirty(),egui::Button::new("重做")).clicked();
+            });
+            ui.label(&self.message);
+        });
+        if changed {
+            self.plan = None;
+            if self.tab == 1 || old_tab == 1 {
+                self.due = Some(Instant::now());
+            }
+        }
+        if inspect {
+            let footprints = footprints(scene, doc);
+            let mut scratch = doc.fork();
+            scratch.id = doc.id;
+            scratch.state_id = doc.state_id;
+            let options = self.options.clone().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.worker = Some(rx);
+            let ctx = ctx.clone();
+            self.message = "正在后台检查迁移…".into();
+            self.plan = None;
+            std::thread::spawn(move || {
+                let _ = tx.send(map_settings::plan(&scratch, options, &footprints));
+                ctx.request_repaint();
+            });
+        }
+        if apply_map && let Some(plan) = &self.plan {
+            match plan.apply(editor.doc.as_mut().unwrap()) {
+                Ok(_) => {
+                    editor.structural_changed(scene);
+                    self.load(editor.doc.as_ref().unwrap());
+                    self.message = "已应用地图设置，可整笔撤销。".into();
+                }
+                Err(e) => self.message = format!("{e:#}"),
+            }
+        }
+        if undo || redo {
+            editor.history(redo, scene);
+            self.load(editor.doc.as_ref().unwrap());
+        }
+        if apply_light {
+            match self.apply_lighting(editor.doc.as_mut().unwrap()) {
+                Ok(()) => {
+                    editor.commit(scene, "地图光照");
+                    self.load(editor.doc.as_ref().unwrap());
+                    self.message = "已应用光照参数。".into();
+                }
+                Err(e) => self.message = format!("{e:#}"),
+            }
+        }
+        if discard {
+            self.load(editor.doc.as_ref().unwrap());
+            editor.refresh = true;
+            self.message.clear();
+        }
+        if let Some(start) = self.due {
+            if start.elapsed() >= Duration::from_millis(250) {
+                if self.preview_snapshot(editor.doc.as_ref().unwrap()).is_ok() {
+                    editor.refresh = true;
+                }
+                self.due = None;
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+        if !open {
+            if self.dirty() {
+                self.message = "尚有未应用草稿，请应用或放弃后关闭。".into();
+            } else {
+                self.open = false;
+                self.due = None;
+                editor.refresh = true;
+            }
+        }
+    }
+}
+pub(crate) fn footprints(scene: &MapScene, doc: &MapDocument) -> Footprints {
+    doc.records()
+        .values()
+        .filter(|r| r.section == "Structures")
+        .map(|r| {
+            (
+                r.type_id(),
+                ra2_map_scene::placement::offsets(scene, &r.section, &r.type_id()),
+            )
+        })
+        .collect()
+}
+fn draw_preview(
+    ui: &mut egui::Ui,
+    doc: &MapDocument,
+    options: &Options,
+    summary: &map_settings::Summary,
+) {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width().min(600.), 180.),
+        egui::Sense::hover(),
+    );
+    let p = ui.painter_at(rect);
+    let scale = ((rect.width() - 20.) / f32::from(options.width))
+        .min((rect.height() - 20.) / f32::from(options.height));
+    let origin = rect.min + egui::vec2(10., 10.);
+    let r = |left: f32, top: f32, w: f32, h: f32| {
+        egui::Rect::from_min_size(
+            origin + egui::vec2(left, top) * scale,
+            egui::vec2(w, h) * scale,
+        )
+    };
+    p.rect_filled(
+        r(0., 0., f32::from(options.width), f32::from(options.height)),
+        0,
+        egui::Color32::from_gray(42),
+    );
+    p.rect_stroke(
+        r(
+            options.offset[0] as f32,
+            options.offset[1] as f32,
+            doc.base.header.width as f32,
+            doc.base.header.height as f32,
+        ),
+        0,
+        egui::Stroke::new(1.5, egui::Color32::LIGHT_BLUE),
+        egui::StrokeKind::Inside,
+    );
+    let [l, t, w, h] = options.local;
+    p.rect_stroke(
+        r(l as f32, t as f32, w as f32, h as f32),
+        0,
+        egui::Stroke::new(2., egui::Color32::LIGHT_GREEN),
+        egui::StrokeKind::Inside,
+    );
+    for a in &summary.affected {
+        let x = (i32::from(a.cell[0]) - i32::from(a.cell[1]) + doc.base.header.width as i32) as f32
+            / 2.
+            + options.offset[0] as f32;
+        let y = (i32::from(a.cell[0]) + i32::from(a.cell[1]) - doc.base.header.width as i32) as f32
+            / 2.
+            + options.offset[1] as f32;
+        p.circle_filled(
+            origin + egui::vec2(x, y) * scale,
+            2.5,
+            if a.blocking {
+                egui::Color32::LIGHT_RED
+            } else {
+                egui::Color32::YELLOW
+            },
+        );
+    }
+    ui.small(
+        "灰：新 Size；蓝：原图放置范围；绿：LocalSize；红/黄：受影响内容（位置按原图平移后绘制）。",
+    );
+}

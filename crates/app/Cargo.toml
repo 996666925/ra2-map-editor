@@ -1,0 +1,26 @@
+[package]
+name = "ra2-map-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ra2-map-document.workspace = true
+ra2-map-assets.workspace = true
+ra2-map-scene.workspace = true
+ra2-map-render.workspace = true
+ra2-map-io.workspace = true
+anyhow.workspace = true
+eframe.workspace = true
+image.workspace = true
+log.workspace = true
+rfd.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+wgpu.workspace = true
+vera20k-core.workspace = true
+
+[dev-dependencies]
+ra2-map-document = { workspace = true, features = ["test-support"] }
+ra2-map-assets = { workspace = true, features = ["test-support"] }

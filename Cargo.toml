@@ -1,0 +1,61 @@
+[workspace]
+resolver = "3"
+# The root package is an implicit member. Listing "." explicitly makes Cargo
+# treat every nested path as an explicit member and defeats vendor exclusion.
+members = ["crates/document", "crates/assets", "crates/scene", "crates/render", "crates/io", "crates/app", "crates/voxel"]
+default-members = ["."]
+exclude = ["vendor/vera20k"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+[workspace.dependencies]
+ra2-map-document = { path = "crates/document" }
+ra2-map-assets = { path = "crates/assets" }
+ra2-map-scene = { path = "crates/scene" }
+ra2-map-render = { path = "crates/render" }
+ra2-map-io = { path = "crates/io" }
+ra2-map-app = { path = "crates/app" }
+ra2-map-voxel = { path = "crates/voxel" }
+anyhow = "1"
+bytemuck = { version = "1", features = ["derive"] }
+eframe = { version = "=0.35.0", default-features = false, features = ["default_fonts", "wgpu", "persistence", "x11", "wayland"] }
+egui = { version = "=0.35.0", default-features = false }
+egui-wgpu = { version = "=0.35.0", default-features = false }
+env_logger = "0.11"
+image = { version = "0.25", default-features = false, features = ["png"] }
+log = "0.4"
+glam = "0.29"
+rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+vera20k-core = { path = "vendor/vera20k/src", default-features = false }
+wgpu = "=29.0.4"
+
+[package]
+name = "ra2-map-editor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "A Yuri's Revenge map editor for VERA20k"
+default-run = "ra2-map-editor"
+
+[dependencies]
+ra2-map-io.workspace = true
+ra2-map-assets.workspace = true
+ra2-map-app.workspace = true
+ra2-map-document.workspace = true
+anyhow.workspace = true
+eframe.workspace = true
+env_logger.workspace = true
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1
