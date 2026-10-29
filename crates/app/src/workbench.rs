@@ -290,8 +290,20 @@ impl MapView {
             },
         );
     }
+    pub fn quick_tools(&mut self, ui: &mut egui::Ui) {
+        ui.add_enabled_ui(!self.editing_blocked(), |ui| self.editor.quick_tools(ui));
+    }
     pub fn toolbox(&mut self, ui: &mut egui::Ui) {
-        self.editor.toolbox(ui, self.scene.as_ref());
+        if self.editing_blocked() {
+            ui.disable();
+        }
+        egui::ScrollArea::vertical()
+            .id_salt((
+                "tool-workspace-scroll",
+                self.editor.tool.name(),
+                self.editor.terrain_mode.name(),
+            ))
+            .show(ui, |ui| self.editor.toolbox(ui, self.scene.as_ref()));
     }
     pub fn inspector(&mut self, ui: &mut egui::Ui) {
         if self.workbench.map_settings.open || self.editor.structural_refresh {
@@ -302,15 +314,9 @@ impl MapView {
             theme::section(ui, "属性检查", "INSPECTOR");
             ui.add_space(16.);
             ui.label(RichText::new("尚未选择内容").color(theme::MUTED));
-            ui.small("打开地图后，可在这里调整画笔、查看格子和编辑对象。");
+            ui.small("打开地图后，可在这里导航、查看格子和编辑对象。");
             return;
         };
-        if self.editor.tool != crate::editing::Tool::Select || self.editor.selected.is_none() {
-            self.editor.tool_options(ui, scene);
-            ui.add_space(4.);
-            ui.separator();
-            ui.add_space(4.);
-        }
         theme::section(ui, "当前选择", "SELECTION");
         if self.editor.selected.is_some() {
             self.editor.selection_properties(ui, scene);
@@ -683,6 +689,7 @@ impl MapView {
                     ui.label(format!("{key}  —  {}", tool.name()))
                         .on_hover_text(tool.hint());
                 }
+                ui.label("G  —  地形填充；C  —  围合悬崖；H  —  矩形高台");
                 ui.label("[ / ]  —  缩小 / 放大子块、矿石和覆盖物画笔");
                 ui.separator();
                 ui.heading("选择与编辑");

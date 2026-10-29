@@ -524,6 +524,14 @@ impl eframe::App for EditorApp {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| self.map.toolbar(ui, &self.directory_text));
                 });
+            egui::Panel::top("quick-tools")
+                .frame(
+                    egui::Frame::new()
+                        .fill(theme::PANEL)
+                        .inner_margin(egui::Margin::symmetric(12, 5))
+                        .stroke(egui::Stroke::new(1., theme::BORDER)),
+                )
+                .show(ui, |ui| self.map.quick_tools(ui));
             egui::Panel::bottom("workbench-status")
                 .frame(
                     egui::Frame::new()
@@ -532,9 +540,9 @@ impl eframe::App for EditorApp {
                 )
                 .show(ui, |ui| self.map.status_bar(ui));
             egui::Panel::left("tool-library")
-                .default_size(252.)
-                .min_size(218.)
-                .max_size(380.)
+                .default_size(280.)
+                .min_size(248.)
+                .max_size(420.)
                 .resizable(true)
                 .frame(theme::panel_frame())
                 .show(ui, |ui| self.map.toolbox(ui));

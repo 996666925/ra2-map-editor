@@ -82,92 +82,76 @@ impl Editor {
     }
 
     pub(super) fn terrain_library(&mut self, ui: &mut egui::Ui, scene: &MapScene, filter: &str) {
-        egui::ComboBox::from_id_salt("terrain-quick-tool")
-            .width(ui.available_width())
-            .selected_text(if self.tool == Tool::Terrain {
-                self.terrain_mode.name()
-            } else {
-                "高台、悬崖与桥梁…"
-            })
-            .show_ui(ui, |ui| {
-                for mode in TerrainMode::ALL {
-                    if ui
-                        .selectable_label(
-                            self.tool == Tool::Terrain && self.terrain_mode == mode,
-                            mode.name(),
-                        )
-                        .clicked()
-                    {
-                        self.activate_tool(Tool::Terrain);
-                        self.terrain_mode = mode;
+        let filling = self.terrain_mode == TerrainMode::Fill && self.tool == Tool::Terrain;
+        egui::CollapsingHeader::new("分类与模板选项").show(ui, |ui| {
+            egui::ComboBox::from_id_salt("terrain-category")
+                .width(ui.available_width())
+                .selected_text(
+                    self.ui_state
+                        .terrain_category
+                        .map_or("全部地形", TerrainCategory::name),
+                )
+                .show_ui(ui, |ui| {
+                    let old = self.ui_state.terrain_category;
+                    ui.selectable_value(&mut self.ui_state.terrain_category, None, "全部地形");
+                    for category in TerrainCategory::ALL {
+                        if scene
+                            .palette
+                            .groups
+                            .values()
+                            .any(|g| g.category == category)
+                        {
+                            ui.selectable_value(
+                                &mut self.ui_state.terrain_category,
+                                Some(category),
+                                category.name(),
+                            );
+                        }
                     }
-                }
-            });
-        egui::ComboBox::from_id_salt("terrain-category")
-            .width(ui.available_width())
-            .selected_text(
-                self.ui_state
-                    .terrain_category
-                    .map_or("全部地形", TerrainCategory::name),
-            )
-            .show_ui(ui, |ui| {
-                let old = self.ui_state.terrain_category;
-                ui.selectable_value(&mut self.ui_state.terrain_category, None, "全部地形");
-                for category in TerrainCategory::ALL {
-                    if scene
-                        .palette
-                        .groups
-                        .values()
-                        .any(|g| g.category == category)
-                    {
+                    if old != self.ui_state.terrain_category {
+                        self.ui_state.terrain_group = None;
+                    }
+                });
+            let groups: BTreeMap<_, _> = scene
+                .palette
+                .groups
+                .values()
+                .filter(|g| {
+                    self.ui_state
+                        .terrain_category
+                        .is_none_or(|c| c == g.category)
+                })
+                .map(|g| (g.id, g.name.as_str()))
+                .collect();
+            egui::ComboBox::from_id_salt("terrain-group")
+                .width(ui.available_width())
+                .selected_text(
+                    self.ui_state
+                        .terrain_group
+                        .and_then(|id| groups.get(&id))
+                        .copied()
+                        .unwrap_or("全部地形组"),
+                )
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.ui_state.terrain_group, None, "全部地形组");
+                    for (id, name) in &groups {
                         ui.selectable_value(
-                            &mut self.ui_state.terrain_category,
-                            Some(category),
-                            category.name(),
+                            &mut self.ui_state.terrain_group,
+                            Some(*id),
+                            format!("{name} · #{id}"),
                         );
                     }
-                }
-                if old != self.ui_state.terrain_category {
-                    self.ui_state.terrain_group = None;
-                }
+                });
+            ui.add_enabled_ui(!filling, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.ui_state.terrain_subtiles, false, "完整地形");
+                    ui.selectable_value(&mut self.ui_state.terrain_subtiles, true, "子块");
+                    ui.checkbox(&mut self.ui_state.terrain_variants, "变体");
+                });
             });
-        let groups: BTreeMap<_, _> = scene
-            .palette
-            .groups
-            .values()
-            .filter(|g| {
-                self.ui_state
-                    .terrain_category
-                    .is_none_or(|c| c == g.category)
-            })
-            .map(|g| (g.id, g.name.as_str()))
-            .collect();
-        egui::ComboBox::from_id_salt("terrain-group")
-            .width(ui.available_width())
-            .selected_text(
-                self.ui_state
-                    .terrain_group
-                    .and_then(|id| groups.get(&id))
-                    .copied()
-                    .unwrap_or("全部地形组"),
-            )
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.ui_state.terrain_group, None, "全部地形组");
-                for (id, name) in &groups {
-                    ui.selectable_value(
-                        &mut self.ui_state.terrain_group,
-                        Some(*id),
-                        format!("{name} · #{id}"),
-                    );
-                }
-            });
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.ui_state.terrain_subtiles, false, "完整地形");
-            ui.selectable_value(&mut self.ui_state.terrain_subtiles, true, "子块");
-            ui.checkbox(&mut self.ui_state.terrain_variants, "变体");
         });
-        let subtiles = self.ui_state.terrain_subtiles;
-        let matching = choices(
+        let subtiles = self.ui_state.terrain_subtiles && !filling;
+        let mut matching = choices(
             scene,
             self.ui_state.terrain_category,
             self.ui_state.terrain_group,
@@ -175,10 +159,26 @@ impl Editor {
             self.ui_state.terrain_variants,
             filter,
         );
+        if filling {
+            matching.retain(|&index| {
+                let key = scene.brushes[index].key;
+                scene
+                    .palette
+                    .templates
+                    .get(&(key.tile_id, key.variant))
+                    .is_some_and(|t| t.width == 1 && t.height == 1)
+            });
+        }
         ui.small(format!(
             "{} 个{}",
             matching.len(),
-            if subtiles { "子块" } else { "完整模板" }
+            if filling {
+                "填充素材（1×1）"
+            } else if subtiles {
+                "子块"
+            } else {
+                "完整模板"
+            }
         ));
         if matching.is_empty() {
             ui.label("没有匹配的地形；可清空搜索或切换地形组。");
@@ -187,7 +187,7 @@ impl Editor {
         let width = (ui.available_width() - 8. * (columns - 1) as f32) / columns as f32;
         egui::ScrollArea::vertical()
             .id_salt("terrain-palette")
-            .max_height((ui.available_height() - 46.).max(80.))
+            .max_height((ui.clip_rect().bottom() - ui.cursor().top() - 46.).max(80.))
             .show_rows(ui, 94., matching.len().div_ceil(columns), |ui, rows| {
                 for row in rows {
                     ui.horizontal(|ui| {
@@ -282,20 +282,16 @@ impl Editor {
                                     t.cells.iter().flatten().count()
                                 ))
                                 .unwrap_or_default(),
-                                if subtiles {
+                                if filling {
+                                    "点击选择填充素材，保持填充工具"
+                                } else if subtiles {
                                     "点击使用子块画笔"
                                 } else {
-                                    "点击放置完整地形；右侧可切换同组模板、锚点与基准高度"
+                                    "点击放置完整地形；上方可调整同组模板、锚点与基准高度"
                                 }
                             );
                             if response.on_hover_text(hint).clicked() {
-                                self.brush = index;
-                                self.tool = Tool::Terrain;
-                                self.terrain_mode = if subtiles {
-                                    TerrainMode::Subtile
-                                } else {
-                                    TerrainMode::Template
-                                };
+                                self.select_terrain_material(index, subtiles);
                             }
                         }
                     });

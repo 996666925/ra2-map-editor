@@ -804,8 +804,7 @@ impl Editor {
                         .iter()
                         .position(|b| b.key.tile_id == c.tile_id && b.key.sub_tile == c.sub_tile)
                 {
-                    self.brush = index;
-                    self.tool = Tool::Terrain;
+                    self.select_terrain_material(index, true);
                 }
             } else if self.tool.brush() {
                 self.stroking = true;
@@ -1348,6 +1347,8 @@ mod cliff_edit;
 mod editing_ui;
 #[path = "terrain_ui.rs"]
 mod terrain_ui;
+#[path = "tool_palette.rs"]
+mod tool_palette;
 
 #[path = "region_edit.rs"]
 mod region_edit;

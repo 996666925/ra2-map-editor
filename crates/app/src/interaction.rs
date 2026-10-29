@@ -2,6 +2,7 @@
 use crate::editing::{Editor, Tool};
 use crate::map::MapScene;
 use eframe::egui;
+use ra2_map_scene::terrain_tools::TerrainMode;
 
 pub(crate) const TOOL_KEYS: [(egui::Key, Tool, &str); 9] = [
     (egui::Key::V, Tool::Select, "V"),
@@ -13,6 +14,12 @@ pub(crate) const TOOL_KEYS: [(egui::Key, Tool, &str); 9] = [
     (egui::Key::W, Tool::Waypoint, "W"),
     (egui::Key::E, Tool::Erase, "E"),
     (egui::Key::O, Tool::Ore, "O"),
+];
+
+pub(crate) const TERRAIN_KEYS: [(egui::Key, TerrainMode, &str); 3] = [
+    (egui::Key::G, TerrainMode::Fill, "G"),
+    (egui::Key::C, TerrainMode::CliffOutline, "C"),
+    (egui::Key::H, TerrainMode::Plateau, "H"),
 ];
 
 impl Tool {
@@ -80,7 +87,7 @@ impl Editor {
             Tool::Terrain | Tool::Pick => 0,
             Tool::Place => 1,
             Tool::Waypoint => 2,
-            Tool::Overlay => 3,
+            Tool::Ore | Tool::Gems | Tool::Overlay | Tool::Erase => 3,
             _ => return,
         };
     }
@@ -130,6 +137,17 @@ impl Editor {
         });
         if let Some(tool) = tool {
             self.activate_tool(tool);
+        }
+        let mode = ctx.input_mut(|i| {
+            if i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt || i.modifiers.shift {
+                return None;
+            }
+            TERRAIN_KEYS.iter().find_map(|&(key, mode, _)| {
+                i.consume_key(egui::Modifiers::NONE, key).then_some(mode)
+            })
+        });
+        if let Some(mode) = mode {
+            self.activate_terrain_mode(mode);
         }
         if matches!(
             self.tool,

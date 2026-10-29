@@ -5,6 +5,7 @@ use egui::{RichText, TextureHandle};
 #[derive(Default)]
 pub(super) struct EditorUi {
     pub(super) tab: u8,
+    pub(super) terrain_page: tool_palette::TerrainPage,
     filters: [String; 5],
     pub sprite_source: Option<Arc<ra2_map_assets::sprites::SpritePalette>>,
     pub sprites: HashMap<(String, String), TextureHandle>,
@@ -38,30 +39,6 @@ pub(super) fn map_sprite_texture(
         .id()
 }
 
-fn tool_icon(tool: Tool) -> Icon {
-    match tool {
-        Tool::Select | Tool::Region => Icon::Select,
-        Tool::Paste | Tool::RegionMove => Icon::Move,
-        Tool::Clone => Icon::Building,
-        Tool::Terrain => Icon::Terrain,
-        Tool::Ore => Icon::Ore,
-        Tool::Gems => Icon::Gem,
-        Tool::Overlay => Icon::Ore,
-        Tool::Erase => Icon::Erase,
-        Tool::Place => Icon::Building,
-        Tool::Move => Icon::Move,
-        Tool::Waypoint => Icon::Flag,
-        Tool::Pick => Icon::Pick,
-    }
-}
-fn tool_label(tool: Tool) -> &'static str {
-    match tool {
-        Tool::Move => "移动",
-        Tool::Place => "放置对象",
-        Tool::Waypoint => "起点 / 航点",
-        _ => tool.name(),
-    }
-}
 impl Editor {
     pub(crate) fn show_library(&mut self, tab: u8, section: &str, filter: &str) {
         self.ui_state.tab = tab;
@@ -121,124 +98,24 @@ impl Editor {
         });
     }
     pub fn toolbox(&mut self, ui: &mut egui::Ui, scene: Option<&MapScene>) {
-        theme::section(ui, "编辑工具", "TOOLS");
-        let width = (ui.available_width() - 8.) / 2.;
-        let compact = ui.available_height() < 680.;
-        if compact {
-            ui.add_enabled_ui(self.doc.is_some(), |ui| {
-                egui::ComboBox::from_id_salt("compact-tool-selector")
-                    .width(ui.available_width())
-                    .selected_text(self.tool.name())
-                    .show_ui(ui, |ui| {
-                        for tool in [
-                            Tool::Select,
-                            Tool::Region,
-                            Tool::Paste,
-                            Tool::RegionMove,
-                            Tool::Clone,
-                            Tool::Move,
-                            Tool::Terrain,
-                            Tool::Pick,
-                            Tool::Ore,
-                            Tool::Gems,
-                            Tool::Overlay,
-                            Tool::Place,
-                            Tool::Waypoint,
-                            Tool::Erase,
-                        ] {
-                            if ui
-                                .selectable_label(
-                                    self.tool == tool,
-                                    format!("{}  {}", tool.name(), tool.shortcut()),
-                                )
-                                .on_hover_text(tool.hint())
-                                .clicked()
-                            {
-                                self.activate_tool(tool);
-                            }
-                        }
-                    });
-            });
-        } else {
-            ui.add_enabled_ui(self.doc.is_some(), |ui| {
-                for pair in [
-                    [Tool::Select, Tool::Move],
-                    [Tool::Terrain, Tool::Pick],
-                    [Tool::Ore, Tool::Gems],
-                    [Tool::Place, Tool::Waypoint],
+        theme::section(ui, "创作面板", "WORKSPACE");
+        ui.scope(|ui| {
+            ui.spacing_mut().button_padding.x = 4.;
+            ui.spacing_mut().item_spacing.x = 3.;
+            ui.horizontal_wrapped(|ui| {
+                for (index, name) in [
+                    (0, "地形"),
+                    (1, "对象"),
+                    (2, "航点"),
+                    (3, "覆盖物"),
+                    (4, "动画"),
                 ] {
-                    ui.horizontal(|ui| {
-                        for tool in pair {
-                            if theme::button(
-                                ui,
-                                tool_icon(tool),
-                                tool_label(tool),
-                                width,
-                                self.tool == tool,
-                            )
-                            .on_hover_text(format!(
-                                "{}  {}\n{}",
-                                tool.name(),
-                                tool.shortcut(),
-                                tool.hint()
-                            ))
-                            .clicked()
-                            {
-                                self.activate_tool(tool);
-                            }
-                        }
-                    });
-                }
-                if theme::button(
-                    ui,
-                    Icon::Erase,
-                    "擦除覆盖物",
-                    ui.available_width(),
-                    self.tool == Tool::Erase,
-                )
-                .clicked()
-                {
-                    self.activate_tool(Tool::Erase);
-                }
-            });
-        }
-        ui.add_enabled_ui(self.doc.is_some(), |ui| {
-            if theme::button(
-                ui,
-                Icon::Select,
-                "区域编辑",
-                ui.available_width(),
-                self.tool == Tool::Region,
-            )
-            .clicked()
-            {
-                self.activate_tool(Tool::Region);
-            }
-        });
-        ui.add_space(4.);
-        ui.separator();
-        ui.add_space(4.);
-        theme::section(ui, "素材库", scene.map_or("未加载", |_| "LIBRARY"));
-        if compact {
-            let categories = ["地形", "对象", "航点", "覆盖物", "动画"];
-            egui::ComboBox::from_id_salt("compact-library-selector")
-                .width(ui.available_width())
-                .selected_text(categories[self.ui_state.tab as usize])
-                .show_ui(ui, |ui| {
-                    for (index, label) in categories.into_iter().enumerate() {
-                        ui.selectable_value(&mut self.ui_state.tab, index as u8, label);
-                    }
-                });
-        } else {
-            ui.horizontal(|ui| {
-                for (index, name) in [(0, "地形"), (1, "对象"), (2, "航点")] {
                     ui.selectable_value(&mut self.ui_state.tab, index, name);
                 }
             });
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.ui_state.tab, 3, "覆盖物");
-                ui.selectable_value(&mut self.ui_state.tab, 4, "动画");
-            });
+        });
+        if self.ui_state.tab == 0 {
+            self.terrain_tools(ui);
         }
         let Some(scene) = scene else {
             ui.add_space(24.);
@@ -246,6 +123,38 @@ impl Editor {
             ui.small("地形素材与对象目录将在这里显示。");
             return;
         };
+        if self.tool != Tool::Select {
+            ui.add_space(4.);
+            ui.add_enabled_ui(!self.stroking, |ui| {
+                if self.tool == Tool::Terrain
+                    && matches!(
+                        self.terrain_mode,
+                        TerrainMode::Subtile | TerrainMode::Template | TerrainMode::Fill
+                    )
+                {
+                    egui::CollapsingHeader::new(format!("{} · 设置", self.terrain_mode.name()))
+                        .show(ui, |ui| self.tool_options(ui, scene));
+                } else {
+                    self.tool_options(ui, scene);
+                }
+            });
+            ui.separator();
+        }
+        if self.ui_state.tab == 0
+            && self.tool == Tool::Terrain
+            && (self.terrain_mode.planned() || self.terrain_mode.edits_height())
+        {
+            ui.small("此工具自动选用当前环境的地形，无需挑选素材。");
+            if ui
+                .add_enabled(!self.stroking, egui::Button::new("手工拼贴地形…"))
+                .on_hover_text("切换到完整模板模式，自行选择悬崖、坡面等素材")
+                .clicked()
+            {
+                self.activate_terrain_mode(TerrainMode::Template);
+            }
+            return;
+        }
+        theme::section(ui, "素材库", "LIBRARY");
         if self.ui_state.tab != 2 {
             ui.add(
                 egui::TextEdit::singleline(&mut self.ui_state.filters[self.ui_state.tab as usize])
@@ -308,7 +217,7 @@ impl Editor {
                 }
                 egui::ScrollArea::vertical()
                     .id_salt("object-palette")
-                    .max_height((ui.available_height() - 12.).max(90.))
+                    .max_height((ui.clip_rect().bottom() - ui.cursor().top() - 12.).max(90.))
                     .show_rows(ui, 40., matching.len(), |ui, rows| {
                         for index in rows {
                             let id = matching[index];
@@ -387,7 +296,7 @@ impl Editor {
                 ));
                 egui::ScrollArea::vertical()
                     .id_salt("overlay-palette")
-                    .max_height((ui.available_height() - 12.).max(90.))
+                    .max_height((ui.clip_rect().bottom() - ui.cursor().top() - 12.).max(90.))
                     .show_rows(ui, 40., entries.len(), |ui, rows| {
                         for row in rows {
                             let (index, id) = entries[row];
@@ -460,7 +369,7 @@ impl Editor {
                     .collect();
                 egui::ScrollArea::vertical()
                     .id_salt("waypoint-palette")
-                    .max_height((ui.available_height() - 20.).max(80.))
+                    .max_height((ui.clip_rect().bottom() - ui.cursor().top() - 20.).max(80.))
                     .show_rows(ui, 28., entries.len(), |ui, rows| {
                         for index in rows {
                             let (id, key, cell) = &entries[index];
@@ -484,24 +393,15 @@ impl Editor {
         }
     }
     pub fn tool_options(&mut self, ui: &mut egui::Ui, scene: &MapScene) {
-        theme::section(ui, "工具选项", "PROPERTIES");
-        egui::Frame::new()
-            .fill(theme::SURFACE)
-            .corner_radius(5)
-            .inner_margin(egui::Margin::symmetric(8, 5))
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(20., 20.), egui::Sense::hover());
-                    theme::icon(ui.painter(), rect, tool_icon(self.tool), theme::ACCENT);
-                    ui.label(
-                        RichText::new(self.tool.name())
-                            .strong()
-                            .color(theme::ACCENT),
-                    );
-                });
-            });
+        theme::section(
+            ui,
+            if self.tool == Tool::Terrain {
+                self.terrain_mode.name()
+            } else {
+                self.tool.name()
+            },
+            "",
+        );
         if self.doc.is_none() {
             ui.label(
                 RichText::new(
@@ -531,25 +431,12 @@ impl Editor {
                 if let Some(brush) = scene.brushes.get(self.brush)
                     && !self.terrain_mode.planned()
                 {
-                    theme::field(
-                        ui,
-                        "地形编号",
-                        format!("{} : {}", brush.key.tile_id, brush.key.sub_tile),
-                    );
                     ui.add(
                         egui::Label::new(RichText::new(&brush.label).size(11.).color(theme::MUTED))
-                            .wrap(),
+                            .truncate(),
                     );
                 }
                 ui.add_space(6.);
-                egui::ComboBox::from_id_salt("terrain-mode")
-                    .selected_text(self.terrain_mode.name())
-                    .width(ui.available_width())
-                    .show_ui(ui, |ui| {
-                        for mode in TerrainMode::ALL {
-                            ui.selectable_value(&mut self.terrain_mode, mode, mode.name());
-                        }
-                    });
                 if !self.terrain_mode.planned() {
                     ui.checkbox(&mut self.auto_lat, "自动地表过渡（LAT）");
                 }
@@ -584,10 +471,18 @@ impl Editor {
                     self.terrain_template_options(ui, scene);
                 } else if self.terrain_mode == TerrainMode::Fill {
                     ui.small("点击填充相连且等高的同类地面；请选择 1×1 模板。");
+                    if scene.brushes.get(self.brush).is_none_or(|b| {
+                        scene
+                            .palette
+                            .templates
+                            .get(&(b.key.tile_id, b.key.variant))
+                            .is_none_or(|t| t.width != 1 || t.height != 1)
+                    }) {
+                        ui.colored_label(theme::ACCENT, "请在下方选择可填充的地形素材。");
+                    }
                 } else {
                     ui.small("拖动连续绘制，保留原有高度。");
                 }
-                ui.small("Esc 取消本笔；Ctrl+Z 撤销所有邻接变化。");
             }
             Tool::Ore | Tool::Gems => {
                 ui.add_space(4.);

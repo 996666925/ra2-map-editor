@@ -142,8 +142,7 @@ impl MapView {
                     Panel::Library(tab) => self.editor.show_library(tab, "", ""),
                     Panel::Terrain(mode) => {
                         self.editor.show_library(0, "", "");
-                        self.editor.tool = Tool::Terrain;
-                        self.editor.terrain_mode = mode;
+                        self.editor.activate_terrain_mode(mode);
                     }
                     Panel::Object => {
                         let id = self
@@ -165,6 +164,16 @@ impl MapView {
                             self.editor.select(id);
                         }
                         self.editor.tool = tool;
+                        self.editor.show_library(
+                            match tool {
+                                Tool::Place => 1,
+                                Tool::Waypoint => 2,
+                                Tool::Ore | Tool::Gems | Tool::Overlay | Tool::Erase => 3,
+                                _ => 0,
+                            },
+                            "",
+                            "",
+                        );
                     }
                     Panel::Region => self.editor.tool = Tool::Region,
                     Panel::Settings => self.workbench.settings = true,

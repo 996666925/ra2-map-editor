@@ -139,3 +139,76 @@ fn unavailable_tools_explain_the_prerequisite_and_keep_the_current_tool() {
     drop(e);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn terrain_shortcuts_reveal_the_workspace_and_preserve_text_entry_and_copy() {
+    let (mut e, ctx, root) = editor();
+    let scene = terrain_scene();
+    e.attach(&scene);
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    for &(key_code, mode, _) in &TERRAIN_KEYS {
+        e.show_library(1, "Structures", "");
+        let _ = ctx.run_ui(key(key_code, egui::Modifiers::NONE), |ui| {
+            e.shortcuts(ui.ctx(), &scene);
+        });
+        assert_eq!(e.tool, Tool::Terrain);
+        assert_eq!(e.terrain_mode, mode);
+        assert_eq!(e.ui_state.tab, 0);
+    }
+    let mut text = String::new();
+    let _ = ctx.run_ui(Default::default(), |ui| {
+        ui.text_edit_singleline(&mut text).request_focus();
+    });
+    let _ = ctx.run_ui(key(egui::Key::G, egui::Modifiers::NONE), |ui| {
+        ui.text_edit_singleline(&mut text);
+        e.shortcuts(ui.ctx(), &scene);
+    });
+    assert_eq!(e.terrain_mode, TerrainMode::Plateau);
+    ctx.memory_mut(|m| m.stop_text_input());
+    let _ = ctx.run_ui(key(egui::Key::C, egui::Modifiers::COMMAND), |ui| {
+        e.shortcuts(ui.ctx(), &scene);
+    });
+    assert_eq!(e.terrain_mode, TerrainMode::Plateau);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn choosing_fill_material_keeps_fill_active_and_cannot_change_an_active_stroke() {
+    let (mut e, _, root) = editor();
+    let scene = terrain_scene();
+    e.attach(&scene);
+    e.show_library(0, "", "悬崖");
+    e.ui_state.terrain_category = Some(ra2_map_assets::terrain_library::TerrainCategory::Cliff);
+    e.activate_terrain_mode(TerrainMode::Fill);
+    assert!(e.ui_state.terrain_category.is_none());
+    e.select_terrain_material(0, false);
+    assert_eq!(e.tool, Tool::Terrain);
+    assert_eq!(e.terrain_mode, TerrainMode::Fill);
+
+    e.activate_tool(Tool::Select);
+    e.select_terrain_material(0, false);
+    assert_eq!(e.terrain_mode, TerrainMode::Template);
+
+    e.activate_terrain_mode(TerrainMode::Raise);
+    e.smooth_heights = false;
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    assert!(e.stroking);
+    e.activate_terrain_mode(TerrainMode::CliffOutline);
+    e.select_terrain_material(1, false);
+    assert_eq!(e.tool, Tool::Terrain);
+    assert_eq!(e.terrain_mode, TerrainMode::Raise);
+    assert_eq!(e.brush, 0);
+    e.pointer(&scene, None, false, false, true, None);
+    assert!(e.doc.as_ref().unwrap().undo_name().is_some());
+    e.activate_terrain_mode(TerrainMode::CliffOutline);
+    assert_eq!(e.tool, Tool::Terrain);
+    assert_eq!(e.terrain_mode, TerrainMode::CliffOutline);
+    e.activate_tool(Tool::Pick);
+    e.pointer(&scene, Some([20, 20]), true, false, true, None);
+    assert_eq!(e.tool, Tool::Terrain);
+    assert_eq!(e.terrain_mode, TerrainMode::Subtile);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
