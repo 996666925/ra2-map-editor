@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build windows-x86_64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # vendor/vera20k 是引擎子模块，缺少时 Cargo.lock 无法解析
+          submodules: recursive
+
+      # 版本与 rust-toolchain.toml 保持一致，升级工具链时同步修改
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --locked --release
+
+      - name: Compute version
+        id: version
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "ra2-map-editor-${{ steps.version.outputs.version }}-windows-x86_64"
+          $staging = "staging/$name"
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item "target/release/ra2-map-editor.exe" $staging
+          Copy-Item README.md $staging
+          Compress-Archive -Path "$staging/*" -DestinationPath "$name.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: ra2-map-editor-*-windows-x86_64.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Compute version
+        id: version
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          prerelease: ${{ github.ref_type != 'tag' }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          files: dist/*.zip
+          body: |
+            下载 `ra2-map-editor-${{ steps.version.outputs.version }}-windows-x86_64.zip`，解压后运行 `ra2-map-editor.exe`。
+
+            首次启动在窗口中选择游戏目录；仓库不包含游戏素材。
