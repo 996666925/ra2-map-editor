@@ -15,6 +15,20 @@ use std::{
     time::Instant,
 };
 
+#[derive(Clone)]
+pub(crate) enum MapCreation {
+    Blank(crate::new_map::NewMapOptions),
+    Random(ra2_map_document::random_map::RandomMapOptions),
+}
+impl MapCreation {
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::Blank(options) => options.validate(),
+            Self::Random(options) => options.validate(),
+        }
+    }
+}
+
 pub struct MapResult {
     pub generation: u64,
     pub result: Result<MapScene>,
@@ -50,7 +64,7 @@ struct MapRequest {
     directory: PathBuf,
     name: String,
     snapshot: Option<crate::document::Snapshot>,
-    new_map: Option<crate::new_map::NewMapOptions>,
+    new_map: Option<MapCreation>,
     profile: ra2_map_document::lighting::Profile,
 }
 impl MapLoader {
@@ -104,8 +118,14 @@ impl MapLoader {
                         let decoding = Instant::now();
                         let install=&mut cached.as_mut().unwrap().1;
                         let scene = if let Some(options) = new_map {
-                            stage("生成空白地图…");
-                            load_scene_bytes_controlled(install, &name, "新建地图".into(), options.bytes()?, Instant::now(),profile,&cancelled)?
+                            let bytes = match options {
+                                MapCreation::Blank(options) => {
+                                    stage("生成空白地图…");
+                                    options.bytes()?
+                                },
+                                MapCreation::Random(options) => ra2_map_scene::random_map::generate(install, &options, &cancelled, &stage)?,
+                            };
+                            load_scene_bytes_controlled(install, &name, "新建地图".into(), bytes, Instant::now(),profile,&cancelled)?
                         } else if let Some(snapshot)=snapshot {
                             let incremental = if let Some((old,before,old_profile))=&previous {
                                 if *old_profile==profile {ra2_map_scene::work::update_records(old,before,&snapshot,install,profile,&cancelled)?} else {None}
@@ -197,12 +217,7 @@ impl MapLoader {
             })
             .context("地图线程已退出")
     }
-    pub fn create(
-        &self,
-        generation: u64,
-        directory: PathBuf,
-        options: crate::new_map::NewMapOptions,
-    ) -> Result<()> {
+    pub fn create(&self, generation: u64, directory: PathBuf, options: MapCreation) -> Result<()> {
         options.validate()?;
         self.latest.store(generation, Ordering::Release);
         self.requests

@@ -1,6 +1,6 @@
 use crate::{
     map::MapScene,
-    map_loader::{LoadTimings, MapLoader},
+    map_loader::{LoadTimings, MapCreation, MapLoader},
     terrain_gpu::{Target, TerrainGpu},
 };
 use anyhow::{Context, Result, ensure};
@@ -14,6 +14,8 @@ use std::{
 mod p2_smoke;
 #[path = "p3_smoke.rs"]
 mod p3_smoke;
+#[path = "random_map_ui.rs"]
+mod random_map_ui;
 #[path = "ui_smoke.rs"]
 mod ui_smoke;
 #[path = "workbench.rs"]
@@ -57,7 +59,7 @@ pub struct MapView {
 }
 enum Leave {
     Open(PathBuf, String),
-    New(PathBuf, crate::new_map::NewMapOptions),
+    New(PathBuf, MapCreation),
     Close,
     Restore(PathBuf),
 }
@@ -148,6 +150,9 @@ impl MapView {
         self.status = "正在刷新资源；地图修改与历史保留。".into();
     }
     pub fn create(&mut self, directory: PathBuf, options: crate::new_map::NewMapOptions) {
+        self.create_map(directory, MapCreation::Blank(options));
+    }
+    fn create_map(&mut self, directory: PathBuf, options: MapCreation) {
         if !self.workbench.map_settings.allow_leave()
             || !self.workbench.mission.allow_leave()
             || !self.editor.check_property_draft()
@@ -173,12 +178,7 @@ impl MapView {
     fn open_now(&mut self, directory: PathBuf, name: String) {
         self.load_now(directory, name, None);
     }
-    fn load_now(
-        &mut self,
-        directory: PathBuf,
-        name: String,
-        new_map: Option<crate::new_map::NewMapOptions>,
-    ) {
+    fn load_now(&mut self, directory: PathBuf, name: String, new_map: Option<MapCreation>) {
         self.workbench.canvas_pan = false;
         self.workbench.cancel_secondary = false;
         self.editor.doc = None;
@@ -386,6 +386,15 @@ impl MapView {
                         self.editor.attach(&scene);
                         if message.created {
                             self.editor.mark_new();
+                            if let Ok(ini) = vera20k_core::rules::ini_parser::IniFile::from_bytes(
+                                scene.source.bytes(),
+                            ) && let Some(random) = ini.section("RandomMap")
+                            {
+                                self.editor.status = format!(
+                                    "已生成随机地图，种子 {}；Ctrl+S 选择保存位置。",
+                                    random.read_int("Seed", 0)
+                                );
+                            }
                         }
                         self.center = scene.bounds.center();
                         self.fit = true;
@@ -462,6 +471,9 @@ impl MapView {
                     } else {
                         if ui.button("新建地图…").clicked() {
                             self.show_new_map();
+                        }
+                        if ui.button("新建随机地图…").clicked() {
+                            self.show_random_map();
                         }
                         if ui.button("选择资源与地图…").clicked() {
                             self.show_project_settings();

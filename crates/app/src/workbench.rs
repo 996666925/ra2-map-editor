@@ -10,6 +10,8 @@ pub(super) struct Workbench {
     pub(super) playtest: bool,
     pub(super) mission: crate::mission_ui::MissionUi,
     pub(super) new_map: bool,
+    pub(super) random_map: bool,
+    pub(super) random_options: ra2_map_document::random_map::RandomMapOptions,
     pub(super) help: bool,
     pub(super) canvas_pan: bool,
     pub(super) cancel_secondary: bool,
@@ -37,6 +39,7 @@ impl MapView {
     pub(super) fn editing_blocked(&self) -> bool {
         self.pending.is_some()
             || self.workbench.new_map
+            || self.workbench.random_map
             || self.workbench.settings
             || self.workbench.playtest
             || self.workbench.help
@@ -57,12 +60,14 @@ impl MapView {
     }
     pub fn show_new_map(&mut self) {
         if self.pending.is_none() {
+            self.workbench.random_map = false;
             self.workbench.new_map = true;
         }
     }
     pub fn toolbar(&mut self, ui: &mut egui::Ui, directory: &str) {
         if self.pending.is_none()
             && !self.workbench.new_map
+            && !self.workbench.random_map
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1))
         {
             self.workbench.help = !self.workbench.help;
@@ -87,6 +92,10 @@ impl MapView {
         ui.menu_button("文件", |ui| {
             if ui.button("新建地图…   Ctrl+N").clicked() {
                 self.show_new_map();
+                ui.close();
+            }
+            if ui.button("新建随机地图…").clicked() {
+                self.show_random_map();
                 ui.close();
             }
             if ui.button("打开地图…   Ctrl+O").clicked() {
@@ -645,6 +654,7 @@ impl MapView {
         }
     }
     pub fn settings_windows(&mut self, ctx: &egui::Context, directory: &mut String) {
+        self.random_map_window(ctx, directory);
         if let Some(scene) = &self.scene {
             self.editor.finish_property_edit(ctx, scene);
             self.workbench
@@ -653,6 +663,7 @@ impl MapView {
         }
         if self.pending.is_none()
             && !self.workbench.new_map
+            && !self.workbench.random_map
             && !egui::Popup::is_any_open(ctx)
             && (self.workbench.help
                 || self.workbench.playtest

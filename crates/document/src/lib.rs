@@ -11,6 +11,7 @@ pub mod map_settings;
 pub mod mission;
 pub mod new_map;
 pub mod object_properties;
+pub mod random_map;
 pub mod raw_ini;
 pub mod region;
 pub mod source;

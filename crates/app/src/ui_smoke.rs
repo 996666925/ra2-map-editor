@@ -22,6 +22,7 @@ enum Panel {
     Region,
     Settings,
     New,
+    Random,
     Unsaved,
     Help,
     Playtest,
@@ -64,6 +65,7 @@ fn panels() -> Vec<(String, Panel)> {
         ("region-options".into(), Panel::Region),
         ("project-settings".into(), Panel::Settings),
         ("new-map".into(), Panel::New),
+        ("random-map".into(), Panel::Random),
         ("unsaved-map".into(), Panel::Unsaved),
         ("help".into(), Panel::Help),
         ("playtest".into(), Panel::Playtest),
@@ -130,6 +132,7 @@ impl MapView {
                 egui::Popup::close_all(ctx);
                 self.workbench.settings = false;
                 self.workbench.new_map = false;
+                self.workbench.random_map = false;
                 self.workbench.help = false;
                 self.workbench.playtest = false;
                 self.workbench.mission.open = false;
@@ -182,6 +185,7 @@ impl MapView {
                         self.workbench.map_settings.tab = tab;
                     }
                     Panel::New => self.workbench.new_map = true,
+                    Panel::Random => self.workbench.random_map = true,
                     Panel::Unsaved => self.pending = Some(Leave::Close),
                     Panel::Help => self.workbench.help = true,
                     Panel::Playtest => self.workbench.playtest = true,
@@ -215,6 +219,7 @@ impl MapView {
                 let window = match *panel {
                     Panel::Settings => Some("project-settings"),
                     Panel::New => Some("new-map"),
+                    Panel::Random => Some("random-map"),
                     Panel::Unsaved => Some("unsaved-map"),
                     Panel::Help => Some("interaction-help"),
                     Panel::Playtest => Some("playtest-settings"),
