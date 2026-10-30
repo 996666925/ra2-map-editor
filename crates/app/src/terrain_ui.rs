@@ -53,6 +53,7 @@ pub(super) fn choices(
                 && group.is_none_or(|id| metadata.is_some_and(|g| g.id == id))
                 && (filter.is_empty()
                     || b.label.to_ascii_lowercase().contains(filter)
+                    || crate::labels::terrain_brush(&b.label).contains(filter)
                     || metadata.is_some_and(|g| g.category.name().contains(filter)))
                 && (subtiles || seen.insert((b.key.tile_id, b.key.variant)))
         })
@@ -130,7 +131,8 @@ impl Editor {
                         .terrain_group
                         .and_then(|id| groups.get(&id))
                         .copied()
-                        .unwrap_or("全部地形组"),
+                        .map(crate::labels::terrain)
+                        .unwrap_or_else(|| "全部地形组".into()),
                 )
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.ui_state.terrain_group, None, "全部地形组");
@@ -138,8 +140,9 @@ impl Editor {
                         ui.selectable_value(
                             &mut self.ui_state.terrain_group,
                             Some(*id),
-                            format!("{name} · #{id}"),
-                        );
+                            format!("{} · #{id}", crate::labels::terrain(name)),
+                        )
+                        .on_hover_text(*name);
                     }
                 });
             ui.add_enabled_ui(!filling, |ui| {
@@ -274,7 +277,7 @@ impl Editor {
                             let t = scene.palette.templates.get(&(key.tile_id, key.variant));
                             let hint = format!(
                                 "{}\n{}\n{}",
-                                brush.label,
+                                crate::labels::terrain_brush(&brush.label),
                                 t.map(|t| format!(
                                     "{}×{} · {} 个有效子块",
                                     t.width,
@@ -299,9 +302,14 @@ impl Editor {
             });
         if let Some(brush) = scene.brushes.get(self.brush) {
             ui.add(
-                egui::Label::new(RichText::new(&brush.label).size(10.).color(theme::MUTED))
-                    .truncate(),
-            );
+                egui::Label::new(
+                    RichText::new(crate::labels::terrain_brush(&brush.label))
+                        .size(10.)
+                        .color(theme::MUTED),
+                )
+                .truncate(),
+            )
+            .on_hover_text(&brush.label);
         }
     }
 
@@ -311,7 +319,12 @@ impl Editor {
         };
         let group = scene.palette.groups.get(&brush.key.tile_id);
         if let Some(group) = group {
-            ui.label(format!("{} · {}", group.category.name(), group.name));
+            ui.label(format!(
+                "{} · {}",
+                group.category.name(),
+                crate::labels::terrain(&group.name)
+            ))
+            .on_hover_text(&group.name);
             let siblings = choices(scene, None, Some(group.id), false, false, "");
             if let Some(pos) = siblings
                 .iter()

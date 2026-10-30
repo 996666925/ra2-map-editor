@@ -79,6 +79,11 @@ impl MarkerCache {
                         egui::vec2(image.info.width as f32, image.info.height as f32),
                     )
                 });
+                let label = if waypoint {
+                    label
+                } else {
+                    scene.catalog.object_label(&label).into_owned()
+                };
                 Some(Marker {
                     id,
                     origin,

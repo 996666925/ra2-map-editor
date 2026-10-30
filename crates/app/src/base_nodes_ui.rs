@@ -88,14 +88,14 @@ impl BaseNodesUi {
                 self.stop();
                 return;
             }
-            ui.label(format!("House：{}", self.house));
+            ui.label(format!("所属方：{}", self.house));
             ui.label("点击空格创建节点；拖动节点移动。Esc 取消本次拖动，再按退出。中键/右键平移。");
             egui::ComboBox::from_id_salt("base-building")
-                .selected_text(&self.building)
+                .selected_text(scene.catalog.object_label(&self.building))
                 .show_ui(ui, |ui| {
                     if let Some(types) = scene.catalog.object_types.get("Structures") {
                         for id in types {
-                            ui.selectable_value(&mut self.building, id.clone(), id);
+                            ui.selectable_value(&mut self.building, id.clone(), scene.catalog.object_label(id));
                         }
                     }
                 });
@@ -122,7 +122,7 @@ impl BaseNodesUi {
                         editor.history(true, scene);
                         self.selected = None;
                     }
-                    if ui.button("从本 House 建筑补齐节点").clicked() {
+                    if ui.button("从本方建筑补齐节点").clicked() {
                         let result = base_nodes::import_structures(
                             editor.doc.as_mut().unwrap(),
                             &self.house,
@@ -139,7 +139,7 @@ impl BaseNodesUi {
                     .parse::<i32>()
                     .unwrap_or(0);
                 ui.horizontal(|ui| {
-                    ui.label("PercentBuilt");
+                    ui.label(crate::labels::field("PercentBuilt")).on_hover_text("PercentBuilt");
                     if ui
                         .add(
                             egui::DragValue::new(&mut percent)
@@ -169,7 +169,7 @@ impl BaseNodesUi {
                                     self.selected == Some(i),
                                     format!(
                                         "{i:03} · {} · {},{}",
-                                        node.building, node.cell[0], node.cell[1]
+                                        scene.catalog.object_label(&node.building), node.cell[0], node.cell[1]
                                     ),
                                 )
                                 .clicked()
@@ -226,7 +226,7 @@ impl BaseNodesUi {
                             .get(8)
                             .is_some_and(|v| v == "1");
                         if ui.checkbox(&mut rebuild, "对应现有建筑：AI 重建")
-                            .on_hover_text("保存建筑记录中的标志；实际重建还取决于基地计划和 House 的生产条件。")
+                            .on_hover_text("保存建筑记录中的标志；实际重建还取决于基地计划和所属方的生产条件。")
                             .changed() {
                             let result = base_nodes::set_rebuild(
                                 editor.doc.as_mut().unwrap(),

@@ -98,7 +98,7 @@ impl Editor {
         });
     }
     pub fn toolbox(&mut self, ui: &mut egui::Ui, scene: Option<&MapScene>) {
-        theme::section(ui, "创作面板", "WORKSPACE");
+        theme::section(ui, "创作面板", "");
         ui.scope(|ui| {
             ui.spacing_mut().button_padding.x = 4.;
             ui.spacing_mut().item_spacing.x = 3.;
@@ -154,7 +154,7 @@ impl Editor {
             }
             return;
         }
-        theme::section(ui, "素材库", "LIBRARY");
+        theme::section(ui, "素材库", "");
         if self.ui_state.tab != 2 {
             ui.add(
                 egui::TextEdit::singleline(&mut self.ui_state.filters[self.ui_state.tab as usize])
@@ -199,7 +199,7 @@ impl Editor {
                     .unwrap_or_default();
                 let mut matching: Vec<_> = types
                     .iter()
-                    .filter(|name| filter.is_empty() || name.to_ascii_lowercase().contains(&filter))
+                    .filter(|id| scene.catalog.object_matches(id, &filter))
                     .collect();
                 matching.sort_by_key(|id| {
                     scene
@@ -243,11 +243,12 @@ impl Editor {
                                 if ui
                                     .add_sized(
                                         [ui.available_width(), 40.],
-                                        egui::Button::new(id)
+                                        egui::Button::new(scene.catalog.object_label(id))
                                             .truncate()
                                             .selected(self.type_id == *id),
                                     )
                                     .on_hover_ui(|ui| {
+                                        ui.label(scene.catalog.object_label(id));
                                         ui.label(detail);
                                         if let Some(texture) = sprite_texture(
                                             &mut self.ui_state.sprites,
@@ -285,9 +286,7 @@ impl Editor {
                     .overlays
                     .iter()
                     .enumerate()
-                    .filter(|(_, id)| {
-                        filter.is_empty() || id.to_ascii_lowercase().contains(&filter)
-                    })
+                    .filter(|(_, id)| scene.catalog.object_matches(id, &filter))
                     .collect();
                 ui.small(format!(
                     "{} / {} 个覆盖物",
@@ -318,16 +317,22 @@ impl Editor {
                                     .add_enabled_ui(index < 255, |ui| {
                                         ui.add_sized(
                                             [ui.available_width(), 40.],
-                                            egui::Button::new(format!("{index}: {id}"))
-                                                .truncate()
-                                                .selected(
-                                                    self.tool == Tool::Overlay
-                                                        && usize::from(self.overlay_id) == index,
-                                                ),
+                                            egui::Button::new(format!(
+                                                "{index}: {}",
+                                                scene.catalog.object_label(id)
+                                            ))
+                                            .truncate()
+                                            .selected(
+                                                self.tool == Tool::Overlay
+                                                    && usize::from(self.overlay_id) == index,
+                                            ),
                                         )
                                     })
                                     .inner
-                                    .on_hover_text(detail);
+                                    .on_hover_text(format!(
+                                        "{}\n{detail}",
+                                        scene.catalog.object_label(id)
+                                    ));
                                 if response.clicked() {
                                     self.overlay_id = index as u8;
                                     self.overlay_frame = 0;
@@ -496,7 +501,7 @@ impl Editor {
                     .get(self.overlay_id as usize)
                     .map(String::as_str)
                     .unwrap_or("未知");
-                theme::field(ui, "覆盖物", id);
+                theme::field(ui, "覆盖物", scene.catalog.object_label(id));
                 let count = scene
                     .sprites
                     .get("Overlay", id)
@@ -519,7 +524,7 @@ impl Editor {
             }
             Tool::Place => {
                 theme::field(ui, "分类", category(&self.section));
-                theme::field(ui, "类型", &self.type_id);
+                theme::field(ui, "类型", scene.catalog.object_label(&self.type_id));
                 ui.label(RichText::new("所属方").size(11.).color(theme::MUTED));
                 let houses = self.houses(scene);
                 Self::house_picker(ui, "placement-owner", &mut self.owner, &houses);

@@ -35,7 +35,7 @@ impl MissionOverlay {
                         at,
                         kind: Kind::CellTag,
                         id,
-                        label: format!("格子 Tag {}", String::from_utf8_lossy(&value)),
+                        label: format!("格子标签 {}", String::from_utf8_lossy(&value)),
                     });
                 }
             }
@@ -55,7 +55,11 @@ impl MissionOverlay {
                         at,
                         kind: Kind::Tag,
                         id: tag.clone(),
-                        label: format!("{} {} · Tag {tag}", record.section, record.key),
+                        label: format!(
+                            "{} {} · 标签 {tag}",
+                            crate::labels::field(&record.section),
+                            record.key
+                        ),
                     });
                 }
             }

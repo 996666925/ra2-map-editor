@@ -100,7 +100,7 @@ impl Editor {
                         .contains(&player)
                         {
                             invalid =
-                                Some("单人任务需要在任务制作中设置有效的玩家 House。".to_owned());
+                                Some("单人任务需要在任务制作中设置有效的玩家所属方。".to_owned());
                         }
                     }
                 } else {

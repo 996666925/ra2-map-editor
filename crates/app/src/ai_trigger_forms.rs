@@ -7,7 +7,7 @@ pub(super) fn form(
     doc: &ra2_map_document::document::MapDocument,
     scene: &MapScene,
 ) {
-    ui.small("出队需先用动作 74 启用对应 House 的 AI 触发器；建造需动作 3 或 House IQ 生产条件。小队还需满足工厂/招募、上限及基地防御条件。");
+    ui.small("出队需先用动作 74 启用对应所属方的电脑触发器；建造需动作 3 或所属方智能等级的生产条件。小队还需满足工厂/招募、上限及基地防御条件。");
     if let Ok(mut f) = ai_triggers::decode(value) {
         let before = f.clone();
         for (i, label) in [
@@ -53,14 +53,18 @@ pub(super) fn form(
             egui::ComboBox::from_id_salt("ai-type")
                 .selected_text("选择类型…")
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut f[5], "<none>".into(), "<none>");
+                    ui.selectable_value(&mut f[5], "<none>".into(), "无");
                     for (section, ids) in &scene.catalog.object_types {
                         if matches!(
                             section.as_str(),
                             "Structures" | "Units" | "Infantry" | "Aircraft"
                         ) {
                             for id in ids {
-                                ui.selectable_value(&mut f[5], id.clone(), id);
+                                ui.selectable_value(
+                                    &mut f[5],
+                                    id.clone(),
+                                    scene.catalog.object_label(id),
+                                );
                             }
                         }
                     }
@@ -101,7 +105,7 @@ pub(super) fn form(
                 }
             }
         });
-        ui.small("科技门槛由主、次小队成员的 TechLevel 计算；字段 3 原文不决定门槛。国家是 Countries 中的 ID。字段 11 被引擎丢弃，字段 13 仅存储；原文保留。");
+        ui.small("科技门槛由主、次小队成员的科技等级计算；字段 3 原文不决定门槛。国家使用国家列表中的 ID。字段 11 被引擎丢弃，字段 13 仅存储；原文保留。");
         for (i, error) in ai_triggers::errors(&f) {
             ui.colored_label(egui::Color32::YELLOW, format!("字段 {i}：{error}"));
         }
@@ -111,7 +115,7 @@ pub(super) fn form(
     } else {
         ui.small("无法解释为已核对的 18 字段格式，请使用原文编辑。");
     }
-    ui.collapsing("AITriggerTypes 原文", |ui| {
+    ui.collapsing("电脑触发器原文", |ui| {
         ui.text_edit_singleline(value);
     });
 }
@@ -120,16 +124,20 @@ pub(super) fn enable(ui: &mut egui::Ui, value: &mut String) {
         .selected_text(if value.is_empty() {
             "不写启用项"
         } else {
-            value.as_str()
+            match value.as_str() {
+                "yes" => "启用",
+                "no" => "单人禁用",
+                _ => value.as_str(),
+            }
         })
         .show_ui(ui, |ui| {
             for (v, label) in [
                 ("", "不写启用项（沿用固定定义/默认）"),
-                ("yes", "yes：启用"),
-                ("no", "no：单人禁用"),
+                ("yes", "启用"),
+                ("no", "单人禁用"),
             ] {
                 ui.selectable_value(value, v.into(), label);
             }
         });
-    ui.small("新地图 AI 定义默认禁用，需 yes；固定 AIMD 默认启用。多人模式中只要存在 Enable key，即使 no 也会启用。");
+    ui.small("新地图的电脑触发器默认禁用，需显式启用；固定定义默认启用。多人模式中只要存在启用字段，即使填 no 也会启用。");
 }

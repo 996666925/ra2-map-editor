@@ -370,7 +370,7 @@ impl EditorApp {
                 self.load(true);
             }
         });
-        ui.label("Theater：TEMPERATE");
+        ui.label("地图环境：温带");
         ui.separator();
         ui.heading("地形 TMP");
         ui.add(
@@ -395,7 +395,7 @@ impl EditorApp {
         if ui.add(crate::ui_theme::primary("预览所选资源")).clicked() {
             self.load(false);
         }
-        ui.small("SHP 使用 unittem.pal；当前适合预览步兵和建筑精灵。显示选中帧的裁剪区域。");
+        ui.small("精灵使用 unittem.pal 调色板；当前适合预览步兵和建筑。显示选中帧的裁剪区域。");
         ui.separator();
         if self.loading {
             ui.horizontal(|ui| {
@@ -422,7 +422,7 @@ impl EditorApp {
             let info = self.gpu.adapter.get_info();
             ui.label(info.name);
             ui.label(format!("{:?} / {:?}", info.backend, self.gpu.target_format));
-            ui.small("eframe 与两个预览共用 GPU Device；wgpu 29.0.4");
+            ui.small("主界面与两个预览共用图形设备；wgpu 29.0.4");
         });
     }
 }
@@ -481,7 +481,11 @@ impl eframe::App for EditorApp {
                     ui.painter().rect_filled(logo, 6, theme::ACCENT);
                     theme::icon(ui.painter(), logo, theme::Icon::Terrain, theme::BACKGROUND);
                     ui.add_space(2.);
-                    ui.label(egui::RichText::new("YR MAP EDITOR").size(16.).strong());
+                    ui.label(
+                        egui::RichText::new("尤里的复仇地图编辑器")
+                            .size(16.)
+                            .strong(),
+                    );
                     ui.add_space(10.);
                     if ui
                         .add_sized(

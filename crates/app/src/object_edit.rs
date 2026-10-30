@@ -203,7 +203,16 @@ impl Editor {
         else {
             return;
         };
-        crate::ui_theme::field(ui, "对象类型", r.type_id());
+        let type_id = r.type_id();
+        crate::ui_theme::field(
+            ui,
+            "对象类型",
+            if r.section == "Waypoints" {
+                std::borrow::Cow::Borrowed(type_id.as_str())
+            } else {
+                scene.catalog.object_label(&type_id)
+            },
+        );
         crate::ui_theme::field(ui, "记录编号", &r.key);
         if let Some(at) = r.cell() {
             crate::ui_theme::field(ui, "坐标", format!("{}, {}", at[0], at[1]));
@@ -218,6 +227,7 @@ impl Editor {
             }
             ui.label("类型");
             ui.text_edit_singleline(&mut self.property_type);
+            ui.small(scene.catalog.object_name(&self.property_type));
             if !matches!(r.section.as_str(), "Terrain" | "Smudge") {
                 let houses = self.houses(scene);
                 ui.label("所属方");

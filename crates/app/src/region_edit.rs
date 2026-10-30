@@ -385,7 +385,7 @@ impl Editor {
                     self.task_labels,
                     egui::Checkbox::new(
                         &mut self.region.layers.cell_tags,
-                        "格子标签（共享 Tag 引用）",
+                        "格子标签（共享标签引用）",
                     ),
                 );
                 ui.small("标签层开启时，目的选区的格子标签会被剪贴板内容替换，包括空标签格。");

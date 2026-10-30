@@ -226,6 +226,20 @@ fn terrain_library_groups_templates_and_preserves_subtiles_and_variants_on_reque
         terrain_ui::choices(&scene, None, None, false, true, "悬崖"),
         vec![0, 2]
     );
+    scene.brushes[0].label = "Water Cliffs · cliff01.tem · 0:0 · v0".into();
+    let before = scene.brushes[0].clone();
+    for filter in ["水面悬崖", "water cliffs", "cliff01.tem"] {
+        let matching = terrain_ui::choices(&scene, None, Some(7), false, false, filter);
+        assert_eq!(
+            matching,
+            vec![0],
+            "translated names and original IDs remain searchable"
+        );
+        assert_eq!(scene.brushes[matching[0]].key, before.key);
+        assert_eq!(scene.brushes[matching[0]].raw, before.raw);
+    }
+    assert_eq!(scene.brushes[0].label, before.label);
+    assert_eq!(crate::labels::terrain("Custom Cliff"), "Custom Cliff");
 }
 
 #[test]

@@ -17,7 +17,7 @@ pub fn fields(section: &str) -> Vec<Field> {
     let mut add = |index, name, kind| result.push(Field { index, name, kind });
     match section {
         "Structures" => {
-            add(6, "关联 Tag", Text);
+            add(6, "关联标签", Text);
             add(7, "AI 可出售", Flag);
             add(8, "AI 重建", Flag);
             add(9, "启用供电", Flag);
@@ -30,7 +30,7 @@ pub fn fields(section: &str) -> Vec<Field> {
         "Infantry" => {
             add(5, "步兵子格", Number(0, 4));
             add(6, "初始任务", Text);
-            add(8, "关联 Tag", Text);
+            add(8, "关联标签", Text);
             add(9, "老兵百分比", Number(0, 200));
             add(10, "分组", Number(-1, 9));
             add(11, "桥面 / 高层", Flag);
@@ -39,7 +39,7 @@ pub fn fields(section: &str) -> Vec<Field> {
         }
         "Units" | "Aircraft" => {
             add(6, "初始任务", Text);
-            add(7, "关联 Tag", Text);
+            add(7, "关联标签", Text);
             add(8, "老兵百分比", Number(0, 200));
             add(9, "分组", Number(-1, 9));
             if section == "Units" {

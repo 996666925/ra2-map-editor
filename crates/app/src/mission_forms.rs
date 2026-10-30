@@ -80,7 +80,7 @@ pub(super) fn parameter(
                             || k.as_str() == section
                     })
                     .flat_map(|(_, ids)| ids.iter())
-                    .map(|id| (id.clone(), id.clone()))
+                    .map(|id| (id.clone(), scene.catalog.object_label(id).into_owned()))
                     .collect();
                 pick = ui.small_button("从地图选对象").clicked();
             }
@@ -95,7 +95,7 @@ pub(super) fn parameter(
                 }
                 choices.extend([
                     ("-1".into(), "-1 · 事件任意国家 / 动作无目标".into()),
-                    ("8997".into(), "8997 · 动作保留 House".into()),
+                    ("8997".into(), "8997 · 动作保留所属方".into()),
                 ]);
             }
             P::Csf | P::Sound | P::Eva | P::Theme => {

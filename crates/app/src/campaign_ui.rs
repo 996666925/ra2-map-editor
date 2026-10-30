@@ -172,7 +172,7 @@ impl CampaignUi {
                     });
                     if let Some(m)=self.project.missions.get_mut(self.selected) {
                         egui::Grid::new("mission-metadata").num_columns(2).show(ui,|ui| {
-                            for (label,value) in [("输出文件名",&mut m.file),("源文件",&mut m.source),("Side：GDI/Nod/ThirdSide",&mut m.side),("UIName（CSF）",&mut m.ui_name),("Briefing（CSF）",&mut m.briefing),("LSLoadMessage（CSF）",&mut m.load_message),("LSLoadBriefing（CSF）",&mut m.load_briefing),("640 载入背景文件",&mut m.background_640),("800 载入背景文件",&mut m.background_800),("载入背景调色板",&mut m.background_palette)]{ui.label(label);ui.text_edit_singleline(value);ui.end_row();}
+                            for (label,value) in [("输出文件名",&mut m.file),("源文件",&mut m.source),("阵营：GDI/Nod/ThirdSide",&mut m.side),("显示名称（CSF）",&mut m.ui_name),("任务简报（CSF）",&mut m.briefing),("载入标题（CSF）",&mut m.load_message),("载入简报（CSF）",&mut m.load_briefing),("640 载入背景文件",&mut m.background_640),("800 载入背景文件",&mut m.background_800),("载入背景调色板",&mut m.background_palette)]{ui.label(label);ui.text_edit_singleline(value);ui.end_row();}
                         });
                     }
                     ui.separator(); ui.label("CSF 文本（合并活动 ra2md.csf，保留基础记录；安装后重启游戏）");
@@ -237,17 +237,18 @@ pub(crate) fn basic_field(
     ) {
         ui.horizontal_wrapped(|ui| {
             ui.label(if key == "Brief" {
-                "Brief（影片；任务简报 CSF 在战役目录）"
+                "简报影片（任务简报文本在战役目录中设置）"
             } else {
-                key
-            });
+                crate::labels::field(key)
+            })
+            .on_hover_text(key);
             ui.text_edit_singleline(value);
             let catalog = if key == "Theme" { "Theme" } else { "Movie" };
             if let Some(items) = scene.mission_resources.choices.get(catalog) {
                 egui::ComboBox::from_id_salt(key)
                     .selected_text("选择…")
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(value, "<none>".into(), "<none>");
+                        ui.selectable_value(value, "<none>".into(), "无");
                         for (id, label) in items {
                             ui.selectable_value(value, id.clone(), label);
                         }
@@ -274,7 +275,7 @@ pub(crate) fn basic_field(
             _ => "直接分支需 yes，并生成 MAPSELMD 选项",
         };
         ui.horizontal_wrapped(|ui| {
-            ui.label(key);
+            ui.label(crate::labels::field(key)).on_hover_text(key);
             ui.text_edit_singleline(value);
         });
         ui.small(hint);

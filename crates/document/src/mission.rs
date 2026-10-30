@@ -35,9 +35,9 @@ impl Kind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Basic => "任务设置",
-            Self::House => "House 阵营",
+            Self::House => "所属方",
             Self::Trigger => "触发器",
-            Self::Tag => "Tag 标签",
+            Self::Tag => "触发标签",
             Self::CellTag => "格子标签",
             Self::TaskForce => "特遣部队",
             Self::Script => "脚本",

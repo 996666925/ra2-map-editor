@@ -1,6 +1,7 @@
 //! YR installation resources, decoded assets and authoring catalogs.
 pub mod assets;
 pub mod catalog;
+mod chinese;
 pub mod map_sprites;
 pub mod sprites;
 pub mod terrain_library;

@@ -124,19 +124,19 @@ impl MapSettingsUi {
             egui::ScrollArea::vertical().max_height((ui.available_height()-100.).max(140.)).show(ui,|ui|{
                 if self.tab==0 {
                     let options=self.options.as_mut().unwrap();
-                    ui.label(format!("当前 Size：{} × {}；宽＋高 ≤ 512。平移以投影平面左/上为单位。",doc.base.header.width,doc.base.header.height));
+                    ui.label(format!("当前尺寸：{} × {}；宽＋高 ≤ 512。平移以投影平面左/上为单位。",doc.base.header.width,doc.base.header.height));
                     egui::Grid::new("map-dimensions").num_columns(2).show(ui,|ui|{
                         for (name,value) in [("新宽度",&mut options.width),("新高度",&mut options.height)]{ui.label(name);changed|=ui.add(egui::DragValue::new(value).range(20..=492)).changed();ui.end_row();}
                         ui.label("原图放置偏移（左、上）");ui.horizontal(|ui|{for value in &mut options.offset{changed|=ui.add(egui::DragValue::new(value).range(-512..=512)).changed();}});ui.end_row();
                         ui.label("扩展区域清地高度");changed|=ui.add(egui::DragValue::new(&mut options.fill_level).range(0..=14)).changed();ui.end_row();
-                        ui.label("LocalSize 左、上、宽、高");ui.horizontal_wrapped(|ui|{for value in &mut options.local{changed|=ui.add(egui::DragValue::new(value).range(0..=512)).changed();}});ui.end_row();
+                        ui.label("可玩区域（左、上、宽、高）").on_hover_text("LocalSize");ui.horizontal_wrapped(|ui|{for value in &mut options.local{changed|=ui.add(egui::DragValue::new(value).range(0..=512)).changed();}});ui.end_row();
                     });
                     ui.horizontal_wrapped(|ui|{
                         if ui.button("可玩区域铺满有效边距").clicked(){options.local=[2,4,i32::from(options.width)-4,i32::from(options.height)-10];changed=true;}
                         if ui.button("居中放置原图").clicked(){options.offset=[(i32::from(options.width)-doc.base.header.width as i32)/2,(i32::from(options.height)-doc.base.header.height as i32)/2];changed=true;}
                     });
                     changed|=ui.checkbox(&mut options.delete_outside,"应用时删除预览中允许删除的越界内容").changed();
-                    ui.small("裁切可删除越界对象、覆盖物、格子标签、基地节点和整条隧道。越界航点、桥梁、脚本目的格和任务可视矩形须先调整；共享 Tag 保留。建筑按活动 ART 占地检查。");
+                    ui.small("裁切可删除越界对象、覆盖物、格子标签、基地节点和整条隧道。越界航点、桥梁、脚本目的格和任务可视矩形须先调整；共享标签保留。建筑按当前美术配置中的占地检查。");
                     if let Err(e)=options.validate(){ui.colored_label(egui::Color32::LIGHT_RED,e.to_string());}
                     inspect=ui.add_enabled(self.worker.is_none(),egui::Button::new("检查迁移与越界预览")).clicked();
                     if self.worker.is_some(){ui.spinner();}
@@ -155,11 +155,11 @@ impl MapSettingsUi {
                     ui.small("修改后稍候更新画布；草稿与配置选择不改写地图。关闭面板恢复普通光照，保存/发布使用已应用参数。空值使用引擎默认值。");
                     let light=self.light.as_mut().unwrap();
                     egui::Grid::new("lighting-components").num_columns(2).show(ui,|ui|{
-                        for component in COMPONENTS{let key=format!("{}{component}",self.profile.prefix());ui.label(&key);changed|=ui.text_edit_singleline(light.values.get_mut(&key).unwrap()).changed();ui.end_row();}
-                        for key in ["DominatorAmbientChangeRate","NukeAmbientChangeRate"]{ui.label(key);changed|=ui.text_edit_singleline(light.values.get_mut(key).unwrap()).changed();ui.end_row();}
+                        for component in COMPONENTS{let key=format!("{}{component}",self.profile.prefix());ui.label(crate::labels::field(&key)).on_hover_text(&key);changed|=ui.text_edit_singleline(light.values.get_mut(&key).unwrap()).changed();ui.end_row();}
+                        for key in ["DominatorAmbientChangeRate","NukeAmbientChangeRate"]{ui.label(crate::labels::field(key)).on_hover_text(key);changed|=ui.text_edit_singleline(light.values.get_mut(key).unwrap()).changed();ui.end_row();}
                     });
-                    ui.small("Ambient / RGB 按 1%=1 单位量化；Ground / Level 按 0.001 量化。Dominator 顶部层高使用原生核爆 Level=0.1。过渡速率只编辑，不模拟动态淡入淡出。");
-                    if let Ok(p)=light.effective(doc,self.profile){ui.label(format!("实际量化：Ambient {}%，RGB {:?}%，Ground {} / Level {}（千分单位）",p.units.ambient_percent,[p.units.red_percent,p.units.green_percent,p.units.blue_percent],p.units.ground_units,p.units.level_units));}
+                    ui.small("环境亮度与红绿蓝分量按 1%=1 单位量化；地面与每层高度亮度补偿按 0.001 量化。心灵控制器顶部层高使用原生核爆参数（每层补偿 0.1）。过渡间隔只编辑，不模拟动态淡入淡出。");
+                    if let Ok(p)=light.effective(doc,self.profile){ui.label(format!("实际量化：环境亮度 {}%，红绿蓝 {:?}%，地面补偿 {} / 每层补偿 {}（千分单位）",p.units.ambient_percent,[p.units.red_percent,p.units.green_percent,p.units.blue_percent],p.units.ground_units,p.units.level_units));}
                     if let Err(e)=light.validate(){ui.colored_label(egui::Color32::LIGHT_RED,e.to_string());}
                     ui.horizontal_wrapped(|ui|{
                         if ui.button("所选配置使用引擎默认").clicked(){for c in COMPONENTS{light.values.insert(format!("{}{c}",self.profile.prefix()),String::new());}changed=true;}
@@ -320,6 +320,6 @@ fn draw_preview(
         );
     }
     ui.small(
-        "灰：新 Size；蓝：原图放置范围；绿：LocalSize；红/黄：受影响内容（位置按原图平移后绘制）。",
+        "灰：新尺寸；蓝：原图放置范围；绿：可玩区域；红/黄：受影响内容（位置按原图平移后绘制）。",
     );
 }

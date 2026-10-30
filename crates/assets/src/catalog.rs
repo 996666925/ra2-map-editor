@@ -1,7 +1,7 @@
 //! Read-only authoring choices resolved from the active retail installation.
-use std::{collections::BTreeMap, sync::Arc};
+use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 use vera20k_core::{
-    assets::asset_manager::AssetManager,
+    assets::{asset_manager::AssetManager, csf_file::CsfFile},
     map::theater::{TheaterData, TileKey},
     rules::ini_parser::IniFile,
 };
@@ -11,6 +11,7 @@ pub struct TerrainBrush {
     pub raw: i32,
     pub label: String,
 }
+
 #[derive(Default)]
 pub struct TerrainPalette {
     pub brushes: Vec<TerrainBrush>,
@@ -41,6 +42,10 @@ pub struct TerrainSubtile {
 #[derive(Clone)]
 pub struct Catalog {
     pub rules: IniFile,
+    /// Active installation language table; shared by map-local catalog clones.
+    strings: Option<Arc<CsfFile>>,
+    /// Simplified display text cached on resource load, keyed by unchanged IDs.
+    object_names: BTreeMap<String, String>,
     pub art: Arc<vera20k_core::rules::art_data::ArtRegistry>,
     pub object_types: BTreeMap<String, Vec<String>>,
     pub overlays: Vec<String>,
@@ -53,6 +58,8 @@ impl Default for Catalog {
     fn default() -> Self {
         Self {
             rules: IniFile::empty(),
+            strings: None,
+            object_names: BTreeMap::new(),
             art: Arc::new(vera20k_core::rules::art_data::ArtRegistry::from_ini(
                 &IniFile::empty(),
             )),
@@ -66,6 +73,59 @@ impl Default for Catalog {
     }
 }
 impl Catalog {
+    /// Display names never replace the type IDs used by authoring operations.
+    pub fn object_name<'a>(&'a self, id: &'a str) -> &'a str {
+        self.object_names
+            .get(&id.to_ascii_uppercase())
+            .map_or_else(|| self.raw_object_name(id), String::as_str)
+    }
+
+    fn raw_object_name<'a>(&'a self, id: &'a str) -> &'a str {
+        let canonical = self
+            .object_types
+            .values()
+            .flatten()
+            .chain(self.overlays.iter());
+        let rules = self.rules.section(id).or_else(|| {
+            canonical
+                .into_iter()
+                .find(|name| name.eq_ignore_ascii_case(id))
+                .and_then(|name| self.rules.section(name))
+        });
+        rules
+            .and_then(|rules| rules.read_name("UIName", 32))
+            .and_then(|label| self.strings.as_ref()?.get(label))
+            .filter(|name| !name.trim().is_empty())
+            .or_else(|| {
+                rules
+                    .and_then(|rules| rules.read_name("Name", 256))
+                    .filter(|name| !name.trim().is_empty())
+            })
+            .unwrap_or(id)
+    }
+
+    pub fn object_label<'a>(&'a self, id: &'a str) -> Cow<'a, str> {
+        let name = self.object_name(id);
+        if name == id {
+            Cow::Borrowed(id)
+        } else {
+            Cow::Owned(format!("{name} · {id}"))
+        }
+    }
+
+    /// Search translated names, original IDs and the rule's descriptive name.
+    pub fn object_matches(&self, id: &str, filter: &str) -> bool {
+        let filter = crate::chinese::simplified(filter).to_lowercase();
+        filter.is_empty()
+            || id.to_lowercase().contains(&filter)
+            || self.object_name(id).to_lowercase().contains(&filter)
+            || self
+                .rules
+                .section_or_empty(id)
+                .read_name("Name", 256)
+                .is_some_and(|name| name.to_lowercase().contains(&filter))
+    }
+
     pub fn terrain_palette(&self, manager: &AssetManager, theater: &TheaterData) -> TerrainPalette {
         use vera20k_core::assets::tmp_file::TmpFile;
         let mut palette = TerrainPalette {
@@ -184,6 +244,9 @@ impl Catalog {
             .unwrap_or_else(IniFile::empty);
         let mut catalog = Self {
             rules,
+            strings: CsfFile::load_active(|name| manager.get_ref(name))
+                .ok()
+                .map(|(table, _)| Arc::new(table)),
             art: Arc::new(vera20k_core::rules::art_data::ArtRegistry::from_ini(&art)),
             ..Self::default()
         };
@@ -255,6 +318,22 @@ impl Catalog {
             .iter()
             .position(|id| id.eq_ignore_ascii_case("GEM01"))
             .and_then(|i| u8::try_from(i).ok());
+        self.refresh_object_names();
+    }
+
+    fn refresh_object_names(&mut self) {
+        self.object_names = self
+            .object_types
+            .values()
+            .flatten()
+            .chain(self.overlays.iter())
+            .map(|id| {
+                (
+                    id.to_ascii_uppercase(),
+                    crate::chinese::simplified(self.raw_object_name(id)),
+                )
+            })
+            .collect();
     }
     /// Merge only rule/type sections, never the map's placed [Terrain] records.
     pub fn with_map(self: &Arc<Self>, bytes: &[u8]) -> Arc<Self> {
@@ -319,6 +398,7 @@ impl Catalog {
             .iter()
             .position(|id| id.eq_ignore_ascii_case("GEM01"))
             .and_then(|i| u8::try_from(i).ok());
+        catalog.refresh_object_names();
         Arc::new(catalog)
     }
     pub fn brushes(
@@ -354,3 +434,7 @@ impl Catalog {
             .collect()
     }
 }
+
+#[cfg(test)]
+#[path = "catalog_tests.rs"]
+mod tests;

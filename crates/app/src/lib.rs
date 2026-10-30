@@ -9,6 +9,7 @@ pub mod app;
 mod base_nodes_ui;
 mod campaign_ui;
 mod editing;
+mod labels;
 mod map_loader;
 mod map_settings_ui;
 mod map_view;

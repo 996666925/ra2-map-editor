@@ -278,7 +278,7 @@ impl MissionUi {
                 });
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(!editor.stroking&&!self.dirty(),egui::Button::new("添加最小任务示例")).on_hover_text("将当前地图设置为单人任务，添加两方 House、增援小队、局部变量和触发器：2 秒后增援并置位 → 宣告胜利。保留原有内容，可整笔撤销。").clicked(){
+                    if ui.add_enabled(!editor.stroking&&!self.dirty(),egui::Button::new("添加最小任务示例")).on_hover_text("将当前地图设置为单人任务，添加两个所属方、增援小队、局部变量和触发器：2 秒后增援并置位 → 宣告胜利。保留原有内容，可整笔撤销。").clicked(){
                         let result=mission::seed(editor.doc.as_mut().unwrap());
                         match result {Ok(id)=>{editor.commit(scene,"创建最小任务示例");self.kind=Kind::Trigger;self.selected=id;self.message="已添加：经过时间 → 小队增援 / 设置局部变量 → 宣告胜利。可修改事件时间、动作和脚本后试玩。".into();self.load(editor);},Err(e)=>self.message=format!("{e:#}")}
                     }
@@ -439,7 +439,7 @@ impl MissionUi {
                 .find(|(id, _)| mission::same_id(Kind::AiTrigger, id, &self.selected))
         {
             ui.label(format!("固定定义 · {}", scene.mission_definitions.source));
-            ui.collapsing("查看固定 AITriggerTypes", |ui| {
+            ui.collapsing("查看固定电脑触发器", |ui| {
                 ui.label(raw);
             });
             if ui
@@ -465,7 +465,7 @@ impl MissionUi {
         }
         if self.kind == Kind::House {
             ui.small(
-                "Credits 是原生地图资金单位（每单位 100）；Allies 为单向盟友列表。ID 不自动改名。",
+                "初始资金使用原生地图资金单位（每单位 100）；盟友列表为单向关系。ID 不自动改名。",
             );
             if ui
                 .add_enabled(
@@ -479,16 +479,16 @@ impl MissionUi {
             }
         }
         if self.kind == Kind::Global {
-            ui.label("固定编号 0～49；此处只保存编辑注释，不写运行时初值。新战役全部清零；续关继承，重试/重开恢复进入本关时的状态。全局 0 还控制 Next/AltNext 分支。");
+            ui.label("固定编号 0～49；此处只保存编辑注释，不写运行时初值。新战役全部清零；续关继承，重试/重开恢复进入本关时的状态。全局 0 还控制下一关与分支关卡的选择。");
         }
         if self.kind == Kind::TaskForce {
-            ui.small("0～5：数量,类型 ID；Group 保留原生分组数值。");
+            ui.small("0～5：数量,类型 ID；分组保留原生数值。");
         }
         if self.kind == Kind::Script {
             ui.small("0～49：动作 ID,整数参数。例如 3,0 表示移动到航点 0；未知动作按原值保留。");
         }
         if self.kind == Kind::Tag {
-            ui.small("重复方式：0 一次、1 等待全部关联对象、2 重复；Tag 绑定 Trigger，格子和对象绑定 Tag。");
+            ui.small("重复方式：0 一次、1 等待全部关联对象、2 重复；标签绑定触发器，格子和对象绑定标签。");
         }
         let stale = editor.doc.as_ref().unwrap().state_id != self.state;
         if stale {
@@ -611,7 +611,7 @@ impl MissionUi {
                     }
                 }
             });
-            ui.small("复制和重命名使用上方目标 ID。依赖包含地图内 Trigger、Tag、Team、Script、TaskForce；House、变量和固定 AIMD 共享。");
+            ui.small("复制和重命名使用上方目标 ID。依赖包含地图内触发器、标签、小队、脚本和特遣部队；所属方、变量和固定任务定义共享。");
         }
         if matches!(self.kind, Kind::Script | Kind::TaskForce) {
             forms::slots(
@@ -704,7 +704,7 @@ impl MissionUi {
                         }
                     } else {
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(&key);
+                            ui.label(crate::labels::field(&key)).on_hover_text(&key);
                             reference_input(
                                 ui,
                                 &key,
@@ -729,7 +729,7 @@ impl MissionUi {
                     self.new_key.clear();
                 }
             });
-            ui.small("清空字段后应用可删除该 key；未改动字段和未知字节保持原样。");
+            ui.small("清空字段后应用可删除该字段；未改动字段和未知字节保持原样。");
         }
         if self.dirty() {
             ui.small("先应用修改或重新载入以放弃草稿，再切换记录。");
@@ -840,8 +840,9 @@ fn csv_form(
             ui.horizontal_wrapped(|ui| {
                 ui.add_sized(
                     [96., 28.],
-                    egui::Label::new(*label).halign(egui::Align::Min),
-                );
+                    egui::Label::new(crate::labels::field(label)).halign(egui::Align::Min),
+                )
+                .on_hover_text(*label);
                 reference_input(ui, label, &mut fields[i], doc, definitions);
             });
         });

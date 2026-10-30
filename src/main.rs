@@ -31,6 +31,7 @@ fn main() -> Result<()> {
     let native = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: eframe::egui::ViewportBuilder::default()
+            .with_title("尤里的复仇地图编辑器")
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([900.0, 600.0]),
         multisampling: 0,

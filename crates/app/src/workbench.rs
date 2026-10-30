@@ -311,13 +311,13 @@ impl MapView {
         }
         self.overview(ui);
         let Some(scene) = &self.scene else {
-            theme::section(ui, "属性检查", "INSPECTOR");
+            theme::section(ui, "属性检查", "");
             ui.add_space(16.);
             ui.label(RichText::new("尚未选择内容").color(theme::MUTED));
             ui.small("打开地图后，可在这里导航、查看格子和编辑对象。");
             return;
         };
-        theme::section(ui, "当前选择", "SELECTION");
+        theme::section(ui, "当前选择", "");
         if self.editor.selected.is_some() {
             self.editor.selection_properties(ui, scene);
         } else if let Some(cell) = self.selected.and_then(|i| scene.cells.get(i)) {
@@ -347,7 +347,7 @@ impl MapView {
         ui.add_space(8.);
         ui.separator();
         ui.add_space(6.);
-        theme::section(ui, "显示图层", "LAYERS");
+        theme::section(ui, "显示图层", "");
         for (index, label) in [
             (0, "矿石与覆盖物"),
             (1, "对象预览与标记"),
@@ -365,7 +365,11 @@ impl MapView {
             .default_open(true)
             .show(ui, |ui| {
                 let header = &scene.source.header;
-                theme::field(ui, "环境", &header.theater);
+                let theater = crate::new_map::THEATERS
+                    .iter()
+                    .find(|(id, _)| *id == header.theater)
+                    .map_or(header.theater.as_str(), |(_, label)| *label);
+                theme::field(ui, "环境", theater);
                 theme::field(
                     ui,
                     "地图尺寸",
@@ -430,7 +434,7 @@ impl MapView {
     }
     fn overview(&mut self, ui: &mut egui::Ui) {
         let Some(scene) = &self.scene else { return };
-        theme::section(ui, "地图导航", "NAVIGATOR");
+        theme::section(ui, "地图导航", "");
         let size = [192, 112];
         if self.workbench.overview.is_none() {
             let mut pixels = [17, 21, 26, 255].repeat(size[0] * size[1]);
@@ -795,17 +799,17 @@ impl MapView {
             .vscroll(true)
             .show(ctx, |ui| {
                 theme::section(ui, "游戏资源目录", "");
-                if let Some(scene)=&self.scene { ui.label(format!("Schema: {}",scene.revision.schema));ui.label(format!("资源版本: {} · {} 文件",scene.revision.resources,scene.revision.files)); }
+                if let Some(scene)=&self.scene { ui.label(format!("数据结构版本：{}",scene.revision.schema));ui.label(format!("资源版本：{} · {} 文件",scene.revision.resources,scene.revision.files)); }
                 ui.horizontal_wrapped(|ui| {
                     if ui.add_enabled(!self.loading && self.editor.doc.is_some(),egui::Button::new("刷新当前资源（保留地图）")).clicked() { self.refresh_resources(PathBuf::from(directory.trim())); }
-                    if ui.button("载入 Mod profile…").clicked() && let Some(path)=rfd::FileDialog::new().add_filter("Mod profile", &["json"]).pick_file() {
+                    if ui.button("载入模组配置…").clicked() && let Some(path)=rfd::FileDialog::new().add_filter("模组配置", &["json"]).pick_file() {
                         match ra2_map_assets::profile::Profile::read(&path) {
                             Ok(p)=>{*directory=p.game_dir.display().to_string();if let Some(exe)=p.playtest_exe{self.editor.executable=exe.display().to_string();}self.refresh_resources(p.game_dir);},
                             Err(e)=>self.status=format!("{e:#}"),
                         }
                     }
                 });
-                ui.small("刷新重读归档、类型与任务资源；同环境跨 Mod 剪贴板会按版本检查。保存和试玩记录资源/schema 版本。");
+                ui.small("刷新重读归档、类型与任务资源；同环境跨模组剪贴板会按版本检查。保存和试玩记录资源与数据结构版本。");
 
                 if theme::path_entry(ui, directory, "包含 ra2.mix 与 ra2md.mix 的目录", "浏览…")
                     && let Some(path) = rfd::FileDialog::new().pick_folder()
