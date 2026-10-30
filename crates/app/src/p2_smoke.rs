@@ -475,12 +475,7 @@ impl MapView {
                     let preview = vera20k_core::map::preview::decode_preview_image_from_ini(&ini)?
                         .context("重开后预览缺失")?;
                     ensure!(
-                        preview.rgba
-                            == scene.visual.raster(
-                                rect,
-                                [preview.width, preview.height],
-                                Default::default()
-                            )?,
+                        &preview.rgba == ra2_map_io::publication::render_preview(scene)?.as_raw(),
                         "保存后的 PreviewPack 与实际场景不一致"
                     );
                     self.p2.export_checked = true;
@@ -1417,8 +1412,12 @@ impl MapView {
                 self.editor.history(false, scene);
                 let rect = self.workbench.overview_rect.context("未布局导航预览")?;
                 let pointer = rect.min + rect.size() * egui::vec2(0.27, 0.38);
-                self.p2.navigator_expected =
-                    scene.bounds.min + scene.bounds.size() * egui::vec2(0.27, 0.38);
+                let bounds = self.workbench.overview_bounds.context("导航缺少地图范围")?;
+                self.p2.navigator_expected = ra2_map_scene::radar::canvas_position(
+                    scene,
+                    self.editor.doc.as_ref(),
+                    bounds.min + bounds.size() * egui::vec2(0.27, 0.38),
+                );
                 self.p2.input_events = pointer_events(pointer, &[true, false]);
                 self.p2.stage = 19;
             }
@@ -1450,7 +1449,14 @@ impl MapView {
             }
             24 => {
                 ensure!(
-                    self.center.distance(scene.bounds.max) < 0.1,
+                    self.center.distance(ra2_map_scene::radar::canvas_position(
+                        scene,
+                        self.editor.doc.as_ref(),
+                        self.workbench
+                            .overview_bounds
+                            .context("导航缺少地图范围")?
+                            .max,
+                    )) < 0.1,
                     "小地图拖出边界没有正确钳制定位"
                 );
                 self.editor.history(false, scene);

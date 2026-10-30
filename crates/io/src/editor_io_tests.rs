@@ -14,6 +14,33 @@ fn root() -> PathBuf {
     root
 }
 #[test]
+fn embedded_preview_export_preserves_custom_pixels_and_rejects_missing_or_broken_pack() {
+    let root = root();
+    let path = root.join("自定义预览.png");
+    let rgba = [1, 2, 3, 255, 120, 80, 40, 255, 250, 240, 230, 255];
+    // The thumbnail is custom artwork, independent of terrain and game assets.
+    let bytes = ra2_map_document::preview::embed(b"[Basic]\nName=Custom\n", 3, 1, &rgba).unwrap();
+    let size = crate::publication::preview_png(&bytes, &path).unwrap();
+    assert_eq!(size, [3, 1]);
+    let image = image::open(&path).unwrap().to_rgba8();
+    assert_eq!(image.dimensions(), (3, 1));
+    assert_eq!(image.as_raw(), &rgba);
+    // Replacing an existing output also works on Windows.
+    crate::publication::preview_png(&bytes, &path).unwrap();
+    let exported = fs::read(&path).unwrap();
+    let error = crate::publication::preview_png(b"[Basic]\nName=NoPreview\n", &path).unwrap_err();
+    assert!(format!("{error:#}").contains("PreviewPack"));
+    assert!(
+        crate::publication::preview_png(
+            b"[Preview]\nSize=0,0,3,1\n[PreviewPack]\n1=invalid!\n",
+            &path,
+        )
+        .is_err()
+    );
+    assert_eq!(fs::read(&path).unwrap(), exported);
+    fs::remove_dir_all(root).unwrap();
+}
+#[test]
 fn atomic_save_replaces_on_windows_backs_up_original_and_rejects_external_changes() {
     let root = root();
     let path = root.join("中文地图.map");

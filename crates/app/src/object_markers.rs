@@ -4,13 +4,10 @@ use super::*;
 pub(crate) struct Marker {
     pub id: u64,
     pub origin: egui::Pos2,
-    pub radar_origin: egui::Pos2,
     /// Counts before this record, split by object/waypoint visibility.
     pub slots: [usize; 2],
     pub waypoint: bool,
     pub label: String,
-    pub waypoint_label: Option<String>,
-    pub radar_radius: f32,
     pub image: Option<Arc<ra2_map_assets::assets::DecodedImage>>,
     pub image_rect: Option<egui::Rect>,
 }
@@ -49,8 +46,6 @@ impl MarkerCache {
                         - f32::from(ground.level as i8) * 15.,
                 );
                 let waypoint = record.section == "Waypoints";
-                let (rx, ry) =
-                    vera20k_core::map::terrain::iso_to_screen(at[0], at[1], ground.level);
                 let slot = stacked.entry(at).or_default();
                 let slots = *slot;
                 slot[usize::from(waypoint)] += 1;
@@ -87,17 +82,9 @@ impl MarkerCache {
                 Some(Marker {
                     id,
                     origin,
-                    radar_origin: egui::pos2(rx + 30., ry + 15.),
                     slots,
                     waypoint,
                     label,
-                    waypoint_label: (waypoint && record.key.parse::<u32>().is_ok_and(|n| n < 30))
-                        .then(|| record.key.clone()),
-                    radar_radius: match record.section.as_str() {
-                        "Structures" => 1.8,
-                        "Units" | "Infantry" | "Aircraft" => 1.1,
-                        _ => 0.,
-                    },
                     image,
                     image_rect,
                 })

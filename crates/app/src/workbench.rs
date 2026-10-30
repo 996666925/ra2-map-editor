@@ -17,6 +17,7 @@ pub(super) struct Workbench {
     pub(super) cancel_secondary: bool,
     new_options: crate::new_map::NewMapOptions,
     overview: Option<egui::TextureHandle>,
+    pub(super) overview_bounds: Option<egui::Rect>,
     overview_overlay: crate::overview::OverviewOverlay,
     overview_markers: OverviewMarkers,
     pub(super) canvas_extent: Option<egui::Vec2>,
@@ -53,6 +54,7 @@ impl MapView {
     }
     pub(super) fn reset_overview(&mut self) {
         self.workbench.overview = None;
+        self.workbench.overview_bounds = None;
         self.workbench.overview_overlay = Default::default();
     }
     pub fn show_project_settings(&mut self) {
@@ -139,6 +141,41 @@ impl MapView {
                 ui.close();
             }
             ui.separator();
+            if ui
+                .add_enabled(
+                    self.editor.doc.is_some()
+                        && !self.loading
+                        && !self.editor.exporting
+                        && !self.editor.stroking
+                        && !self.workbench.mission.has_draft()
+                        && !self.workbench.map_settings.open,
+                    egui::Button::new("导出高清地图预览图 PNG…"),
+                )
+                .on_hover_text(
+                    "使用游戏资源重新生成地图预览，最长边 4096 像素，小地图保持原始分辨率。包含未保存的修改，显示全部对象、覆盖物、House 换色与地图光照。",
+                )
+                .clicked()
+            {
+                self.editor.export_hd_preview_png();
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    self.scene.is_some()
+                        && !self.editor.exporting
+                        && !self.loading,
+                    egui::Button::new("导出内嵌预览原图 PNG…"),
+                )
+                .on_hover_text(
+                    "导出当前加载地图内嵌的 PreviewPack 小图，保留原始尺寸和像素。未保存的修改不会更新此预览。",
+                )
+                .clicked()
+            {
+                if let Some(scene) = &self.scene {
+                    self.editor.export_preview_png(scene.source.bytes());
+                }
+                ui.close();
+            }
             if ui
                 .add_enabled(
                     self.editor.doc.is_some()
@@ -444,56 +481,37 @@ impl MapView {
     fn overview(&mut self, ui: &mut egui::Ui) {
         let Some(scene) = &self.scene else { return };
         theme::section(ui, "地图导航", "");
-        let size = [192, 112];
         if self.workbench.overview.is_none() {
-            let mut pixels = [17, 21, 26, 255].repeat(size[0] * size[1]);
-            for cell in &scene.cells {
-                let x = ((cell.screen_x + 30. - scene.bounds.left()) / scene.bounds.width()
-                    * size[0] as f32)
-                    .floor()
-                    .max(0.) as usize;
-                let y = ((cell.screen_y + 15. - scene.bounds.top()) / scene.bounds.height()
-                    * size[1] as f32)
-                    .floor()
-                    .max(0.) as usize;
-                for dy in 0..2 {
-                    for dx in 0..2 {
-                        if x + dx < size[0] && y + dy < size[1] {
-                            let start = ((y + dy) * size[0] + x + dx) * 4;
-                            let color = if dx == 0 {
-                                cell.radar_left
-                            } else {
-                                cell.radar_right
-                            };
-                            pixels[start..start + 3].copy_from_slice(&color);
-                        }
-                    }
+            let radar = match ra2_map_scene::radar::terrain(scene) {
+                Ok(radar) => radar,
+                Err(error) => {
+                    ui.small(error.to_string());
+                    return;
                 }
-            }
+            };
+            self.workbench.overview_bounds = Some(radar.bounds);
             self.workbench.overview = Some(ui.ctx().load_texture(
                 "map-navigator",
-                egui::ColorImage::from_rgba_unmultiplied(size, &pixels),
+                radar.image,
                 egui::TextureOptions::LINEAR,
             ));
         }
+        let bounds = self.workbench.overview_bounds.unwrap_or(scene.bounds);
         let width = ui.available_width();
         let (frame, _) = ui.allocate_exact_size(
             egui::vec2(
                 width,
-                (width * size[1] as f32 / size[0] as f32).min(
-                    if ui.ctx().content_rect().height() < 700. {
-                        105.
-                    } else {
-                        145.
-                    },
-                ),
+                (width * 112. / 192.).min(if ui.ctx().content_rect().height() < 700. {
+                    105.
+                } else {
+                    145.
+                }),
             ),
             egui::Sense::hover(),
         );
         // Letterbox rectangular maps instead of stretching their geography.
-        let scale =
-            (frame.width() / scene.bounds.width()).min(frame.height() / scene.bounds.height());
-        let rect = egui::Rect::from_center_size(frame.center(), scene.bounds.size() * scale);
+        let scale = (frame.width() / bounds.width()).min(frame.height() / bounds.height());
+        let rect = egui::Rect::from_center_size(frame.center(), bounds.size() * scale);
         self.workbench.overview_rect = Some(rect);
         let response = ui.interact(
             rect,
@@ -504,7 +522,11 @@ impl MapView {
         if (response.clicked() || response.dragged())
             && let Some(pointer) = response.interact_pointer_pos()
         {
-            self.center = navigator_point(scene.bounds, rect, pointer);
+            self.center = ra2_map_scene::radar::canvas_position(
+                scene,
+                self.editor.doc.as_ref(),
+                navigator_point(bounds, rect, pointer),
+            );
             self.fit = false;
         }
         let p = ui.painter().with_clip_rect(rect);
@@ -517,8 +539,8 @@ impl MapView {
         let project = |pos: egui::Pos2| {
             rect.min
                 + egui::vec2(
-                    (pos.x - scene.bounds.left()) / scene.bounds.width() * rect.width(),
-                    (pos.y - scene.bounds.top()) / scene.bounds.height() * rect.height(),
+                    (pos.x - bounds.left()) / bounds.width() * rect.width(),
+                    (pos.y - bounds.top()) / bounds.height() * rect.height(),
                 )
         };
         self.workbench.overview_overlay.draw(
@@ -527,11 +549,13 @@ impl MapView {
             &self.editor,
             rect,
             self.workbench.overview_markers.0,
+            bounds,
         );
         let screen = ui.ctx().content_rect();
         // The precise canvas extent is retained from its last layout pass.
         let extent = self.workbench.canvas_extent.unwrap_or(screen.size());
-        let world = egui::Rect::from_center_size(self.center, extent / self.zoom);
+        let radar_center = ra2_map_scene::radar::radar_position(scene, self.center);
+        let world = egui::Rect::from_center_size(radar_center, extent / self.zoom);
         let visible = egui::Rect::from_min_max(project(world.min), project(world.max))
             .intersect(rect.shrink(1.));
         if visible.is_positive() {
@@ -934,5 +958,31 @@ impl MapView {
                 self.fit = false;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::navigator_point;
+    use eframe::egui;
+
+    #[test]
+    fn navigator_positions_use_the_cropped_world_bounds_and_clamp_dragging() {
+        let bounds = egui::Rect::from_min_max(egui::pos2(-530., 900.), egui::pos2(590., 1460.));
+        let rect = egui::Rect::from_min_size(egui::pos2(40., 25.), egui::vec2(200., 100.));
+        let t = egui::vec2(0.27, 0.38);
+        assert!(
+            navigator_point(bounds, rect, rect.min + rect.size() * t)
+                .distance(bounds.min + bounds.size() * t)
+                < 0.001
+        );
+        assert_eq!(
+            navigator_point(bounds, rect, rect.max + egui::vec2(12., 8.)),
+            bounds.max
+        );
+        assert_eq!(
+            navigator_point(bounds, rect, rect.min - egui::vec2(12., 8.)),
+            bounds.min
+        );
     }
 }

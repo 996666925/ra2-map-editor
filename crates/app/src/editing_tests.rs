@@ -2,6 +2,45 @@ use super::*;
 use ra2_map_document::test_support::{document, fixture};
 
 #[test]
+fn navigator_pixels_match_embedded_preview_at_the_same_size() {
+    let (mut editor, ctx, _root) = editor();
+    let scene = terrain_scene();
+    editor.attach(&scene);
+    let radar = ra2_map_scene::radar::terrain(&scene).unwrap();
+    let size = radar.image.size;
+    let mut overview = crate::overview::OverviewOverlay::default();
+    let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        overview.draw(
+            ui.painter(),
+            &scene,
+            &editor,
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32)),
+            [true; 4],
+            radar.bounds,
+        );
+    });
+    let symbols = output
+        .textures_delta
+        .set
+        .into_iter()
+        .find_map(|(_, delta)| {
+            let egui::ImageData::Color(image) = delta.image;
+            (image.size == size).then_some(image)
+        })
+        .unwrap();
+    let navigator: Vec<_> = radar
+        .image
+        .pixels
+        .iter()
+        .zip(&symbols.pixels)
+        .flat_map(|(background, symbol)| background.blend(*symbol).to_array())
+        .collect();
+    let preview = ra2_map_io::publication::render_preview(&scene).unwrap();
+    assert_eq!([preview.width() as usize, preview.height() as usize], size);
+    assert_eq!(&navigator, preview.as_raw());
+}
+
+#[test]
 fn cached_object_geometry_and_navigator_follow_move_history_and_layer_changes() {
     let (mut editor, ctx, _root) = editor();
     let scene = terrain_scene();
@@ -30,6 +69,7 @@ fn cached_object_geometry_and_navigator_follow_move_history_and_layer_changes() 
                 editor,
                 rect,
                 [false, false, false, true],
+                scene.bounds,
             );
         });
         output

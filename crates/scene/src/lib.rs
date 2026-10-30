@@ -5,6 +5,7 @@ pub mod cliff_tools;
 pub mod coastal_cliffs;
 pub mod map;
 pub mod placement;
+pub mod radar;
 pub mod random_map;
 pub mod road_tools;
 pub mod shore_tools;

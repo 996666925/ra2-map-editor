@@ -386,11 +386,7 @@ fn run_map(args: &Args, install: &mut Install, name: &str) -> Result<MapReport> 
                 None,
             )?;
         } else {
-            let rect = scene.visual.bounds.context("empty scene")?;
-            let size = crate::publication::fit(rect, 256);
-            let rgba = scene.visual.raster(rect, size, ViewOptions::default())?;
-            let bytes =
-                ra2_map_document::preview::embed(scene.source.bytes(), size[0], size[1], &rgba)?;
+            let bytes = crate::publication::embed_scene_preview(&scene)?;
             crate::editor_io::validate(&bytes)?;
             crate::editor_io::replace_map(&path, &bytes, crate::editor_io::Stamp::file(&path)?)?;
             crate::provenance::write(

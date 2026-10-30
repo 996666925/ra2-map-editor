@@ -35,7 +35,12 @@ fn real_map_ui_profile() {
         .marker_cache
         .markers
         .iter()
-        .find(|m| m.radar_radius == 1.1 && m.image_rect.is_some())
+        .find(|m| {
+            m.image_rect.is_some()
+                && editor.records.get(&m.id).is_some_and(|record| {
+                    matches!(record.section.as_str(), "Units" | "Infantry" | "Aircraft")
+                })
+        })
         .and_then(|m| m.image_rect)
         .map_or(scene.bounds.center(), |r| r.center());
     let mut reports = Vec::new();
@@ -104,6 +109,7 @@ fn real_map_ui_profile() {
                     &editor,
                     egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256., 128.)),
                     [true; 4],
+                    scene.bounds,
                 );
             },
         );

@@ -1,5 +1,4 @@
-//! Navigator symbols are baked once per document revision/options/size. Moving
-//! the camera only redraws its viewport box and the few player-start labels.
+//! Cached symbols shared with the map's embedded radar preview.
 use crate::{editing::Editor, map::MapScene};
 use eframe::egui::{self, Color32};
 
@@ -9,6 +8,7 @@ struct Key {
     flags: [bool; 4],
     layers: [bool; 3],
     size: [usize; 2],
+    bounds: egui::Rect,
 }
 #[derive(Default)]
 pub(crate) struct OverviewOverlay {
@@ -22,10 +22,8 @@ impl OverviewOverlay {
         editor: &Editor,
         rect: egui::Rect,
         flags: [bool; 4],
+        bounds: egui::Rect,
     ) {
-        let project = |pos: egui::Pos2| {
-            rect.min + (pos - scene.bounds.min) / scene.bounds.size() * rect.size()
-        };
         let dpi = painter.ctx().pixels_per_point();
         let size = [
             (rect.width() * dpi).ceil().max(1.) as usize,
@@ -36,77 +34,32 @@ impl OverviewOverlay {
             flags,
             layers: editor.layers,
             size,
+            bounds,
         };
         if self.cached.as_ref().is_none_or(|(old, _)| old != &key) {
-            let mut pixels = vec![Color32::TRANSPARENT; size[0] * size[1]];
-            let mut circle = |pos: egui::Pos2, radius: f32, color: Color32| {
-                let center = (project(pos) - rect.min) * dpi;
-                let radius = radius * dpi;
-                let left = (center.x - radius - 1.).floor().max(0.) as usize;
-                let top = (center.y - radius - 1.).floor().max(0.) as usize;
-                let right = ((center.x + radius + 1.).ceil().max(0.) as usize).min(size[0]);
-                let bottom = ((center.y + radius + 1.).ceil().max(0.) as usize).min(size[1]);
-                for y in top..bottom {
-                    for x in left..right {
-                        let a = (radius + 0.5
-                            - (egui::vec2(x as f32 + 0.5, y as f32 + 0.5) - center).length())
-                        .clamp(0., 1.);
-                        if a > 0. {
-                            let color = Color32::from_rgba_unmultiplied(
-                                color.r(),
-                                color.g(),
-                                color.b(),
-                                (a * 255.) as u8,
-                            );
-                            pixels[y * size[0] + x] = pixels[y * size[0] + x].blend(color);
-                        }
-                    }
-                }
-            };
-            if flags[1]
-                && editor.layers[0]
-                && let Some(doc) = &editor.doc
-            {
-                for (&at, &(id, _)) in &editor.overlays {
-                    let gem = scene.catalog.gem_family(id);
-                    if scene.catalog.ore_family(id) || gem {
-                        let level = doc
-                            .terrain(at)
-                            .map_or(scene.source.header.level as u8, |v| v.level);
-                        let (x, y) = vera20k_core::map::terrain::iso_to_screen(at[0], at[1], level);
-                        circle(
-                            egui::pos2(x + 30., y + 15.),
-                            1.,
-                            if gem {
-                                Color32::from_rgb(230, 80, 220)
-                            } else {
-                                Color32::from_rgb(255, 205, 50)
-                            },
-                        );
-                    }
-                }
-            }
-            if editor.layers[1] {
-                for marker in &editor.marker_cache.markers {
-                    let show = if marker.radar_radius > 1.5 {
-                        flags[2]
-                    } else {
-                        flags[3]
-                    };
-                    if show && marker.radar_radius > 0. {
-                        circle(
-                            marker.radar_origin,
-                            marker.radar_radius,
-                            Color32::from_rgb(255, 135, 65),
-                        );
-                    }
-                }
-            }
+            let symbols = editor
+                .doc
+                .as_ref()
+                .map(|doc| ra2_map_scene::radar::symbols(scene, doc))
+                .unwrap_or_default();
+            let flags = [
+                flags[0] && editor.layers[2],
+                flags[1] && editor.layers[0],
+                flags[2] && editor.layers[1],
+                flags[3] && editor.layers[1],
+            ];
+            let image = ra2_map_scene::radar::overlay(
+                size,
+                bounds,
+                &symbols,
+                flags,
+                size[0].max(size[1]) as f32 / 192.,
+            );
             self.cached = Some((
                 key,
                 painter.ctx().load_texture(
                     "navigator-symbols",
-                    egui::ColorImage::new(size, pixels),
+                    image,
                     egui::TextureOptions::LINEAR,
                 ),
             ));
@@ -117,20 +70,5 @@ impl OverviewOverlay {
             egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
             Color32::WHITE,
         );
-        if flags[0] && editor.layers[2] {
-            for marker in &editor.marker_cache.markers {
-                if let Some(label) = &marker.waypoint_label {
-                    let point = project(marker.radar_origin);
-                    painter.circle_filled(point, 3., Color32::BLACK);
-                    painter.text(
-                        point,
-                        egui::Align2::CENTER_CENTER,
-                        label,
-                        egui::FontId::proportional(9.),
-                        Color32::WHITE,
-                    );
-                }
-            }
-        }
     }
 }

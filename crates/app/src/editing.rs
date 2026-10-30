@@ -726,7 +726,39 @@ impl Editor {
             }
         }
     }
+    pub fn export_preview_png(&mut self, bytes: &[u8]) {
+        if self.exporting {
+            return;
+        }
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("PNG 图像", &["png"])
+            .set_file_name("map-preview.png")
+            .save_file()
+        {
+            match self.io.send(Job::ExportPreview {
+                bytes: Arc::from(bytes),
+                path,
+            }) {
+                Ok(()) => {
+                    self.exporting = true;
+                    self.status = "正在后台导出地图预览小图…".into();
+                }
+                Err(e) => self.status = e.to_string(),
+            }
+        }
+    }
+    pub fn export_hd_preview_png(&mut self) {
+        self.export_scene_png(4096, Default::default(), "map-preview-hd.png");
+    }
     pub fn export_png(&mut self, max_edge: u32) {
+        self.export_scene_png(max_edge, self.view_options(), "map.png");
+    }
+    fn export_scene_png(
+        &mut self,
+        max_edge: u32,
+        options: ra2_map_scene::visual::ViewOptions,
+        file_name: &str,
+    ) {
         if !self.check_property_draft() {
             return;
         }
@@ -736,7 +768,7 @@ impl Editor {
         let Some(doc) = &self.doc else { return };
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("PNG 图像", &["png"])
-            .set_file_name("map.png")
+            .set_file_name(file_name)
             .save_file()
         {
             match self.io.send(Job::Export {
@@ -744,7 +776,7 @@ impl Editor {
                 directory: self.directory.clone(),
                 path,
                 max_edge,
-                options: self.view_options(),
+                options,
             }) {
                 Ok(()) => {
                     self.exporting = true;

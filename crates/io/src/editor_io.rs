@@ -68,6 +68,10 @@ pub enum Job {
     },
     Restore(PathBuf),
     Discard(PathBuf),
+    ExportPreview {
+        bytes: Arc<[u8]>,
+        path: PathBuf,
+    },
     Export {
         snapshot: Snapshot,
         directory: PathBuf,
@@ -207,6 +211,10 @@ impl EditorIo {
                             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
                             Err(e) => Err(e.into()),
                         }),
+                        Job::ExportPreview { bytes, path } => Done::Export {
+                            result: crate::publication::preview_png(&bytes, &path),
+                            path,
+                        },
                         Job::Export {
                             snapshot,
                             directory,

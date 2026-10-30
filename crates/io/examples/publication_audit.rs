@@ -178,12 +178,39 @@ fn main() -> Result<()> {
     let ini = vera20k_core::rules::ini_parser::IniFile::from_bytes(&published)?;
     let preview = vera20k_core::map::preview::decode_preview_image_from_ini(&ini)?
         .context("no PreviewPack")?;
+    let expected_preview = ra2_map_io::publication::render_preview(&scene)?;
+    let radar = ra2_map_scene::radar::terrain(&scene)?;
+    let radar_colours: std::collections::HashSet<_> = scene
+        .cells
+        .iter()
+        .flat_map(|cell| [cell.radar_left, cell.radar_right])
+        .collect();
     ensure!(
-        preview.rgba
-            == scene
-                .visual
-                .raster(rect, [preview.width, preview.height], Default::default())?,
+        radar.image.pixels.iter().all(|pixel| {
+            pixel.a() == 255 && radar_colours.contains(&[pixel.r(), pixel.g(), pixel.b()])
+        }),
+        "navigator and PreviewPack terrain must use cell radar colours without empty edges"
+    );
+    ensure!(
+        preview.width.max(preview.height) <= 512 && preview.width.max(preview.height) > 256,
+        "saved PreviewPack must use the compact 512-pixel limit"
+    );
+    ensure!(
+        [preview.width, preview.height] == [expected_preview.width(), expected_preview.height()]
+            && &preview.rgba == expected_preview.as_raw(),
         "PreviewPack mismatch"
+    );
+    ensure!(
+        !preview.rgba.as_chunks::<4>().0.contains(&[11, 15, 20, 255]),
+        "flat fixture preview must not include the uncovered diamond edges"
+    );
+    ra2_map_io::editor_io::validate(&published)?;
+    let embedded_size =
+        ra2_map_io::publication::preview_png(&published, &output.join("embedded-preview.png"))?;
+    let embedded_png = image::open(output.join("embedded-preview.png"))?.to_rgba8();
+    ensure!(
+        embedded_size == [preview.width, preview.height] && embedded_png.as_raw() == &preview.rgba,
+        "exported PNG must retain the saved PreviewPack pixels"
     );
     std::fs::write(output.join("publish-fixture.map"), published)?;
     let png_size = publisher.png(
