@@ -77,7 +77,7 @@ impl Editor {
         }
         if matches!(tool, Tool::Move | Tool::Clone | Tool::Place) && self.object_properties_dirty()
         {
-            self.status = "请先应用或放弃当前对象的属性修改。".into();
+            self.status = "请先完成或取消当前对象的属性输入。".into();
             return;
         }
         self.tool = tool;

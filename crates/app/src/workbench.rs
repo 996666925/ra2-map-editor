@@ -230,7 +230,7 @@ impl MapView {
                 |ui| self.editor.document_actions(ui, scene),
             )
             .response
-            .on_disabled_hover_text("任务草稿尚未应用，请在任务制作中先应用或放弃草稿。");
+            .on_disabled_hover_text("请先完成或取消当前任务输入。");
         } else {
             ui.add_enabled_ui(false, |ui| {
                 theme::button(ui, Icon::Save, "保存", 73., false);
@@ -565,11 +565,11 @@ impl MapView {
             } else if self.error.is_some() {
                 (egui::Color32::LIGHT_RED, "加载失败")
             } else if self.workbench.mission.has_draft() {
-                (theme::ACCENT, "任务草稿未应用")
+                (theme::ACCENT, "任务输入待完成")
             } else if self.workbench.map_settings.dirty() {
                 (theme::ACCENT, "地图设置草稿未应用")
             } else if self.editor.object_properties_dirty() {
-                (theme::ACCENT, "属性未应用")
+                (theme::ACCENT, "属性输入待完成")
             } else if self.editor.dirty() {
                 (theme::ACCENT, "有未保存修改")
             } else if self.scene.is_some() {
@@ -646,6 +646,7 @@ impl MapView {
     }
     pub fn settings_windows(&mut self, ctx: &egui::Context, directory: &mut String) {
         if let Some(scene) = &self.scene {
+            self.editor.finish_property_edit(ctx, scene);
             self.workbench
                 .map_settings
                 .show(ctx, &mut self.editor, scene);
@@ -712,7 +713,7 @@ impl MapView {
                 for text in [
                     "Ctrl+N / O：新建 / 打开地图",
                     "Ctrl+S / Ctrl+Shift+S：保存 / 另存为；F5：打开试玩设置",
-                    "对象属性需点击“应用属性”；任务草稿需应用后才写入地图",
+                    "对象属性、任务参数和光照结束输入后自动生效；撤销可恢复修改",
                     "编辑文字、下拉菜单和浮动设置窗口时，地图工具快捷键暂停",
                     "窗口失去焦点时取消未完成的一笔，已完成的修改保留",
                 ] {
@@ -895,7 +896,7 @@ impl MapView {
                 if draft {
                     ui.colored_label(
                         theme::ACCENT,
-                        "任务或地图设置草稿尚未应用，请先应用或放弃草稿。",
+                        "请先完成或取消任务与光照输入；尺寸修改需应用或放弃。",
                     );
                 }
                 ui.add_enabled_ui(!draft, |ui| self.editor.playtest_controls(ui));

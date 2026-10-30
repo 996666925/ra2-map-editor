@@ -89,7 +89,7 @@ fn cached_object_geometry_and_navigator_follow_move_history_and_layer_changes() 
     assert_ne!(before, draw(&editor).unwrap());
 }
 
-pub(super) fn terrain_scene() -> MapScene {
+pub(crate) fn terrain_scene() -> MapScene {
     let fixture = ra2_map_assets::test_support::Fixture::new();
     let mut install = fixture.install();
     install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
@@ -392,7 +392,7 @@ fn terrain_template_ghost_matches_saved_tile_position_at_multiple_heights_and_zo
     drop(editor);
     std::fs::remove_dir_all(root).unwrap();
 }
-pub(super) fn editor() -> (Editor, egui::Context, PathBuf) {
+pub(crate) fn editor() -> (Editor, egui::Context, PathBuf) {
     static NEXT_ROOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
         "yr-edit-worker-{}-{}-{}",

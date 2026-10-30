@@ -1,4 +1,4 @@
-//! Map geometry planning and read-only lighting previews.
+//! Map geometry planning, automatic lighting edits and read-only previews.
 use crate::{editing::Editor, map::MapScene};
 use eframe::egui;
 use ra2_map_document::{
@@ -23,6 +23,8 @@ pub(crate) struct MapSettingsUi {
     plan: Option<Plan>,
     worker: Option<std::sync::mpsc::Receiver<anyhow::Result<Plan>>>,
     message: String,
+    completion: crate::form_edit::EditCompletion,
+    light_editing: bool,
 }
 impl MapSettingsUi {
     pub(crate) fn smoke_preview(&mut self, doc: &MapDocument, profile: Profile) {
@@ -48,7 +50,8 @@ impl MapSettingsUi {
     pub fn allow_leave(&mut self) -> bool {
         if self.dirty() {
             self.open = true;
-            self.message = "地图设置有未应用草稿，请先应用或放弃。".into();
+            self.message =
+                "请完成或取消光照输入；尺寸修改需检查预览并应用，或放弃尺寸修改。".into();
             false
         } else {
             true
@@ -62,6 +65,45 @@ impl MapSettingsUi {
         self.original_light = self.light.clone();
         self.plan = None;
         self.worker = None;
+        self.completion = Default::default();
+        self.light_editing = false;
+    }
+    pub(crate) fn finish_lighting(
+        &mut self,
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        scene: &MapScene,
+    ) {
+        if self.light_editing
+            && self.tab == 1
+            && self.light != self.original_light
+            && self.options == self.original
+            && !editor.stroking
+            && (ctx.input(|i| i.viewport().close_requested()) || self.completion.ready(ctx))
+        {
+            let result = (|| -> anyhow::Result<()> {
+                let doc = editor
+                    .doc
+                    .as_mut()
+                    .ok_or_else(|| anyhow::anyhow!("没有地图"))?;
+                anyhow::ensure!(
+                    self.identity == Some((doc.id, doc.state_id)),
+                    "文档已变化，请取消本次输入后重新编辑"
+                );
+                self.apply_lighting(doc)
+            })();
+            match result {
+                Ok(()) => {
+                    editor.commit(scene, "地图光照");
+                    self.identity = editor.doc.as_ref().map(|doc| (doc.id, doc.state_id));
+                    self.original_light = self.light.clone();
+                    self.light_editing = false;
+                    self.message = "光照已自动生效，可撤销。".into();
+                }
+                Err(error) => self.message = format!("尚未生效：{error:#}"),
+            }
+        }
+        self.completion.observe(ctx);
     }
     pub fn preview_snapshot(&self, doc: &MapDocument) -> anyhow::Result<(Snapshot, Profile)> {
         if self.open
@@ -81,9 +123,14 @@ impl MapSettingsUi {
         let Some(doc) = editor.doc.as_ref() else {
             return;
         };
-        if self.identity != Some((doc.id, doc.state_id)) {
+        if self.identity.is_none_or(|(id, _)| id != doc.id)
+            || (self.identity != Some((doc.id, doc.state_id)) && !self.dirty())
+        {
             self.load(doc);
         }
+        self.finish_lighting(ctx, editor, scene);
+        let doc = editor.doc.as_ref().unwrap();
+        let light_before = self.light.clone();
         if let Some(rx) = &self.worker {
             match rx.try_recv() {
                 Ok(result) => {
@@ -107,7 +154,6 @@ impl MapSettingsUi {
         let old_tab = self.tab;
         let mut open = true;
         let mut apply_map = false;
-        let mut apply_light = false;
         let mut discard = false;
         let mut changed = false;
         let mut inspect = false;
@@ -119,7 +165,7 @@ impl MapSettingsUi {
                     changed|=ui.selectable_value(&mut self.tab,0,"尺寸与可玩区域").changed();
                     changed|=ui.selectable_value(&mut self.tab,1,"光照").changed();
                 });
-                if self.dirty(){ui.colored_label(egui::Color32::YELLOW,"有未应用草稿");}
+                if self.dirty(){ui.colored_label(egui::Color32::YELLOW,if self.tab==1{"光照输入待完成"}else{"有未应用尺寸设置"});}
             });
             egui::ScrollArea::vertical().max_height((ui.available_height()-100.).max(140.)).show(ui,|ui|{
                 if self.tab==0 {
@@ -152,7 +198,7 @@ impl MapSettingsUi {
                         for p in Profile::ALL{changed|=ui.selectable_value(&mut self.profile,p,p.label()).changed();}
                         changed|=ui.checkbox(&mut self.preview,"在画布实时预览").changed();
                     });
-                    ui.small("修改后稍候更新画布；草稿与配置选择不改写地图。关闭面板恢复普通光照，保存/发布使用已应用参数。空值使用引擎默认值。");
+                    ui.small("光照参数结束输入后自动生效，可撤销。关闭面板恢复普通光照预览，保存与发布使用当前参数。空值使用引擎默认值。");
                     let light=self.light.as_mut().unwrap();
                     egui::Grid::new("lighting-components").num_columns(2).show(ui,|ui|{
                         for component in COMPONENTS{let key=format!("{}{component}",self.profile.prefix());ui.label(crate::labels::field(&key)).on_hover_text(&key);changed|=ui.text_edit_singleline(light.values.get_mut(&key).unwrap()).changed();ui.end_row();}
@@ -163,13 +209,14 @@ impl MapSettingsUi {
                     if let Err(e)=light.validate(){ui.colored_label(egui::Color32::LIGHT_RED,e.to_string());}
                     ui.horizontal_wrapped(|ui|{
                         if ui.button("所选配置使用引擎默认").clicked(){for c in COMPONENTS{light.values.insert(format!("{}{c}",self.profile.prefix()),String::new());}changed=true;}
-                        apply_light=ui.add_enabled(light.validate().is_ok(),egui::Button::new("应用光照参数（整笔撤销）")).clicked();
                     });
                 }
             });
             ui.separator();
             ui.horizontal_wrapped(|ui|{
-                discard=ui.button("放弃草稿并重载").clicked();
+                let cancel=ui.button(if self.tab==1{"取消本次输入"}else{"放弃尺寸修改"});
+                self.completion.cancel_button(&cancel);
+                discard=cancel.clicked();
                 undo=ui.add_enabled(!self.dirty(),egui::Button::new("撤销")).clicked();
                 redo=ui.add_enabled(!self.dirty(),egui::Button::new("重做")).clicked();
             });
@@ -211,16 +258,10 @@ impl MapSettingsUi {
             editor.history(redo, scene);
             self.load(editor.doc.as_ref().unwrap());
         }
-        if apply_light {
-            match self.apply_lighting(editor.doc.as_mut().unwrap()) {
-                Ok(()) => {
-                    editor.commit(scene, "地图光照");
-                    self.load(editor.doc.as_ref().unwrap());
-                    self.message = "已应用光照参数。".into();
-                }
-                Err(e) => self.message = format!("{e:#}"),
-            }
+        if self.light != light_before {
+            self.light_editing = true;
         }
+        self.finish_lighting(ctx, editor, scene);
         if discard {
             self.load(editor.doc.as_ref().unwrap());
             editor.refresh = true;
@@ -238,7 +279,7 @@ impl MapSettingsUi {
         }
         if !open {
             if self.dirty() {
-                self.message = "尚有未应用草稿，请应用或放弃后关闭。".into();
+                self.message = "请完成或取消当前输入；尺寸修改需应用或放弃后关闭。".into();
             } else {
                 self.open = false;
                 self.due = None;
@@ -322,4 +363,117 @@ fn draw_preview(
     ui.small(
         "灰：新尺寸；蓝：原图放置范围；绿：可玩区域；红/黄：受影响内容（位置按原图平移后绘制）。",
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_lighting_is_undoable_and_invalid_or_stale_input_cannot_write() {
+        let (mut editor, ctx, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        let mut form = MapSettingsUi {
+            open: true,
+            tab: 1,
+            ..Default::default()
+        };
+        form.load(editor.doc.as_ref().unwrap());
+        let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        form.light
+            .as_mut()
+            .unwrap()
+            .values
+            .insert("Ambient".into(), "0.65".into());
+        form.light_editing = true;
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            form.finish_lighting(ui.ctx(), &mut editor, &scene);
+        });
+        assert!(!form.dirty());
+        assert_eq!(
+            editor.doc.as_ref().unwrap().ini_text("Lighting", "Ambient"),
+            "0.65"
+        );
+        let after = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        editor.history(false, &scene);
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            before
+        );
+        editor.history(true, &scene);
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            after
+        );
+
+        form.load(editor.doc.as_ref().unwrap());
+        form.light
+            .as_mut()
+            .unwrap()
+            .values
+            .insert("Ambient".into(), "NaN".into());
+        form.light_editing = true;
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            form.finish_lighting(ui.ctx(), &mut editor, &scene);
+        });
+        assert!(form.dirty());
+        assert!(form.message.starts_with("尚未生效"));
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            after
+        );
+
+        form.light
+            .as_mut()
+            .unwrap()
+            .values
+            .insert("Ambient".into(), "0.7".into());
+        editor
+            .doc
+            .as_mut()
+            .unwrap()
+            .set_ini("Lighting", "Ambient", Some(b"0.8".to_vec()))
+            .unwrap();
+        editor.commit(&scene, "external edit");
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            form.finish_lighting(ui.ctx(), &mut editor, &scene);
+        });
+        assert!(form.message.contains("文档已变化"));
+        assert_eq!(
+            editor.doc.as_ref().unwrap().ini_text("Lighting", "Ambient"),
+            "0.8"
+        );
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lighting_preview_and_pending_resize_do_not_auto_write() {
+        let (mut editor, ctx, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        let mut form = MapSettingsUi::default();
+        form.smoke_preview(editor.doc.as_ref().unwrap(), Profile::Ion);
+        let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            form.finish_lighting(ui.ctx(), &mut editor, &scene);
+        });
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            before
+        );
+        form.light_editing = true;
+        form.options.as_mut().unwrap().width += 1;
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            form.finish_lighting(ui.ctx(), &mut editor, &scene);
+        });
+        assert!(form.dirty());
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            before
+        );
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -67,6 +67,82 @@ fn object_drafts_survive_reselection_and_block_save_until_applied_or_discarded()
 }
 
 #[test]
+fn object_edits_auto_commit_once_after_drag_and_keep_invalid_input_out_of_history() {
+    let (mut editor, ctx, root) = editor();
+    let scene = terrain_scene();
+    editor.attach(&scene);
+    let id = editor
+        .doc
+        .as_mut()
+        .unwrap()
+        .add_record("Units", [20, 20], "Neutral", "GI")
+        .unwrap();
+    editor.commit(&scene, "place");
+    editor.select(Some(id));
+    let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    for (pressed, value) in [(true, 200), (false, 128)] {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::PointerButton {
+                    pos: egui::pos2(50., 50.),
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                editor.property_health = value;
+                editor.finish_property_edit(ui.ctx(), &scene);
+            },
+        );
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            before
+        );
+    }
+    let _ = ctx.run_ui(Default::default(), |ui| {
+        editor.finish_property_edit(ui.ctx(), &scene)
+    });
+    assert!(!editor.object_properties_dirty());
+    assert_eq!(editor.records[&id].fields()[2], "128");
+    let after = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    assert!(
+        editor.select_from_canvas(None),
+        "completed edits must not block reselection"
+    );
+    editor.history(false, &scene);
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        before
+    );
+    editor.history(true, &scene);
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        after
+    );
+    editor.select(Some(id));
+    editor.property_type = "INVALID".into();
+    let _ = ctx.run_ui(Default::default(), |ui| {
+        editor.finish_property_edit(ui.ctx(), &scene)
+    });
+    assert!(!editor.property_error.is_empty());
+    assert!(!editor.select_from_canvas(None));
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        after
+    );
+    editor.history(false, &scene); // Cancel invalid input, preserving committed history.
+    assert!(!editor.object_properties_dirty());
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        after
+    );
+    drop(editor);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn building_ghost_matches_placed_pixels_across_foundations_height_and_zoom() {
     use ra2_map_assets::{catalog::Catalog, test_support::Fixture};
     use ra2_map_document::new_map::NewMapOptions;

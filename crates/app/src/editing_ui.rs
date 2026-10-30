@@ -78,7 +78,7 @@ impl Editor {
                     .on_hover_text(if self.stroking {
                         "取消当前一笔  Ctrl+Z / Esc".into()
                     } else if self.object_properties_dirty() {
-                        "放弃未应用的对象属性修改  Ctrl+Z".into()
+                        "取消当前属性输入  Ctrl+Z".into()
                     } else {
                         format!("撤销  Ctrl+Z\n{}", undo.unwrap_or_default())
                     })

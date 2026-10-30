@@ -7,7 +7,7 @@ impl Editor {
         if !self.object_properties_dirty() {
             return true;
         }
-        self.status = "对象属性尚未应用；请先点击“应用属性”或“放弃属性修改”。".into();
+        self.status = "请先完成属性输入；无效值需修正或取消本次输入。".into();
         false
     }
     pub(crate) fn object_properties_dirty(&self) -> bool {
@@ -34,7 +34,7 @@ impl Editor {
     }
     pub(crate) fn select_from_canvas(&mut self, id: Option<u64>) -> bool {
         if self.selected != id && self.object_properties_dirty() {
-            self.status = "对象属性尚未应用；请先点击“应用属性”或“放弃属性修改”。".into();
+            self.status = "请先完成属性输入；无效值需修正或取消本次输入。".into();
             return false;
         }
         if self.selected != id {
@@ -44,6 +44,8 @@ impl Editor {
     }
     pub(crate) fn select(&mut self, id: Option<u64>) {
         self.selected = id;
+        self.property_error.clear();
+        self.property_completion = Default::default();
         self.property_extra.clear();
         if let Some(r) = id.and_then(|id| self.records.get(&id)) {
             let f = r.fields();
@@ -60,6 +62,22 @@ impl Editor {
                 }
             }
         }
+    }
+    pub(crate) fn finish_property_edit(&mut self, ctx: &egui::Context, scene: &MapScene) {
+        if !self.stroking
+            && self.object_properties_dirty()
+            && (ctx.input(|i| i.viewport().close_requested())
+                || self.property_completion.ready(ctx))
+            && let Some((id, record)) = self
+                .selected
+                .and_then(|id| self.records.get(&id).cloned().map(|r| (id, r)))
+        {
+            match self.apply_object_properties(scene, &record, id) {
+                Ok(()) => self.status = "属性已自动生效，可撤销。".into(),
+                Err(error) => self.property_error = format!("尚未生效：{error:#}"),
+            }
+        }
+        self.property_completion.observe(ctx);
     }
     pub(super) fn houses(&self, scene: &MapScene) -> Vec<String> {
         let mut houses = BTreeSet::from(["Neutral".to_owned(), "Special".to_owned()]);
@@ -218,13 +236,7 @@ impl Editor {
             crate::ui_theme::field(ui, "坐标", format!("{}, {}", at[0], at[1]));
         }
         if r.section != "Waypoints" {
-            let dirty = self.object_properties_dirty();
-            if dirty {
-                ui.colored_label(
-                    crate::ui_theme::ACCENT,
-                    "属性有未应用的修改；保存地图前请先应用。",
-                );
-            }
+            ui.small("修改自动生效；文本按回车或移开焦点，数值拖动松手后生效。Ctrl+Z 撤销。");
             ui.label("类型");
             ui.text_edit_singleline(&mut self.property_type);
             ui.small(scene.catalog.object_name(&self.property_type));
@@ -270,25 +282,23 @@ impl Editor {
                     });
             }
             ui.checkbox(&mut self.allow_overlap, "允许对象重叠");
-            if ui
-                .add_enabled(
-                    self.object_properties_dirty(),
-                    crate::ui_theme::primary("应用属性"),
-                )
-                .clicked()
-                && let Err(e) = self.apply_object_properties(scene, &r, id)
-            {
-                self.status = format!("未修改：{e:#}");
+            self.finish_property_edit(ui.ctx(), scene);
+            if !self.property_error.is_empty() {
+                ui.colored_label(crate::ui_theme::ACCENT, &self.property_error);
             }
-            if self.object_properties_dirty() && ui.button("放弃属性修改").clicked() {
-                self.select(Some(id));
+            if self.object_properties_dirty() {
+                let cancel = ui.button("取消本次输入");
+                self.property_completion.cancel_button(&cancel);
+                if cancel.clicked() {
+                    self.select(Some(id));
+                }
             }
             if ui
                 .add_enabled(
                     !self.object_properties_dirty(),
                     egui::Button::new("克隆对象  Ctrl+D"),
                 )
-                .on_disabled_hover_text("先应用或放弃属性修改，克隆才会使用正确的属性。")
+                .on_disabled_hover_text("请先完成或取消当前属性输入。")
                 .clicked()
             {
                 self.tool = Tool::Clone;

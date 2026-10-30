@@ -1,4 +1,4 @@
-//! Mission forms are drafts until Apply; commands use the document's shared history.
+//! Completed mission edits use the document's shared history automatically.
 use crate::{editing::Editor, map::MapScene};
 use eframe::egui;
 use ra2_map_document::{
@@ -69,6 +69,8 @@ pub(crate) struct MissionUi {
     pick: Option<forms::Pick>,
     rename_id: String,
     clone_dependencies: bool,
+    completion: crate::form_edit::EditCompletion,
+    edit_error: String,
 }
 impl MissionUi {
     pub(crate) fn has_draft(&self) -> bool {
@@ -83,13 +85,13 @@ impl MissionUi {
         }
         self.open = true;
         self.message =
-            "任务草稿尚未应用。请先应用修改，或点击“放弃草稿并重载”，再打开、新建或关闭地图。"
+            "任务输入尚未完成或有无效值。请完成输入，或取消本次输入，再打开、新建或关闭地图。"
                 .into();
         false
     }
     pub(crate) fn navigate(&mut self, editor: &Editor, kind: Kind, id: String) {
         if self.dirty() {
-            self.message = "任务草稿尚未应用，请先应用或重新载入。".into();
+            self.message = "请先完成或取消当前任务输入。".into();
             self.open = true;
             return;
         }
@@ -123,13 +125,74 @@ impl MissionUi {
         self.field_target = None;
         self.pick = None;
         self.rename_id = mission::next_id(doc, self.kind);
+        self.completion = Default::default();
+        self.edit_error.clear();
+    }
+    pub(crate) fn finish_edit(
+        &mut self,
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        scene: &MapScene,
+    ) {
+        if self.dirty()
+            && !editor.stroking
+            && self.pick.is_none()
+            && (!self.open
+                || ctx.input(|i| i.viewport().close_requested())
+                || self.completion.ready(ctx))
+        {
+            match self.apply_edit(editor, scene) {
+                Ok(()) => self.edit_error.clear(),
+                Err(error) => {
+                    self.edit_error = format!("尚未生效：{error:#}");
+                    self.open = true;
+                }
+            }
+        }
+        self.completion.observe(ctx);
+    }
+
+    fn apply_edit(&mut self, editor: &mut Editor, scene: &MapScene) -> anyhow::Result<()> {
+        let doc = editor
+            .doc
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("没有地图"))?;
+        anyhow::ensure!(
+            self.document == doc.id && self.state == doc.state_id,
+            "文档已变化，请取消本次输入后重新编辑"
+        );
+        let changes = draft_changes(&self.original, &self.draft);
+        // A newly added empty field is only a UI placeholder. Keep it visible
+        // until the user fills it, even if another field commits first.
+        let placeholders: Vec<_> = self
+            .draft
+            .iter()
+            .filter(|(key, value)| value.is_empty() && !self.original.contains_key(*key))
+            .map(|(key, _)| (key.clone(), String::new()))
+            .collect();
+        mission::write_fields(doc, self.kind, &self.selected, &changes)?;
+        editor.commit(scene, "修改任务字段");
+        // Keep UI-only IDs, filters and list state while refreshing the baseline.
+        let doc = editor.doc.as_ref().unwrap();
+        self.state = doc.state_id;
+        self.original = mission::fields(doc, self.kind, &self.selected)
+            .into_iter()
+            .collect();
+        self.draft = self
+            .original
+            .iter()
+            .map(|(k, v)| (k.clone(), String::from_utf8_lossy(v).into_owned()))
+            .chain(placeholders)
+            .collect();
+        self.message = "修改已自动生效，可撤销、保存或试玩。".into();
+        Ok(())
     }
     fn dirty(&self) -> bool {
         self.original.keys().any(|k| !self.draft.contains_key(k))
             || self.draft.iter().any(|(k, v)| {
                 self.original
                     .get(k)
-                    .is_none_or(|b| String::from_utf8_lossy(b) != v.as_str())
+                    .map_or(!v.is_empty(), |b| String::from_utf8_lossy(b) != v.as_str())
             })
     }
     pub(crate) fn picking(&self) -> bool {
@@ -222,7 +285,7 @@ impl MissionUi {
                     }
                 }
                 self.pick = None;
-                self.message = "已更新草稿参数，请应用修改。".into();
+                self.message = "已选取参数，返回表单后自动生效。".into();
             }
             Err(e) => self.message = format!("{e:#}"),
         }
@@ -235,6 +298,13 @@ impl MissionUi {
         cell: Option<Cell>,
         directory: &std::path::Path,
     ) -> Option<Cell> {
+        if editor
+            .doc
+            .as_ref()
+            .is_some_and(|doc| self.document == doc.id)
+        {
+            self.finish_edit(ctx, editor, scene);
+        }
         self.campaign.show(ctx, editor, directory);
         if !self.open {
             return None;
@@ -259,7 +329,7 @@ impl MissionUi {
         if self.pick.is_some() {
             crate::ui_theme::window(ctx, "任务参数拾取", "mission-pick", egui::vec2(460., 180.))
                 .show(ctx, |ui| {
-                    ui.label("在地图点击航点标记、对象或目标格；Esc 取消。草稿不会立即写入文档。");
+                    ui.label("在地图点击航点标记、对象或目标格；选取后自动生效，Esc 取消拾取。");
                     if ui.button("取消拾取").clicked()
                         || ctx.input(|i| i.key_pressed(egui::Key::Escape))
                     {
@@ -328,7 +398,13 @@ impl MissionUi {
                 if !scene.mission_resources.errors.is_empty(){ui.collapsing("未读取的任务资源目录",|ui|{for error in &scene.mission_resources.errors{ui.small(error);}});}
                 ui.small("能力提示依据固定的 VERA20k 源码；未知参数可保留/编辑原文，未列入清单不代表引擎拒绝。");
             });
-        self.open = open;
+        self.finish_edit(ctx, editor, scene);
+        if !self.edit_error.is_empty() && !open {
+            self.message = self.edit_error.clone();
+            self.open = true;
+        } else {
+            self.open = open;
+        }
         jump
     }
     fn record_list(
@@ -492,39 +568,23 @@ impl MissionUi {
         }
         let stale = editor.doc.as_ref().unwrap().state_id != self.state;
         if stale {
-            ui.colored_label(egui::Color32::YELLOW, "文档已变化，请重新载入草稿再应用。");
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                "文档已变化，请取消本次输入后重新编辑。",
+            );
+        }
+        ui.small("修改自动生效；文本按回车或移开焦点，数值拖动松手后生效。使用撤销恢复上次修改。");
+        if !self.edit_error.is_empty() {
+            ui.colored_label(egui::Color32::YELLOW, &self.edit_error);
         }
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    !stale && !editor.stroking && self.dirty(),
-                    crate::ui_theme::primary("应用修改"),
-                )
-                .clicked()
-            {
-                let changes = draft_changes(&self.original, &self.draft);
-                match mission::write_fields(
-                    editor.doc.as_mut().unwrap(),
-                    self.kind,
-                    &self.selected,
-                    &changes,
-                ) {
-                    Ok(()) => {
-                        editor.commit(scene, "修改任务字段");
-                        self.message = "修改已应用，可撤销、保存或试玩。".into();
-                        self.load(editor);
-                    }
-                    Err(e) => self.message = format!("{e:#}"),
-                }
-            }
-            if ui
-                .button(if self.dirty() {
-                    "放弃草稿并重载"
-                } else {
-                    "重新载入"
-                })
-                .clicked()
-            {
+            let cancel = ui.button(if self.dirty() {
+                "取消本次输入"
+            } else {
+                "重新载入"
+            });
+            self.completion.cancel_button(&cancel);
+            if cancel.clicked() {
                 self.load(editor);
             }
             if !matches!(self.kind, Kind::Basic | Kind::Global)
@@ -729,10 +789,10 @@ impl MissionUi {
                     self.new_key.clear();
                 }
             });
-            ui.small("清空字段后应用可删除该字段；未改动字段和未知字节保持原样。");
+            ui.small("清空字段并结束输入会删除该字段；未改动字段和未知字节保持原样。");
         }
         if self.dirty() {
-            ui.small("先应用修改或重新载入以放弃草稿，再切换记录。");
+            ui.small("正在编辑；完成或取消本次输入后可切换记录。");
         }
         if self.kind == Kind::Tag {
             if let Some(at) = cell
@@ -741,7 +801,7 @@ impl MissionUi {
                         !self.dirty() && !editor.stroking,
                         egui::Button::new(format!("绑定当前格 {},{}", at[0], at[1])),
                     )
-                    .on_disabled_hover_text("请先应用或放弃任务草稿，并完成当前一笔。")
+                    .on_disabled_hover_text("请先完成或取消当前任务输入，并完成当前一笔。")
                     .clicked()
             {
                 match mission::bind_cell(editor.doc.as_mut().unwrap(), at, &self.selected) {
@@ -758,9 +818,7 @@ impl MissionUi {
                         !self.dirty() && !editor.stroking && !editor.object_properties_dirty(),
                         egui::Button::new("绑定当前选中对象"),
                     )
-                    .on_disabled_hover_text(
-                        "请先应用或放弃任务草稿与对象属性修改，并完成当前一笔。",
-                    )
+                    .on_disabled_hover_text("请先完成或取消当前任务和属性输入，并完成当前一笔。")
                     .clicked()
             {
                 let doc = editor.doc.as_mut().unwrap();
@@ -1061,6 +1119,96 @@ fn preserve_csv(original: Option<&[u8]>, draft: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_empty_fields_survive_until_filled_without_committing_empty_values() {
+        let (mut editor, ctx, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        let mut form = MissionUi {
+            open: true,
+            kind: Kind::Basic,
+            selected: "Basic".into(),
+            ..Default::default()
+        };
+        form.load(&editor);
+        form.draft.insert("Author".into(), String::new());
+        assert!(!form.dirty());
+        form.draft.insert("Name".into(), "新地图".into());
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            form.finish_edit(ui.ctx(), &mut editor, &scene)
+        });
+        assert!(!form.dirty());
+        assert_eq!(form.draft.get("Author"), Some(&String::new()));
+        form.draft.insert("Author".into(), "新作者".into());
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            form.finish_edit(ui.ctx(), &mut editor, &scene)
+        });
+        assert!(!form.dirty());
+        assert_eq!(
+            editor.doc.as_ref().unwrap().ini_text("Basic", "Author"),
+            "新作者"
+        );
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn completed_task_fields_apply_automatically_and_stale_edits_never_overwrite_history() {
+        let (mut editor, ctx, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        let mut form = MissionUi {
+            open: true,
+            kind: Kind::Basic,
+            selected: "Basic".into(),
+            ..Default::default()
+        };
+        form.load(&editor);
+        form.rename_id = "keep-ui-state".into();
+        let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        form.draft.insert("Author".into(), "中文作者".into());
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            form.finish_edit(ui.ctx(), &mut editor, &scene)
+        });
+        assert!(!form.dirty());
+        assert_eq!(
+            editor.doc.as_ref().unwrap().ini_text("Basic", "Author"),
+            "中文作者"
+        );
+        assert_eq!(form.rename_id, "keep-ui-state");
+        let after = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        editor.history(false, &scene);
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            before
+        );
+        editor.history(true, &scene);
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            after
+        );
+        form.load(&editor);
+        form.draft.insert("Author".into(), "stale".into());
+        editor
+            .doc
+            .as_mut()
+            .unwrap()
+            .set_ini("Basic", "Author", Some(b"newer".to_vec()))
+            .unwrap();
+        editor.commit(&scene, "external edit");
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            form.finish_edit(ui.ctx(), &mut editor, &scene)
+        });
+        assert!(form.dirty());
+        assert!(!form.edit_error.is_empty());
+        assert_eq!(
+            editor.doc.as_ref().unwrap().ini_text("Basic", "Author"),
+            "newer"
+        );
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn leaving_with_unapplied_mission_draft_preserves_and_reopens_it() {
         let mut ui = MissionUi::default();

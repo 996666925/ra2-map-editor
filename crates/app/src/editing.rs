@@ -33,7 +33,7 @@ pub enum Tool {
 }
 #[cfg(test)]
 #[path = "editing_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 impl Tool {
     pub fn name(self) -> &'static str {
         match self {
@@ -143,6 +143,8 @@ pub struct Editor {
     property_type: String,
     property_health: u16,
     property_facing: u8,
+    property_completion: crate::form_edit::EditCompletion,
+    property_error: String,
 }
 impl Editor {
     pub fn view_options(&self) -> ra2_map_scene::visual::ViewOptions {
@@ -173,6 +175,8 @@ impl Editor {
             allow_overlap: false,
             infantry_subcell: 0,
             property_extra: BTreeMap::new(),
+            property_completion: Default::default(),
+            property_error: String::new(),
             terrain_mode: TerrainMode::Template,
             auto_lat: true,
             smooth_heights: true,
@@ -652,7 +656,7 @@ impl Editor {
         }
         if self.object_properties_dirty() {
             self.select(self.selected);
-            self.status = "已撤回未应用的属性修改；地图历史未改变。".into();
+            self.status = "已取消当前属性输入；地图历史未改变。".into();
             return;
         }
         self.plateau.cancel();

@@ -228,6 +228,15 @@ impl MapView {
             self.status = "已取消；编辑数据仍保留，可刷新资源重新加载预览。".into();
         }
         self.editor.poll(ctx);
+        if let Some(scene) = &self.scene {
+            self.workbench
+                .map_settings
+                .finish_lighting(ctx, &mut self.editor, scene);
+            self.editor.finish_property_edit(ctx, scene);
+            self.workbench
+                .mission
+                .finish_edit(ctx, &mut self.editor, scene);
+        }
         if ctx.input(|i| {
             i.events
                 .iter()
