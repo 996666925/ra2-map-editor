@@ -52,6 +52,277 @@ fn view() -> (MapView, PathBuf) {
 }
 
 #[test]
+fn bridge_drag_in_canvas_keeps_tracking_pointer_as_preview_gets_longer() {
+    let (mut view, root) = view();
+    let fixture = ra2_map_assets::test_support::Fixture::with_authoring();
+    let mut install = fixture.install();
+    install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
+    let scene = ra2_map_scene::map::load_scene_bytes(
+        &mut install,
+        "drag.map",
+        "test".into(),
+        crate::new_map::NewMapOptions {
+            width: 80,
+            height: 80,
+            level: 4,
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap(),
+        Instant::now(),
+    )
+    .unwrap();
+    view.editor.attach(&scene);
+    view.editor
+        .activate_terrain_mode(ra2_map_scene::terrain_tools::TerrainMode::Bridge);
+    view.editor.bridge_kind = ra2_map_scene::bridge_tools::BridgeKind::LowWood;
+    view.scene = Some(scene.clone());
+    view.center = egui::pos2(0., 1900.);
+    view.zoom = 0.6;
+    view.fit = false;
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200., 800.));
+    let _ = crate::test_support::run_ui(
+        &ctx,
+        egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        },
+        |ui| view.canvas_inner(ui, None),
+    );
+    let mut counts = Vec::new();
+    for frame in 0..5 {
+        let at = match frame {
+            0 | 1 => [60, 60],
+            2 => [64, 60],
+            _ => [84, 60],
+        };
+        let cell = scene.cells.iter().find(|c| [c.rx, c.ry] == at).unwrap();
+        let rect = view.workbench.canvas_rect.unwrap();
+        let camera = crate::camera::MapCamera {
+            center: view.center,
+            zoom: view.zoom,
+        };
+        let pos = rect.min
+            + (scene.cell_rect(cell).unwrap().min + egui::vec2(1., 0.)
+                - camera.world_rect(rect).min)
+                * camera.zoom;
+        let mut events = vec![egui::Event::PointerMoved(pos)];
+        if frame == 1 || frame == 4 {
+            events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: frame == 1,
+                modifiers: Default::default(),
+            });
+        }
+        let _ = crate::test_support::run_ui(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            },
+            |ui| view.canvas_inner(ui, None),
+        );
+        if frame == 2 || frame == 3 {
+            let hit = view
+                .hover
+                .map(|n| [scene.cells[n].rx, scene.cells[n].ry])
+                .unwrap();
+            assert_eq!(hit, at);
+            counts.push(
+                view.editor
+                    .plateau_preview_plan(&scene, hit)
+                    .unwrap()
+                    .overlays
+                    .len(),
+            );
+        }
+    }
+    assert_eq!(counts, [15, 75]);
+    assert_eq!(view.editor.doc.as_ref().unwrap().overlay([84, 60]).0, 92);
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn low_bridge_preview_stretches_over_open_water_before_reaching_the_far_bank() {
+    for kind in [
+        ra2_map_scene::bridge_tools::BridgeKind::LowWood,
+        ra2_map_scene::bridge_tools::BridgeKind::LowConcrete,
+    ] {
+        let (mut view, root) = view();
+        let fixture = ra2_map_assets::test_support::Fixture::with_joining();
+        let mut install = fixture.install();
+        install.catalog =
+            ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
+        let mut scene = ra2_map_scene::map::load_scene_bytes(
+            &mut install,
+            "river.map",
+            "test".into(),
+            crate::new_map::NewMapOptions {
+                width: 80,
+                height: 80,
+                level: 4,
+                ..Default::default()
+            }
+            .bytes()
+            .unwrap(),
+            Instant::now(),
+        )
+        .unwrap();
+        let mut doc =
+            crate::document::MapDocument::new(scene.source.edit_base.as_ref().unwrap().clone());
+        ra2_map_scene::shore_tools::plan(
+            &doc,
+            &scene,
+            ra2_map_scene::cliff_tools::rectangle([70, 55], [104, 80]),
+            Some(true),
+        )
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+        doc.commit("river");
+        scene = ra2_map_scene::map::load_scene_bytes(
+            &mut install,
+            "river.map",
+            "test".into(),
+            doc.snapshot().bytes().unwrap(),
+            Instant::now(),
+        )
+        .unwrap();
+        view.editor.attach(&scene);
+        view.editor
+            .activate_terrain_mode(ra2_map_scene::terrain_tools::TerrainMode::Bridge);
+        view.editor.bridge_kind = kind;
+        view.scene = Some(scene.clone());
+        view.center = egui::pos2(540., 2200.);
+        view.zoom = 0.6;
+        view.fit = false;
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200., 800.));
+        let _ = crate::test_support::run_ui(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |ui| view.canvas_inner(ui, None),
+        );
+        let before = view
+            .editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap();
+        let mut ghost_counts = Vec::new();
+        for frame in 0..7 {
+            let at = match frame {
+                0 | 1 | 5 => [69, 67],
+                2 => [76, 67],
+                3 | 4 => [90, 67],
+                _ => [105, 67],
+            };
+            let cell = scene.cells.iter().find(|c| [c.rx, c.ry] == at).unwrap();
+            let rect = view.workbench.canvas_rect.unwrap();
+            let camera = crate::camera::MapCamera {
+                center: view.center,
+                zoom: view.zoom,
+            };
+            let pos = rect.min
+                + (scene.cell_rect(cell).unwrap().min + egui::vec2(1., 0.)
+                    - camera.world_rect(rect).min)
+                    * camera.zoom;
+            let mut events = vec![egui::Event::PointerMoved(pos)];
+            if matches!(frame, 1 | 4 | 5 | 6) {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: matches!(frame, 1 | 5),
+                    modifiers: Default::default(),
+                });
+            }
+            let output = crate::test_support::run_ui(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui| view.canvas_inner(ui, None),
+            );
+            if frame == 2 || frame == 3 {
+                assert!(
+                    view.editor.plateau_preview_plan(&scene, at).is_err(),
+                    "open water is not a valid final landing"
+                );
+                assert_eq!(
+                    view.editor
+                        .doc
+                        .as_ref()
+                        .unwrap()
+                        .snapshot()
+                        .bytes()
+                        .unwrap(),
+                    before
+                );
+                ghost_counts.push(output.shapes.iter().filter(|s|matches!(&s.shape,egui::Shape::Mesh(m) if m.texture_id!=egui::TextureId::default())).count());
+            }
+            if frame == 4 {
+                assert_eq!(
+                    view.editor
+                        .doc
+                        .as_ref()
+                        .unwrap()
+                        .snapshot()
+                        .bytes()
+                        .unwrap(),
+                    before,
+                    "releasing an unfinished crossing must not place the draft"
+                );
+                assert!(view.editor.status.starts_with("本笔未修改"));
+            }
+        }
+        assert_eq!(
+            ghost_counts,
+            [24, 66],
+            "both materials must keep drawing all three deck cells per row while dragging over water"
+        );
+        assert!(
+            !view.editor.status.starts_with("本笔未修改"),
+            "{}",
+            view.editor.status
+        );
+        assert_ne!(
+            view.editor
+                .doc
+                .as_ref()
+                .unwrap()
+                .snapshot()
+                .bytes()
+                .unwrap(),
+            before
+        );
+        view.editor.history(false, &scene);
+        assert_eq!(
+            view.editor
+                .doc
+                .as_ref()
+                .unwrap()
+                .snapshot()
+                .bytes()
+                .unwrap(),
+            before
+        );
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn creation_dialog_layout_stays_compact_and_actions_visible_after_resizing() {
     for random in [false, true] {
         let (mut view, root) = view();

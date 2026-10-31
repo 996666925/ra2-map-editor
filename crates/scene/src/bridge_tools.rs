@@ -9,6 +9,7 @@ use anyhow::{Context, Result, ensure};
 use ra2_map_document::document::{Cell, MapDocument};
 use std::collections::{BTreeMap, BTreeSet};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
+use vera20k_core::rules::terrain_rules::{LandType, tmp_terrain_to_land_type};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BridgeKind {
@@ -27,10 +28,10 @@ impl BridgeKind {
     ];
     pub fn name(self) -> &'static str {
         match self {
-            Self::HighConcrete => "高架混凝土桥",
-            Self::HighWood => "高架木桥",
-            Self::LowWood => "低木桥",
-            Self::LowConcrete => "低混凝土桥",
+            Self::HighConcrete => "悬崖间高架混凝土桥",
+            Self::HighWood => "悬崖间高架木桥",
+            Self::LowWood => "水面低木桥",
+            Self::LowConcrete => "水面低混凝土桥",
         }
     }
     pub fn high(self) -> bool {
@@ -78,6 +79,212 @@ fn overlay(scene: &MapScene, id: u8, frame: u8) -> Result<()> {
     Ok(())
 }
 
+fn land(scene: &MapScene, v: ra2_map_document::document::TerrainValue) -> bool {
+    let Some(&id) = scene.palette.raw_ids.get(&v.tile) else {
+        return false;
+    };
+    let Some(s) = scene
+        .palette
+        .templates
+        .get(&(id, 0))
+        .and_then(|t| t.cells.get(usize::from(v.sub)))
+        .and_then(|s| *s)
+    else {
+        return false;
+    };
+    // Morphable describes terrain editing, not whether units can enter a bank.
+    // Retail snow LATs (Icy, Grey/Clear, etc.) are flat dry ground without that
+    // flag. Use their TMP land type; low bridges leave those templates intact.
+    s.slope == 0
+        && s.terrain < 16
+        && matches!(
+            tmp_terrain_to_land_type(s.terrain),
+            LandType::Clear | LandType::Road | LandType::Rough | LandType::Ice
+        )
+}
+
+/// A cliff face's picked subcell can be at the foot of the cliff. Recover
+/// the bank height from its TMP rather than treating that foot as a landing.
+fn bank_level(doc: &MapDocument, scene: &MapScene, at: Cell) -> Result<u8> {
+    let v = value(doc, scene, at);
+    let id = scene
+        .palette
+        .raw_ids
+        .get(&v.tile)
+        .context("落地点地形未知")?;
+    if crate::coastal_cliffs::piece(scene, *id).is_some() {
+        let sub = scene
+            .palette
+            .templates
+            .get(&(*id, 0))
+            .and_then(|t| t.cells.get(usize::from(v.sub)))
+            .and_then(|s| *s)
+            .context("悬崖子块缺失")?;
+        return v
+            .level
+            .checked_sub(sub.height)
+            .and_then(|b| b.checked_add(4))
+            .context("悬崖高度无效");
+    }
+    Ok(v.level)
+}
+
+fn step(at: Cell, axis: usize, amount: i32) -> Result<Cell> {
+    if axis == 0 {
+        cell(at, amount, 0)
+    } else {
+        cell(at, 0, amount)
+    }
+}
+
+fn high_end(
+    doc: &MapDocument,
+    scene: &MapScene,
+    mut at: Cell,
+    other: Cell,
+    axis: usize,
+    direction: i32,
+    landing: u8,
+) -> Result<Cell> {
+    // Only the clicked cliff's own footprint may be searched backwards.
+    let v = value(doc, scene, at);
+    let id = scene
+        .palette
+        .raw_ids
+        .get(&v.tile)
+        .context("落地点地形未知")?;
+    let reach = if crate::coastal_cliffs::piece(scene, *id).is_some() {
+        let t = &scene.palette.templates[&(*id, 0)];
+        if axis == 0 { t.width } else { t.height }
+    } else {
+        0
+    };
+    for _ in 0..reach {
+        if value(doc, scene, at).level == landing {
+            break;
+        }
+        at = step(at, axis, -direction)?;
+        doc.check_cell(at)?;
+    }
+    ensure!(
+        value(doc, scene, at).level == landing,
+        "请从高地或悬崖边缘拖动高桥"
+    );
+    loop {
+        let next = step(at, axis, direction)?;
+        ensure!(
+            next != other,
+            "两端之间没有可跨越的低地；水面同高桥请选择低桥"
+        );
+        doc.check_cell(next)?;
+        if value(doc, scene, next).level != landing {
+            // The positive-side head's first raised centre cell is one
+            // cell before its anchor (BottomRight/BottomLeft TMP profile).
+            return if direction > 0 {
+                Ok(at)
+            } else {
+                step(at, axis, 1)
+            };
+        }
+        at = next;
+    }
+}
+
+fn low_end(
+    doc: &MapDocument,
+    scene: &MapScene,
+    mut at: Cell,
+    axis: usize,
+    outward: i32,
+    level: u8,
+) -> Result<Cell> {
+    // A shore is at most a few cells thick. Never search through a whole
+    // water body when an endpoint was accidentally placed in open water.
+    for _ in 0..=4 {
+        let behind = step(at, axis, outward)?;
+        let mut dry = true;
+        for side in -1..=1 {
+            let p = step(behind, 1 - axis, side)?;
+            doc.check_cell(p)?;
+            let v = value(doc, scene, p);
+            dry &= v.level == level && land(scene, v);
+        }
+        if dry {
+            return Ok(at);
+        }
+        at = behind;
+    }
+    anyhow::bail!("低桥端点需要靠近同高岸边，请从一岸拖到另一岸")
+}
+
+fn endpoints(mut a: Cell, mut b: Cell) -> (Cell, Cell, bool) {
+    let along_x = a[0].abs_diff(b[0]) >= a[1].abs_diff(b[1]);
+    b = if along_x { [b[0], a[1]] } else { [a[0], b[1]] };
+    if a[usize::from(!along_x)] > b[usize::from(!along_x)] {
+        std::mem::swap(&mut a, &mut b);
+    }
+    (a, b, along_x)
+}
+
+fn low_deck(
+    doc: &MapDocument,
+    scene: &MapScene,
+    a: Cell,
+    b: Cell,
+    kind: BridgeKind,
+    along_x: bool,
+) -> Result<BTreeMap<Cell, (u8, u8)>> {
+    let axis = usize::from(!along_x);
+    let first = if kind == BridgeKind::LowWood { 74 } else { 205 };
+    let mut overlays = BTreeMap::new();
+    for coordinate in a[axis]..=b[axis] {
+        let piece = if coordinate == a[axis] {
+            if along_x { 20 } else { 22 }
+        } else if coordinate == b[axis] {
+            if along_x { 18 } else { 24 }
+        } else {
+            (if along_x { 0 } else { 9 }) + (coordinate % 4) as u8
+        };
+        for side in -1..=1 {
+            let anchor = if along_x {
+                [coordinate, a[1]]
+            } else {
+                [a[0], coordinate]
+            };
+            let at = step(anchor, 1 - axis, side)?;
+            doc.check_cell(at)?;
+            let frame = (side + 1) as u8;
+            overlay(scene, first + piece, frame)?;
+            overlays.insert(at, (first + piece, frame));
+        }
+    }
+    Ok(overlays)
+}
+
+/// Visual draft at the dragged endpoints, including an unfinished crossing.
+/// This does not validate landings, heights or occupancy; placement must use
+/// `plan`. Keep the same deck rows and frames as the validated placement.
+pub fn preview_low(
+    doc: &MapDocument,
+    scene: &MapScene,
+    a: Cell,
+    b: Cell,
+    kind: BridgeKind,
+) -> Result<PlateauPlan> {
+    ensure!(!kind.high(), "此预览仅用于水面低桥");
+    ensure!(a != b, "拖动确定桥梁跨度");
+    let (a, b, along_x) = endpoints(a, b);
+    doc.check_cell(a)?;
+    doc.check_cell(b)?;
+    Ok(PlateauPlan {
+        edits: BTreeMap::new(),
+        overlays: low_deck(doc, scene, a, b, kind, along_x)?,
+        cliffs: Vec::new(),
+        interior: BTreeSet::new(),
+        base: value(doc, scene, a).level,
+    })
+}
+
 pub fn plan(
     doc: &MapDocument,
     scene: &MapScene,
@@ -86,21 +293,35 @@ pub fn plan(
     kind: BridgeKind,
 ) -> Result<PlateauPlan> {
     ensure!(a != b, "拖动确定桥梁跨度");
-    let along_x = a[0].abs_diff(b[0]) >= a[1].abs_diff(b[1]);
-    let mut b = if along_x { [b[0], a[1]] } else { [a[0], b[1]] };
-    let mut a = a;
-    if a[usize::from(!along_x)] > b[usize::from(!along_x)] {
-        std::mem::swap(&mut a, &mut b);
-    }
+    let (mut a, mut b, along_x) = endpoints(a, b);
     doc.check_cell(a)?;
     doc.check_cell(b)?;
-    let span = if along_x { b[0] - a[0] } else { b[1] - a[1] };
+    let axis = usize::from(!along_x);
+    let landing = if kind.high() {
+        bank_level(doc, scene, a)?
+    } else {
+        value(doc, scene, a).level
+    };
+    let end_level = if kind.high() {
+        bank_level(doc, scene, b)?
+    } else {
+        value(doc, scene, b).level
+    };
+    ensure!(end_level == landing, "两端落地点必须等高");
+    if kind.high() {
+        let start = high_end(doc, scene, a, b, axis, 1, landing)?;
+        b = high_end(doc, scene, b, a, axis, -1, landing)?;
+        a = start;
+    } else {
+        a = low_end(doc, scene, a, axis, -1, landing)?;
+        b = low_end(doc, scene, b, axis, 1, landing)?;
+    }
+    ensure!(a[axis] < b[axis], "桥梁两端没有有效跨度");
+    let span = b[axis] - a[axis];
     ensure!(
-        span >= if kind.high() { 8 } else { 3 },
-        "桥梁跨度过短（高桥至少 8 格，低桥至少 3 格）"
+        span >= if kind.high() { 3 } else { 2 },
+        "桥梁跨度过短，无法容纳两端桥头与桥面"
     );
-    let landing = value(doc, scene, a).level;
-    ensure!(value(doc, scene, b).level == landing, "两端落地点必须等高");
     let base = if kind.high() {
         landing
             .checked_sub(4)
@@ -168,18 +389,8 @@ pub fn plan(
             } {
                 doc.check_cell(at)?;
                 let old = value(doc, scene, at);
-                let id = translated.get(&old.tile).context("落地点地形未知")?;
-                let slope = scene
-                    .palette
-                    .templates
-                    .get(&(*id, 0))
-                    .and_then(|t| t.cells.get(usize::from(old.sub)))
-                    .and_then(|s| *s)
-                    .map(|s| s.slope);
                 ensure!(
-                    old.level == landing
-                        && slope == Some(0)
-                        && (scene.palette.morphable.contains(id) || i32::from(*id) == ids.clear),
+                    old.level == landing && land(scene, old),
                     "桥头后方需要同高的平坦陆地（宽 5 格）"
                 );
                 footprint.insert(at);
@@ -224,36 +435,8 @@ pub fn plan(
             }
         }
     } else {
-        let first = if kind == BridgeKind::LowWood { 74 } else { 205 };
-        for i in 0..=span {
-            let id = first
-                + if along_x {
-                    if i == 0 {
-                        20
-                    } else if i == span {
-                        18
-                    } else {
-                        (i % 4) as u8
-                    }
-                } else if i == 0 {
-                    22
-                } else if i == span {
-                    24
-                } else {
-                    9 + (i % 4) as u8
-                };
-            for side in -1..=1 {
-                let at = if along_x {
-                    cell(a, i32::from(i), side)?
-                } else {
-                    cell(a, side, i32::from(i))?
-                };
-                let frame = (side + 1) as u8;
-                overlay(scene, id, frame)?;
-                p.overlays.insert(at, (id, frame));
-                footprint.insert(at);
-            }
-        }
+        p.overlays = low_deck(doc, scene, a, b, kind, along_x)?;
+        footprint.extend(p.overlays.keys().copied());
         for side in -1..=1 {
             for at in if along_x {
                 [cell(a, -1, side)?, cell(b, 1, side)?]
@@ -262,10 +445,8 @@ pub fn plan(
             } {
                 doc.check_cell(at)?;
                 let old = value(doc, scene, at);
-                let id = translated.get(&old.tile).context("落地点地形未知")?;
                 ensure!(
-                    old.level == base
-                        && (scene.palette.morphable.contains(id) || i32::from(*id) == ids.clear),
+                    old.level == base && land(scene, old),
                     "低桥两端需要同高陆地"
                 );
                 footprint.insert(at);
@@ -290,7 +471,8 @@ pub fn plan(
             .and_then(|s| *s)
             .context("原地形几何缺失")?;
         let land_cliff = crate::coastal_cliffs::piece(scene, *id).is_some();
-        let ordinary = scene.palette.morphable.contains(id)
+        let ordinary = land(scene, v)
+            || scene.palette.morphable.contains(id)
             || i32::from(*id) == ids.clear
             || ids.is_water_shore_or_waterfall(i32::from(*id));
         ensure!(
@@ -321,7 +503,14 @@ pub fn plan(
         .filter(|r| !matches!(r.section.as_str(), "Waypoints" | "Smudge"))
     {
         for at in crate::placement::footprint(scene, r)? {
-            ensure!(!footprint.contains(&at), "桥梁范围内有对象或建筑占地");
+            ensure!(
+                !footprint.contains(&at),
+                "桥梁范围 {},{} 被 {}（{}）占用，请移开对象或调整桥位",
+                at[0],
+                at[1],
+                scene.catalog.object_name(&r.type_id()),
+                r.type_id()
+            );
         }
     }
     Ok(p)

@@ -27,6 +27,7 @@ struct Key {
 struct Preview {
     key: Key,
     result: std::result::Result<Arc<PlateauPlan>, String>,
+    bridge_draft: Option<Arc<PlateauPlan>>,
 }
 impl PlateauEdit {
     pub fn cancel(&mut self) {
@@ -122,7 +123,19 @@ impl PlateauEdit {
                 )?))
             })()
             .map_err(|e| format!("{e:#}"));
-            self.preview = Some(Preview { key, result });
+            let bridge_draft =
+                if result.is_err() && key.mode == TerrainMode::Bridge && !key.bridge.high() {
+                    ra2_map_scene::bridge_tools::preview_low(doc, scene, g.start, at, key.bridge)
+                        .ok()
+                        .map(Arc::new)
+                } else {
+                    None
+                };
+            self.preview = Some(Preview {
+                key,
+                result,
+                bridge_draft,
+            });
         }
         self.preview.as_ref().unwrap().result.clone()
     }
@@ -236,7 +249,11 @@ impl Editor {
         }
         let world = camera.world_rect(rect);
         let result = self.plateau.generate(doc, scene, at);
-        let color = if result.is_ok() {
+        let error = result.as_ref().err().cloned();
+        let plan = result
+            .ok()
+            .or_else(|| self.plateau.preview.as_ref()?.bridge_draft.clone());
+        let color = if error.is_none() {
             Color32::from_rgb(80, 220, 170)
         } else {
             Color32::LIGHT_RED
@@ -255,8 +272,8 @@ impl Editor {
                 egui::Stroke::new(1., color),
             ));
         };
-        match result {
-            Ok(plan) => {
+        match plan {
+            Some(plan) => {
                 // Filled water and restored ground are part of the ghost too.
                 let stamped: BTreeSet<_> = plan.cliffs.iter().map(|s| (s.tile, s.origin)).collect();
                 for (&at, v) in &plan.edits {
@@ -345,12 +362,15 @@ impl Editor {
                 overlays.sort_by_key(|(at, _)| (u32::from(at[0]) + u32::from(at[1]), at[0]));
                 for (&at, &(id, frame)) in overlays {
                     let high = vera20k_core::rules::overlay_types::is_high_bridge_index(id);
-                    let level = plan
-                        .edits
-                        .get(&at)
-                        .copied()
-                        .unwrap_or_else(|| terrain_tools::value(doc, scene, at))
-                        .level;
+                    let level = if error.is_some() {
+                        plan.base
+                    } else {
+                        plan.edits
+                            .get(&at)
+                            .copied()
+                            .unwrap_or_else(|| terrain_tools::value(doc, scene, at))
+                            .level
+                    };
                     outline(painter, at, level + if high { 4 } else { 0 });
                     if let Some(name) = scene.catalog.overlays.get(usize::from(id))
                         && let Some(im) = scene.sprites.overlay_frames.get(&(name.clone(), frame))
@@ -377,7 +397,11 @@ impl Editor {
                                 texture,
                                 target,
                                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                                Color32::from_white_alpha(180),
+                                if error.is_some() {
+                                    Color32::from_rgba_unmultiplied(255, 160, 160, 180)
+                                } else {
+                                    Color32::from_white_alpha(180)
+                                },
                             );
                         }
                     }
@@ -393,17 +417,31 @@ impl Editor {
                 painter.text(
                     rect.left_top() + egui::vec2(12., 12.),
                     egui::Align2::LEFT_TOP,
-                    format!(
-                        "{} 格修改 · {} 个地形模板 · {}；松开放置，Esc 取消",
-                        plan.edits.len() + plan.overlays.len(),
-                        plan.cliffs.len(),
-                        heights
-                    ),
+                    error
+                        .as_ref()
+                        .map(|e| {
+                            format!(
+                                "预览 {} 排桥面 · {e}；红色时松开不会放置，Esc 取消",
+                                plan.overlays.len() / 3
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            format!(
+                                "{} 格修改 · {} 个地形模板 · {}；松开放置，Esc 取消",
+                                plan.edits.len() + plan.overlays.len(),
+                                plan.cliffs.len(),
+                                heights
+                            )
+                        }),
                     egui::FontId::proportional(13.),
-                    Color32::LIGHT_GREEN,
+                    if error.is_some() {
+                        Color32::LIGHT_RED
+                    } else {
+                        Color32::LIGHT_GREEN
+                    },
                 );
             }
-            Err(error) => {
+            None => {
                 let g = self.plateau.gesture.as_ref().unwrap();
                 if matches!(
                     g.mode,
@@ -432,7 +470,7 @@ impl Editor {
                 painter.text(
                     rect.left_top() + egui::vec2(12., 12.),
                     egui::Align2::LEFT_TOP,
-                    error,
+                    error.unwrap_or_else(|| "无法生成预览".into()),
                     egui::FontId::proportional(13.),
                     Color32::LIGHT_RED,
                 );

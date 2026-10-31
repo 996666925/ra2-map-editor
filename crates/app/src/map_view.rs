@@ -421,6 +421,10 @@ impl MapView {
             .max(started.elapsed().as_secs_f64() * 1000.);
     }
     pub fn canvas(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
+        self.canvas_inner(ui, Some(state));
+    }
+
+    fn canvas_inner(&mut self, ui: &mut egui::Ui, state: Option<&egui_wgpu::RenderState>) {
         use crate::ui_theme as theme;
         if self.loading {
             self.loading_ui_frames += 1;
@@ -654,7 +658,7 @@ impl MapView {
                 .round()
                 .max(1.) as u32,
         ];
-        if let Some(gpu) = &self.gpu {
+        if let (Some(gpu), Some(state)) = (&self.gpu, state) {
             if self.target.as_ref().is_none_or(|t| t.size != size) {
                 self.target = Some(gpu.target(&state.device, size));
             }
