@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail, ensure};
 use ra2_map_app::app::{EditorApp, LaunchOptions, SmokeOutcome};
+use ra2_map_document::new_map::{MAX_MAP_DIMENSION, MAX_MAP_SPAN, MIN_MAP_DIMENSION};
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(
@@ -74,7 +75,7 @@ fn arguments() -> Result<Option<LaunchOptions>> {
         let arg = arg.to_str().context("参数名不是有效 Unicode")?;
         if matches!(arg, "--help" | "-h") {
             println!(
-                "YR Map Editor — P2 basic editing\n\nUsage: ra2-map-editor [OPTIONS]\n  --game-dir PATH      YR game resources (or RA2_DIR; otherwise use the folder picker)\n  --profile FILE       Mod profile JSON (resources, schema, executable)\n  --map PATH_OR_NAME   Open a map file or MIX resource\n  --new-map WxH       Create map (20..492 per dimension, W+H <= 512)\n  --theater NAME      TEMPERATE, SNOW, URBAN, NEWURBAN, DESERT or LUNAR\n  --players N         Player starts for --new-map (2..30; default: 2)\n  --playtest-exe PATH  VERA20k executable for isolated -SPAWN playtests\n  --tmp NAME           TMP resource (default: clear01.tem)\n  --sub-tile INDEX     TMP sub-tile (default: 0)\n  --shp NAME           Unit-palette SHP resource (default: gi.shp)\n  --frame INDEX        SHP frame (default: 0)\n  --font PATH          CJK font override\n  --smoke-test         Verify P1 map when --map is set; otherwise verify P0 assets\n  --p2-smoke-test      Edit, undo/redo, recover, save, reopen, capture; needs --map or --new-map\n                      With --playtest-exe: also run the snapshot in VERA20k for 8s\n  --smoke-output PATH  Artifact directory (default: target/p0-smoke, p1-smoke or p2-smoke)"
+                "YR Map Editor — P2 basic editing\n\nUsage: ra2-map-editor [OPTIONS]\n  --game-dir PATH      YR game resources (or RA2_DIR; otherwise use the folder picker)\n  --profile FILE       Mod profile JSON (resources, schema, executable)\n  --map PATH_OR_NAME   Open a map file or MIX resource\n  --new-map WxH       Create map ({MIN_MAP_DIMENSION}..{MAX_MAP_DIMENSION} per dimension, W+H <= {MAX_MAP_SPAN})\n  --theater NAME      TEMPERATE, SNOW, URBAN, NEWURBAN, DESERT or LUNAR\n  --players N         Player starts for --new-map (2..30; default: 2)\n  --playtest-exe PATH  VERA20k executable for isolated -SPAWN playtests\n  --tmp NAME           TMP resource (default: clear01.tem)\n  --sub-tile INDEX     TMP sub-tile (default: 0)\n  --shp NAME           Unit-palette SHP resource (default: gi.shp)\n  --frame INDEX        SHP frame (default: 0)\n  --font PATH          CJK font override\n  --smoke-test         Verify P1 map when --map is set; otherwise verify P0 assets\n  --p2-smoke-test      Edit, undo/redo, recover, save, reopen, capture; needs --map or --new-map\n                      With --playtest-exe: also run the snapshot in VERA20k for 8s\n  --smoke-output PATH  Artifact directory (default: target/p0-smoke, p1-smoke or p2-smoke)"
             );
             println!("{}", ra2_map_io::cli::HELP);
             return Ok(None);

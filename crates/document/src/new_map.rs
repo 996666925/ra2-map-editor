@@ -4,8 +4,8 @@ use anyhow::{Context, Result, ensure};
 use vera20k_core::util::lzo;
 
 pub const MIN_MAP_DIMENSION: u16 = 20;
-/// VERA20k admits Size headers only when width + height fits its cell stride.
-pub const MAX_MAP_SPAN: u16 = vera20k_core::map::cell_index::CELL_ROW_STRIDE as u16;
+/// Maximum Size span supported by VERA20k's extended cell grid.
+pub const MAX_MAP_SPAN: u16 = vera20k_core::map::cell_index::MAX_CELL_SIDE;
 pub const MAX_MAP_DIMENSION: u16 = MAX_MAP_SPAN - MIN_MAP_DIMENSION;
 pub const MAX_PLAYERS: u8 = 30;
 pub const THEATERS: [(&str, &str); 6] = [
@@ -89,6 +89,10 @@ impl NewMapOptions {
             }
         }
         terrain.extend_from_slice(&[0; 4]);
+        let side = usize::from(
+            vera20k_core::map::cell_index::CellGrid::for_map_size(width as i32, height as i32)
+                .side(),
+        );
         let mut out = format!(
             "; Created by YR Map Editor\r\n\
              [Basic]\r\nName={}\r\nNewINIFormat=4\r\nMultiplayerOnly=yes\r\nMaxPlayers={}\r\n\
@@ -107,7 +111,7 @@ impl NewMapOptions {
         out.extend(pack_lines(&lzo::compress_chunks(&terrain, 8192), b"\r\n"));
         for (section, value) in [("OverlayPack", 255), ("OverlayDataPack", 0)] {
             out.extend_from_slice(format!("[{section}]\r\n").as_bytes());
-            out.extend(pack_lines(&lcw_encode(&vec![value; 512 * 512]), b"\r\n"));
+            out.extend(pack_lines(&lcw_encode(&vec![value; side * side]), b"\r\n"));
         }
         out.extend_from_slice(b"[Waypoints]\r\n");
         // Distribute starts around an inset rectangle in projected map space.
@@ -134,14 +138,17 @@ impl NewMapOptions {
         // Preserve the first eight starts. Add well-spaced points by maximizing
         // distance to the closest existing start in projected map space.
         // Sampling strictly inside the bounds also works for 20x20 at level 14.
+        // Waypoints still pack Y*1000+X, so extended-grid starts need X < 1000.
         let candidates: Vec<_> = (0..=32)
             .flat_map(|u| {
-                (0..=32).map(move |v| {
-                    (
-                        3 + (width - 6) * u / 32,
-                        low + 1 + (high - low - 1) * v / 32,
-                    )
-                })
+                (0..=32)
+                    .map(move |v| {
+                        (
+                            3 + (width - 6) * u / 32,
+                            low + 1 + (high - low - 1) * v / 32,
+                        )
+                    })
+                    .filter(|&(q, r)| q + r.div_ceil(2) < 1000)
             })
             .collect();
         while starts.len() < usize::from(self.players) {
@@ -184,6 +191,10 @@ mod tests {
             (81, 43, 7, 3),
             (256, 256, 14, 30),
             (255, 257, 0, 8),
+            (256, 257, 0, 30),
+            (20, 1004, 14, 30),
+            (1004, 20, 14, 30),
+            (512, 512, 14, 30),
         ] {
             let options = NewMapOptions {
                 width,
@@ -259,6 +270,30 @@ mod tests {
         }
     }
     #[test]
+    fn extended_grid_does_not_alias_unrepresentable_waypoint_coordinates() {
+        let bytes = NewMapOptions {
+            width: MAX_MAP_DIMENSION,
+            height: MIN_MAP_DIMENSION,
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap();
+        let (source, _) = SourceMap::parse("wide.map".into(), "new".into(), bytes).unwrap();
+        let mut doc = MapDocument::new(source.edit_base.unwrap());
+        let at = [1000, 10];
+        doc.check_cell(at).unwrap();
+        doc.add_record("Units", at, "Americans", "MTNK").unwrap();
+        assert!(doc.waypoint(29, at).is_err());
+        assert!(doc.add_record("Terrain", at, "Neutral", "TREE01").is_err());
+        let start = doc
+            .records()
+            .into_values()
+            .find(|r| r.section == "Waypoints")
+            .unwrap();
+        assert!(start.moved(at).is_err());
+    }
+
+    #[test]
     fn invalid_creation_options_fail_before_allocating_or_injecting_ini() {
         let options = NewMapOptions::default();
         for title in [
@@ -280,9 +315,9 @@ mod tests {
         for (width, height) in [
             (0, 80),
             (19, 80),
-            (493, 20),
-            (20, 493),
-            (256, 257),
+            (1005, 20),
+            (20, 1005),
+            (512, 513),
             (65535, 65535),
         ] {
             assert!(

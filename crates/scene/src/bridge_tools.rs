@@ -8,6 +8,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use ra2_map_document::document::{Cell, MapDocument};
 use std::collections::{BTreeMap, BTreeSet};
+use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BridgeKind {
@@ -40,7 +41,7 @@ fn cell(a: Cell, x: i32, y: i32) -> Result<Cell> {
     let x = i32::from(a[0]) + x;
     let y = i32::from(a[1]) + y;
     ensure!(
-        (0..512).contains(&x) && (0..512).contains(&y),
+        (0..i32::from(MAX_CELL_SIDE)).contains(&x) && (0..i32::from(MAX_CELL_SIDE)).contains(&y),
         "桥梁越过固定格网"
     );
     Ok([x as u16, y as u16])

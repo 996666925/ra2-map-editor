@@ -6,6 +6,7 @@ use crate::{map::MapScene, terrain_tools::value};
 use anyhow::{Context, Result, ensure};
 use ra2_map_document::document::{Cell, MapDocument, Target, TerrainValue, Value, cell_line};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 use vera20k_core::map::theater::TileKey;
 
 #[derive(Clone, Debug)]
@@ -221,7 +222,10 @@ pub(crate) fn geometry(
     let lo = (i32::from(min[0]) - 3, i32::from(min[1]) - 3);
     let hi = (i32::from(max[0]) + 3, i32::from(max[1]) + 3);
     ensure!(
-        lo.0 >= 0 && lo.1 >= 0 && hi.0 < 512 && hi.1 < 512,
+        lo.0 >= 0
+            && lo.1 >= 0
+            && hi.0 < i32::from(MAX_CELL_SIDE)
+            && hi.1 < i32::from(MAX_CELL_SIDE),
         "高台及悬崖边界超出固定格网，请留出 3 格空间"
     );
     let mut levels = HashMap::new();

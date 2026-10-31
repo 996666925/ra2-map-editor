@@ -115,12 +115,14 @@ impl Record {
         if self.section == "Terrain" {
             ensure!(
                 cell[0] < self.coordinate_radix,
-                "旧格式地形对象横坐标不能超过 127"
+                "地形对象横坐标须小于 {}",
+                self.coordinate_radix
             );
             record.key = (u32::from(cell[1]) * u32::from(self.coordinate_radix)
                 + u32::from(cell[0]))
             .to_string();
         } else if self.section == "Waypoints" {
+            ensure!(cell[0] < 1000, "航点横坐标须小于 1000");
             record.value =
                 format!("{}", u32::from(cell[1]) * 1000 + u32::from(cell[0])).into_bytes();
         } else {
@@ -171,7 +173,9 @@ impl Baseline {
             raw.lines.iter().any(|line| line.section == "Map"),
             "P2 暂不编辑 MIX 包装地图，请先提取 INI"
         );
-        let terrain = lzo::decompress_chunks(&raw.packed("IsoMapPack5")?, 512 * 512 * 11 + 4)?;
+        let grid = map.header.cell_grid();
+        let side = usize::from(grid.side());
+        let terrain = lzo::decompress_chunks(&raw.packed("IsoMapPack5")?, side * side * 11 + 4)?;
         let mut offsets = BTreeMap::new();
         let mut end = 0;
         while end + 4 <= terrain.len() {
@@ -181,9 +185,11 @@ impl Baseline {
                 break;
             }
             ensure!(end + 11 <= terrain.len(), "Pack5 记录截断");
-            let linear = i32::from(y) * 512 + i32::from(x);
-            if (0..512 * 512).contains(&linear) {
-                offsets.insert([(linear % 512) as u16, (linear / 512) as u16], end);
+            // Pack5 sign-extends X but reads Y as unsigned, like the core decoder.
+            let stride = i32::from(grid.side());
+            let linear = i32::from(y) * stride + i32::from(x);
+            if (0..stride * stride).contains(&linear) {
+                offsets.insert([(linear % stride) as u16, (linear / stride) as u16], end);
             }
             end += 11;
         }
@@ -196,7 +202,7 @@ impl Baseline {
             if packed.is_empty() {
                 Ok(vec![])
             } else {
-                Ok(lcw::decompress_chunks(&packed, 512 * 512)?)
+                Ok(lcw::decompress_chunks(&packed, side * side)?)
             }
         };
         let overlay = decode("OverlayPack").context("OverlayPack 不可编辑")?;
@@ -251,7 +257,8 @@ impl Baseline {
                 Value::Terrain(TerrainValue::read(&self.terrain[offset + 4..offset + 11]))
             }),
             Target::Overlay(at) => {
-                let index = at[1] as usize * 512 + at[0] as usize;
+                let index =
+                    at[1] as usize * usize::from(self.header.cell_grid().side()) + at[0] as usize;
                 Some(Value::Overlay(
                     *self.overlay.get(index).unwrap_or(&255),
                     *self.frames.get(index).unwrap_or(&0),
@@ -327,15 +334,18 @@ impl Snapshot {
                     };
                     let data = overlay.get_or_insert_with(|| {
                         let mut v = base.overlay.clone();
-                        v.resize(512 * 512, 255);
+                        let side = usize::from(base.header.cell_grid().side());
+                        v.resize(side * side, 255);
                         v
                     });
                     let values = frames.get_or_insert_with(|| {
                         let mut v = base.frames.clone();
-                        v.resize(512 * 512, 0);
+                        let side = usize::from(base.header.cell_grid().side());
+                        v.resize(side * side, 0);
                         v
                     });
-                    let i = at[1] as usize * 512 + at[0] as usize;
+                    let i = at[1] as usize * usize::from(base.header.cell_grid().side())
+                        + at[0] as usize;
                     data[i] = *id;
                     values[i] = *frame;
                 }
@@ -647,7 +657,8 @@ impl MapDocument {
         Ok(())
     }
     pub fn check_cell(&self, at: Cell) -> Result<()> {
-        ensure!(at[0] < 512 && at[1] < 512, "坐标超过固定网格");
+        let side = self.base.header.cell_grid().side();
+        ensure!(at[0] < side && at[1] < side, "坐标超过地图格网");
         ensure!(
             vera20k_core::map::playfield::size_diamond_contains(
                 self.base.header.width as i32,
@@ -789,7 +800,7 @@ impl MapDocument {
             };
             ensure!(
                 cell[0] < coordinate_radix,
-                "旧格式地形对象横坐标不能超过 127；请使用 NewINIFormat=4 地图"
+                "地形对象横坐标须小于 {coordinate_radix}；旧格式地图请使用 NewINIFormat=4"
             );
             let existing = records
                 .iter()
@@ -841,6 +852,7 @@ impl MapDocument {
     }
     pub fn waypoint(&mut self, index: u32, cell: Cell) -> Result<()> {
         ensure!(index <= 701, "航点索引应为 0..701");
+        ensure!(cell[0] < 1000, "航点横坐标须小于 1000");
         let key = index.to_string();
         let records = self.records();
         let existing = records

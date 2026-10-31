@@ -2,7 +2,7 @@
 use crate::{
     document::{Cell, MapDocument},
     mission::{self, Kind},
-    new_map::NewMapOptions,
+    new_map::{MAX_MAP_SPAN, NewMapOptions},
     raw_ini::{RawIni, lcw_encode, pack_lines},
 };
 use anyhow::{Context, Result, ensure};
@@ -10,6 +10,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use vera20k_core::{
     map::{
+        cell_index::CellGrid,
         map_file,
         playfield::{PlayfieldBounds, size_diamond_contains},
     },
@@ -52,7 +53,9 @@ impl Options {
         }
         .validate()?;
         ensure!(
-            self.offset.iter().all(|v| (-512..=512).contains(v)),
+            self.offset
+                .iter()
+                .all(|v| (-i32::from(MAX_MAP_SPAN)..=i32::from(MAX_MAP_SPAN)).contains(v)),
             "平移偏移超出范围"
         );
         let [l, t, w, h] = self.local;
@@ -76,8 +79,9 @@ impl Options {
     pub fn translated(&self, at: Cell, delta: [i32; 2]) -> Option<Cell> {
         let x = i32::from(at[0]) + delta[0];
         let y = i32::from(at[1]) + delta[1];
-        ((0..512).contains(&x)
-            && (0..512).contains(&y)
+        let side = i32::from(CellGrid::for_map_size(self.width.into(), self.height.into()).side());
+        ((0..side).contains(&x)
+            && (0..side).contains(&y)
             && size_diamond_contains(
                 i32::from(self.width),
                 i32::from(self.height),
@@ -201,6 +205,9 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
         Some(options.local.map(|n| n.to_string()).join(",").into_bytes()),
     )?;
     if structural {
+        let old_side = usize::from(map.header.cell_grid().side());
+        let new_side =
+            usize::from(CellGrid::for_map_size(options.width.into(), options.height.into()).side());
         // A repeated section has CRC-reader semantics that a migration cannot infer.
         let spatial_sections: BTreeSet<_> = [
             "Map",
@@ -254,7 +261,8 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
                 );
             }
         }
-        let terrain = lzo::decompress_chunks(&raw.packed("IsoMapPack5")?, 512 * 512 * 11 + 4)?;
+        let terrain =
+            lzo::decompress_chunks(&raw.packed("IsoMapPack5")?, old_side * old_side * 11 + 4)?;
         let mut values = BTreeMap::new();
         let mut cursor = 0;
         while cursor + 4 <= terrain.len() {
@@ -265,7 +273,7 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
             }
             ensure!(cursor + 11 <= terrain.len(), "地形 Pack 截断");
             ensure!(
-                (0..512).contains(&x) && y < 512,
+                (0..old_side as i16).contains(&x) && usize::from(y) < old_side,
                 "Pack 含网格别名坐标，请先消歧"
             );
             let at = [x as u16, y];
@@ -312,19 +320,19 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
             let mut bytes = if data.is_empty() {
                 vec![]
             } else {
-                lcw::decompress_chunks(&data, 512 * 512)?
+                lcw::decompress_chunks(&data, old_side * old_side)?
             };
-            bytes.resize(512 * 512, default);
+            bytes.resize(old_side * old_side, default);
             Ok(bytes)
         };
         let overlays = decode("OverlayPack", 255)?;
         let frames = decode("OverlayDataPack", 0)?;
-        let mut target = vec![255; 512 * 512];
-        let mut data = vec![0; 512 * 512];
+        let mut target = vec![255; new_side * new_side];
+        let mut data = vec![0; new_side * new_side];
         for (i, &id) in overlays.iter().enumerate().filter(|(_, id)| **id != 255) {
-            let at = [(i % 512) as u16, (i / 512) as u16];
+            let at = [(i % old_side) as u16, (i / old_side) as u16];
             if let Some(next) = options.translated(at, delta) {
-                let n = usize::from(next[1]) * 512 + usize::from(next[0]);
+                let n = usize::from(next[1]) * new_side + usize::from(next[0]);
                 target[n] = id;
                 data[n] = frames[i];
             } else {
@@ -359,8 +367,8 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
                         .all(|&(x, y)| {
                             let x = i32::from(at[0]) + i32::from(x);
                             let y = i32::from(at[1]) + i32::from(y);
-                            (0..512).contains(&x)
-                                && (0..512).contains(&y)
+                            (0..new_side as i32).contains(&x)
+                                && (0..new_side as i32).contains(&y)
                                 && size_diamond_contains(
                                     i32::from(options.width),
                                     i32::from(options.height),

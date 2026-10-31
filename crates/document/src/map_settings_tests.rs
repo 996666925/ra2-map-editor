@@ -15,6 +15,93 @@ fn document() -> MapDocument {
     let map = map_file::load_from_bytes(bytes.clone()).unwrap();
     MapDocument::new(Baseline::parse(bytes.into(), &map).unwrap())
 }
+
+#[test]
+fn resizing_across_grid_layouts_preserves_high_cells_edits_and_undo() {
+    let mut doc = document();
+    let terrain = TerrainValue {
+        tile: 0,
+        sub: 0,
+        level: 5,
+        ice: 7,
+    };
+    doc.set(Target::Terrain([24, 40]), Some(Value::Terrain(terrain)))
+        .unwrap();
+    doc.set(Target::Overlay([24, 40]), Some(Value::Overlay(102, 3)))
+        .unwrap();
+    doc.add_record("Units", [24, 40], "Americans", "MTNK")
+        .unwrap();
+    doc.waypoint(29, [24, 40]).unwrap();
+    doc.commit("fixture");
+    let original = doc.snapshot().bytes().unwrap();
+
+    let mut options = Options::from_document(&doc);
+    options.height = 600;
+    options.local = [2, 4, 36, 590];
+    options.offset = [0, 540];
+    plan(&doc, options, &Footprints::new())
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    let at = [564, 580];
+    assert_eq!(doc.terrain(at), Some(terrain));
+    assert_eq!(doc.overlay(at), (102, 3));
+    assert_eq!(doc.overlay([52, 581]), (255, 0));
+    assert!(
+        doc.records()
+            .values()
+            .any(|r| r.section == "Units" && r.cell() == Some(at))
+    );
+
+    // Copy/paste and ordinary saves must use the same extended layout as resizing.
+    let clip = crate::region::Clipboard::capture(
+        &doc,
+        &BTreeSet::from([at]),
+        crate::region::RegionLayers::default(),
+    )
+    .unwrap();
+    let paste = clip.plan(&doc, [565, 581]).unwrap();
+    paste.apply(&mut doc, true).unwrap();
+    doc.commit("large-map paste");
+    let bytes = doc.snapshot().bytes().unwrap();
+    let map = map_file::load_from_bytes(bytes.clone()).unwrap();
+    assert!(
+        map.cells
+            .iter()
+            .any(|c| [c.rx, c.ry] == [565, 581] && c.z == 5)
+    );
+    assert!(
+        map.overlays
+            .iter()
+            .any(|c| [c.rx, c.ry] == [565, 581] && c.overlay_id == 102 && c.frame == 3)
+    );
+    let reopened = MapDocument::new(Baseline::parse(bytes.into(), &map).unwrap());
+    assert_eq!(reopened.terrain([565, 581]), Some(terrain));
+    assert_eq!(reopened.overlay([565, 581]), (102, 3));
+    assert_eq!(map.waypoints[&29].rx, at[0]);
+    assert_eq!(map.waypoints[&29].ry, at[1]);
+    assert!(doc.undo());
+    let expanded = doc.snapshot().bytes().unwrap();
+
+    let mut options = Options::from_document(&doc);
+    options.height = 40;
+    options.local = [2, 4, 36, 30];
+    options.offset = [0, -540];
+    plan(&doc, options, &Footprints::new())
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    assert_eq!(doc.terrain([24, 40]), Some(terrain));
+    assert_eq!(doc.overlay([24, 40]), (102, 3));
+    assert_eq!(doc.snapshot().bytes().unwrap(), original);
+    assert!(doc.undo());
+    assert_eq!(doc.snapshot().bytes().unwrap(), expanded);
+    assert!(doc.undo());
+    assert_eq!(doc.snapshot().bytes().unwrap(), original);
+    assert!(doc.redo());
+    assert_eq!(doc.snapshot().bytes().unwrap(), expanded);
+}
+
 #[test]
 fn expansion_migrates_objects_packs_tags_nodes_tubes_and_script_cells_as_one_history_step() {
     let mut doc = document();

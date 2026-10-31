@@ -834,7 +834,7 @@ impl MapView {
                             crate::form_edit::number(ui, egui::DragValue::new(&mut options.players).range(2..=MAX_PLAYERS).suffix(" 个"), "玩家起点");
                             ui.end_row();
                         });
-                        ui.small(format!("宽＋高 ≤ {MAX_MAP_SPAN}，例如 256 × 256 或 {MAX_MAP_DIMENSION} × {MIN_MAP_DIMENSION}。"));
+                        ui.small(format!("宽＋高 ≤ {MAX_MAP_SPAN}，例如 {} × {} 或 {MAX_MAP_DIMENSION} × {MIN_MAP_DIMENSION}。", MAX_MAP_SPAN / 2, MAX_MAP_SPAN / 2));
                         theme::field(ui, "可玩区域", format!("{} × {} 格", options.width.saturating_sub(4), options.height.saturating_sub(10)));
                         ui.small("尺寸包含边界；初始不放置建筑、单位或矿石，起点可继续编辑。");
                         let result = options.validate();

@@ -13,6 +13,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
@@ -950,7 +951,9 @@ impl Editor {
                                 i32::from(center[0]) + i32::from(dx) - i32::from(stroke.radius / 2);
                             let y =
                                 i32::from(center[1]) + i32::from(dy) - i32::from(stroke.radius / 2);
-                            if !(0..512).contains(&x) || !(0..512).contains(&y) {
+                            if !(0..i32::from(MAX_CELL_SIDE)).contains(&x)
+                                || !(0..i32::from(MAX_CELL_SIDE)).contains(&y)
+                            {
                                 continue;
                             }
                             let cell = [x as u16, y as u16];
@@ -1217,7 +1220,9 @@ impl Editor {
                 .filter_map(|(dx, dy)| {
                     let x = i32::from(at[0]) + i32::from(dx) - i32::from(radius / 2);
                     let y = i32::from(at[1]) + i32::from(dy) - i32::from(radius / 2);
-                    if !(0..512).contains(&x) || !(0..512).contains(&y) {
+                    if !(0..i32::from(MAX_CELL_SIDE)).contains(&x)
+                        || !(0..i32::from(MAX_CELL_SIDE)).contains(&y)
+                    {
                         return None;
                     }
                     let cell = [x as u16, y as u16];

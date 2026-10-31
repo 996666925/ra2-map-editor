@@ -5,6 +5,7 @@ use anyhow::{Context, Result, ensure};
 use ra2_map_assets::catalog::{TerrainBrush, TerrainTemplate};
 use ra2_map_document::document::{Cell, MapDocument, Target, TerrainValue, Value};
 use std::collections::{BTreeSet, HashMap, VecDeque};
+use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 use vera20k_core::map::{
     lat::{LatConfig, SlopeFixupConfig, apply_load_recalc_sweeps},
     map_file::MapCell,
@@ -199,7 +200,8 @@ pub fn footprint(scene: &MapScene, brush: &TerrainBrush, at: Cell) -> Result<Vec
             let x = anchor[0] + sub as i32 % i32::from(template.width);
             let y = anchor[1] + sub as i32 / i32::from(template.width);
             ensure!(
-                (0..512).contains(&x) && (0..512).contains(&y),
+                (0..i32::from(MAX_CELL_SIDE)).contains(&x)
+                    && (0..i32::from(MAX_CELL_SIDE)).contains(&y),
                 "完整模板越过地图边界"
             );
             Ok(([x as u16, y as u16], sub as u8, metadata.height))
@@ -391,7 +393,9 @@ pub fn neighbors(at: Cell) -> impl Iterator<Item = Cell> {
         .into_iter()
         .filter_map(move |(dx, dy)| {
             let (x, y) = (i32::from(at[0]) + dx, i32::from(at[1]) + dy);
-            ((0..512).contains(&x) && (0..512).contains(&y)).then_some([x as u16, y as u16])
+            ((0..i32::from(MAX_CELL_SIDE)).contains(&x)
+                && (0..i32::from(MAX_CELL_SIDE)).contains(&y))
+            .then_some([x as u16, y as u16])
         })
 }
 
@@ -679,8 +683,8 @@ pub fn connect_walls(
         let mut mask = 0;
         for (bit, (dx, dy)) in [(0, -1), (1, 0), (0, 1), (-1, 0)].into_iter().enumerate() {
             let (x, y) = (i32::from(at[0]) + dx, i32::from(at[1]) + dy);
-            if (0..512).contains(&x)
-                && (0..512).contains(&y)
+            if (0..i32::from(MAX_CELL_SIDE)).contains(&x)
+                && (0..i32::from(MAX_CELL_SIDE)).contains(&y)
                 && doc.overlay([x as u16, y as u16]).0 == id
             {
                 mask |= 1 << bit;

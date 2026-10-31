@@ -3,6 +3,7 @@ use crate::map::MapScene;
 use anyhow::{Context, Result, ensure};
 use ra2_map_document::document::{Cell, MapDocument, Record, TerrainValue};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
 pub fn offsets(scene: &MapScene, section: &str, type_id: &str) -> Vec<(i16, i16)> {
     if section != "Structures" {
@@ -32,7 +33,8 @@ pub fn footprint(scene: &MapScene, r: &Record) -> Result<Vec<Cell>> {
             let x = i32::from(at[0]) + i32::from(dx);
             let y = i32::from(at[1]) + i32::from(dy);
             ensure!(
-                (0..512).contains(&x) && (0..512).contains(&y),
+                (0..i32::from(MAX_CELL_SIDE)).contains(&x)
+                    && (0..i32::from(MAX_CELL_SIDE)).contains(&y),
                 "对象占地超出固定网格"
             );
             Ok([x as u16, y as u16])

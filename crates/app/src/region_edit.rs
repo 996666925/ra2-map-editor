@@ -2,6 +2,7 @@
 use super::*;
 use ra2_map_document::region::{self, Clipboard, RegionLayers};
 use ra2_map_scene::placement;
+use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
 #[derive(Clone, Copy, Default, PartialEq)]
 enum SelectionOp {
@@ -610,7 +611,9 @@ impl Editor {
                                         i32::from(c.at[axis]) + i32::from(at[axis])
                                             - i32::from(clip.origin[axis])
                                     });
-                                    ((0..512).contains(&x) && (0..512).contains(&y)).then_some((
+                                    ((0..i32::from(MAX_CELL_SIDE)).contains(&x)
+                                        && (0..i32::from(MAX_CELL_SIDE)).contains(&y))
+                                    .then_some((
                                         [x as u16, y as u16],
                                         c.terrain.map_or(0, |v| v.level),
                                     ))
@@ -632,7 +635,9 @@ impl Editor {
                             .filter_map(|(dx, dy)| {
                                 let x = i32::from(at[0]) + i32::from(dx);
                                 let y = i32::from(at[1]) + i32::from(dy);
-                                ((0..512).contains(&x) && (0..512).contains(&y)).then_some((
+                                ((0..i32::from(MAX_CELL_SIDE)).contains(&x)
+                                    && (0..i32::from(MAX_CELL_SIDE)).contains(&y))
+                                .then_some((
                                     [x as u16, y as u16],
                                     terrain_tools::value(doc, scene, at).level,
                                 ))
@@ -775,13 +780,13 @@ impl Editor {
             .context("剪贴板不是地图区域，请先复制区域")?;
         let clip: Clipboard = serde_json::from_str(json).context("区域剪贴板格式无效")?;
         ensure!(
-            !clip.cells.is_empty() && clip.cells.len() <= 512 * 512,
+            !clip.cells.is_empty() && clip.cells.len() <= usize::from(MAX_CELL_SIDE).pow(2),
             "剪贴板区域大小无效"
         );
         ensure!(
-            clip.cells
-                .iter()
-                .all(|c| c.at[0] < 512 && c.at[1] < 512 && c.terrain.is_none_or(|v| v.level <= 14)),
+            clip.cells.iter().all(|c| c.at[0] < MAX_CELL_SIDE
+                && c.at[1] < MAX_CELL_SIDE
+                && c.terrain.is_none_or(|v| v.level <= 14)),
             "剪贴板坐标或高度无效"
         );
         ensure!(

@@ -27,6 +27,7 @@ pub fn map_player_starts(map: &MapFile) -> Vec<u8> {
     ) else {
         return Vec::new();
     };
+    let side = map.header.cell_grid().side();
     player_start_indices(
         map.ini
             .section_or_empty("Basic")
@@ -35,8 +36,8 @@ pub fn map_player_starts(map: &MapFile) -> Vec<u8> {
         map.waypoints
             .values()
             .filter(|w| {
-                w.rx < 512
-                    && w.ry < 512
+                w.rx < side
+                    && w.ry < side
                     && [w.rx, w.ry] != [0, 0]
                     && vera20k_core::map::playfield::size_diamond_contains(
                         width,
@@ -240,6 +241,31 @@ mod tests {
         ] {
             assert!(options.spawn_ini(&map).is_err());
         }
+    }
+
+    #[test]
+    fn large_maps_keep_player_starts_beyond_the_retail_grid() {
+        let bytes = ra2_map_document::new_map::NewMapOptions {
+            width: 20,
+            height: 600,
+            players: 30,
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap();
+        let mut map = vera20k_core::map::map_file::load_from_bytes(bytes).unwrap();
+        assert!(map.waypoints.values().any(|w| w.rx >= 512 || w.ry >= 512));
+        assert_eq!(map_player_starts(&map), (0..30).collect::<Vec<_>>());
+        assert!(
+            PlayOptions {
+                ai: 29,
+                ..Default::default()
+            }
+            .spawn_ini(&map)
+            .is_ok()
+        );
+        map.waypoints.get_mut(&29).unwrap().rx = 1024;
+        assert_eq!(map_player_starts(&map), (0..29).collect::<Vec<_>>());
     }
 
     #[test]

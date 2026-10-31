@@ -9,10 +9,12 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use ra2_map_document::document::{Cell, MapDocument, TerrainValue};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
 pub(crate) fn offset(at: Cell, dx: i32, dy: i32) -> Option<Cell> {
     let (x, y) = (i32::from(at[0]) + dx, i32::from(at[1]) + dy);
-    ((0..512).contains(&x) && (0..512).contains(&y)).then_some([x as u16, y as u16])
+    ((0..i32::from(MAX_CELL_SIDE)).contains(&x) && (0..i32::from(MAX_CELL_SIDE)).contains(&y))
+        .then_some([x as u16, y as u16])
 }
 pub(crate) fn id(scene: &MapScene, v: TerrainValue) -> Option<u16> {
     scene.palette.raw_ids.get(&v.tile).copied()

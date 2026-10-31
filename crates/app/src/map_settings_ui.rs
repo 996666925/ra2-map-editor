@@ -5,6 +5,7 @@ use ra2_map_document::{
     document::{MapDocument, Snapshot},
     lighting::{COMPONENTS, Draft, Profile},
     map_settings::{self, Footprints, Options, Plan},
+    new_map::{MAX_MAP_DIMENSION, MAX_MAP_SPAN, MIN_MAP_DIMENSION},
 };
 use std::time::{Duration, Instant};
 
@@ -187,12 +188,12 @@ impl MapSettingsUi {
             egui::ScrollArea::vertical().max_height((ui.available_height()-100.).max(140.)).show(ui,|ui|{
                 if self.tab==0 {
                     let options=self.options.as_mut().unwrap();
-                    ui.label(format!("当前尺寸：{} × {}；宽＋高 ≤ 512。平移以投影平面左/上为单位。",doc.base.header.width,doc.base.header.height));
+                    ui.label(format!("当前尺寸：{} × {}；宽＋高 ≤ {MAX_MAP_SPAN}。平移以投影平面左/上为单位。",doc.base.header.width,doc.base.header.height));
                     egui::Grid::new("map-dimensions").num_columns(2).show(ui,|ui|{
-                        for (name,value) in [("新宽度",&mut options.width),("新高度",&mut options.height)]{ui.label(name);changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(20..=492),name).changed();ui.end_row();}
-                        ui.label("原图放置偏移（左、上）");ui.horizontal(|ui|{for (value,name) in options.offset.iter_mut().zip(["左侧偏移","顶部偏移"]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(-512..=512),name).changed();}});ui.end_row();
+                        for (name,value) in [("新宽度",&mut options.width),("新高度",&mut options.height)]{ui.label(name);changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION),name).changed();ui.end_row();}
+                        ui.label("原图放置偏移（左、上）");ui.horizontal(|ui|{for (value,name) in options.offset.iter_mut().zip(["左侧偏移","顶部偏移"]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(-i32::from(MAX_MAP_SPAN)..=i32::from(MAX_MAP_SPAN)),name).changed();}});ui.end_row();
                         ui.label("扩展区域清地高度");changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut options.fill_level).range(0..=14),"扩展区域清地高度").changed();ui.end_row();
-                        ui.label("可玩区域（左、上、宽、高）").on_hover_text("LocalSize");ui.horizontal_wrapped(|ui|{for (value,name) in options.local.iter_mut().zip(["可玩区域左侧","可玩区域顶部","可玩区域宽度","可玩区域高度"]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(0..=512),name).changed();}});ui.end_row();
+                        ui.label("可玩区域（左、上、宽、高）").on_hover_text("LocalSize");ui.horizontal_wrapped(|ui|{for (value,name) in options.local.iter_mut().zip(["可玩区域左侧","可玩区域顶部","可玩区域宽度","可玩区域高度"]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(0..=MAX_MAP_DIMENSION),name).changed();}});ui.end_row();
                     });
                     ui.horizontal_wrapped(|ui|{
                         if ui.button("可玩区域铺满有效边距").clicked(){options.local=[2,4,i32::from(options.width)-4,i32::from(options.height)-10];changed=true;}

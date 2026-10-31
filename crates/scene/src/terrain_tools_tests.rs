@@ -85,6 +85,39 @@ fn put(doc: &mut MapDocument, scene: &MapScene, at: Cell, tile: i32, level: u8) 
 }
 
 #[test]
+fn large_map_templates_and_neighbor_tools_cross_the_retail_grid_boundary() {
+    let (_, mut scene) = setup();
+    let bytes = String::from_utf8(NewMapOptions::default().bytes().unwrap())
+        .unwrap()
+        .replace("Size=0,0,80,80", "Size=0,0,500,500")
+        .into_bytes();
+    let (source, _) = SourceMap::parse("large.map".into(), "fixture".into(), bytes).unwrap();
+    let mut doc = MapDocument::new(source.edit_base.unwrap());
+    let b = brush(&mut scene, 2, 2, &[Some(0), Some(1), Some(2), Some(3)]);
+    stamp_at_height(&mut doc, &scene, &b, [511, 600], true, Some(3)).unwrap();
+    assert_eq!(doc.terrain([512, 601]).unwrap().level, 6);
+    assert!(neighbors([511, 600]).any(|c| c == [512, 600]));
+    assert_eq!(
+        crate::shore_tools::offset([511, 600], 1, 0),
+        Some([512, 600])
+    );
+    doc.commit("extended template");
+    let (_, map) = SourceMap::parse(
+        "saved.map".into(),
+        "fixture".into(),
+        doc.snapshot().bytes().unwrap(),
+    )
+    .unwrap();
+    assert!(
+        map.cells
+            .iter()
+            .any(|c| [c.rx, c.ry] == [512, 601] && c.z == 6)
+    );
+    assert!(doc.undo());
+    assert!(doc.terrain([512, 601]).is_none());
+}
+
+#[test]
 fn cliff_base_height_preflight_matches_stamp_and_rejects_overflow_without_partial_writes() {
     let (mut doc, mut scene) = setup();
     let mut b = brush(&mut scene, 2, 2, &[Some(0), Some(4), None, Some(2)]);

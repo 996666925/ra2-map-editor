@@ -2,6 +2,7 @@
 use crate::document::{Cell, MapDocument, Record, Target, TerrainValue, Value};
 use anyhow::{Context, Result, ensure};
 use std::collections::{BTreeMap, BTreeSet};
+use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RegionLayers {
@@ -152,7 +153,8 @@ impl Clipboard {
                 i32::from(at[axis]) + i32::from(anchor[axis]) - i32::from(self.origin[axis])
             });
             ensure!(
-                (0..512).contains(&x) && (0..512).contains(&y),
+                (0..i32::from(MAX_CELL_SIDE)).contains(&x)
+                    && (0..i32::from(MAX_CELL_SIDE)).contains(&y),
                 "整个区域超出地图边界"
             );
             let at = [x as u16, y as u16];

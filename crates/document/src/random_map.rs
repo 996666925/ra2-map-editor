@@ -161,11 +161,15 @@ impl RandomMapOptions {
         terrain.extend_from_slice(&[0; 4]);
         out.extend_from_slice(b"[IsoMapPack5]\r\n");
         out.extend(pack_lines(&lzo::compress_chunks(&terrain, 8192), b"\r\n"));
-        let mut overlay = vec![255; 512 * 512];
+        let side = usize::from(map.header.cell_grid().side());
+        let mut overlay = vec![255; side * side];
         let mut density = vec![0; overlay.len()];
         for entry in &map.overlays {
-            ensure!(entry.rx < 512 && entry.ry < 512, "生成的覆盖物越界");
-            let at = usize::from(entry.ry) * 512 + usize::from(entry.rx);
+            ensure!(
+                usize::from(entry.rx) < side && usize::from(entry.ry) < side,
+                "生成的覆盖物越界"
+            );
+            let at = usize::from(entry.ry) * side + usize::from(entry.rx);
             overlay[at] = entry.overlay_id;
             density[at] = entry.frame;
         }

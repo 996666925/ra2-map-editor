@@ -7,6 +7,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use ra2_map_document::document::{Cell, MapDocument, TerrainValue};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
 fn tile(scene: &MapScene, raw: i32) -> Option<u16> {
     scene.palette.raw_ids.get(&raw).copied()
@@ -14,7 +15,8 @@ fn tile(scene: &MapScene, raw: i32) -> Option<u16> {
 fn offset(at: Cell, dx: i32, dy: i32) -> Option<Cell> {
     let x = i32::from(at[0]) + dx;
     let y = i32::from(at[1]) + dy;
-    ((0..512).contains(&x) && (0..512).contains(&y)).then_some([x as u16, y as u16])
+    ((0..i32::from(MAX_CELL_SIDE)).contains(&x) && (0..i32::from(MAX_CELL_SIDE)).contains(&y))
+        .then_some([x as u16, y as u16])
 }
 
 pub(crate) fn clear(scene: &MapScene, old: TerrainValue, level: u8) -> Result<TerrainValue> {
