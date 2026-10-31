@@ -14,7 +14,7 @@ pub(super) struct UiSmoke {
 }
 
 #[derive(Clone, Copy)]
-enum Panel {
+pub(super) enum Panel {
     Library(u8),
     Terrain(TerrainMode),
     Tool(Tool),
@@ -28,10 +28,11 @@ enum Panel {
     Playtest,
     Mission(Kind),
     Campaign,
+    BaseNodes,
     MapProperties(u8),
 }
 
-fn panels() -> Vec<(String, Panel)> {
+pub(super) fn panels() -> Vec<(String, Panel)> {
     let mut panels = vec![];
     for (tab, name) in ["terrain", "objects", "waypoints", "overlays", "animations"]
         .into_iter()
@@ -72,6 +73,8 @@ fn panels() -> Vec<(String, Panel)> {
         ("campaign-package".into(), Panel::Campaign),
         ("map-properties".into(), Panel::MapProperties(0)),
         ("map-lighting".into(), Panel::MapProperties(1)),
+        ("map-crates".into(), Panel::MapProperties(2)),
+        ("base-nodes".into(), Panel::BaseNodes),
     ]);
     for kind in Kind::ALL {
         panels.push((
@@ -136,6 +139,7 @@ impl MapView {
                 self.workbench.help = false;
                 self.workbench.playtest = false;
                 self.workbench.mission.open = false;
+                self.workbench.mission.base.stop();
                 self.workbench.mission.campaign.open = false;
                 self.workbench.map_settings.open = false;
                 self.pending = None;
@@ -194,6 +198,16 @@ impl MapView {
                         .mission
                         .campaign
                         .smoke_open(&output.join("ai-authoring.map")),
+                    Panel::BaseNodes => {
+                        let house = mission::ids(self.editor.doc.as_ref().unwrap(), Kind::House)
+                            .first()
+                            .cloned()
+                            .unwrap_or_default();
+                        self.workbench
+                            .mission
+                            .navigate(&self.editor, Kind::House, house.clone());
+                        self.workbench.mission.base.start(house);
+                    }
                     Panel::Mission(kind) => {
                         let id = mission::ids(self.editor.doc.as_ref().unwrap(), kind)
                             .first()
@@ -225,6 +239,7 @@ impl MapView {
                     Panel::Playtest => Some("playtest-settings"),
                     Panel::Mission(_) => Some("mission-authoring"),
                     Panel::Campaign => Some("campaign-project"),
+                    Panel::BaseNodes => Some("base-nodes-canvas"),
                     Panel::MapProperties(_) => Some("map-properties"),
                     _ => None,
                 };

@@ -504,7 +504,7 @@ impl eframe::App for EditorApp {
                             self.load(false);
                         }
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    theme::right_to_left(ui, |ui| {
                         ui.label(
                             egui::RichText::new("尤里的复仇  /  VERA20k")
                                 .size(11.)

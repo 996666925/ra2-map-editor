@@ -737,6 +737,12 @@ impl MapView {
         directory: &mut String,
         frame: &eframe::Frame,
     ) {
+        if self.workbench.playtest {
+            self.editor.refresh_play_displays(frame);
+        }
+        self.settings_dialogs(ctx, directory);
+    }
+    pub(super) fn settings_dialogs(&mut self, ctx: &egui::Context, directory: &mut String) {
         self.random_map_window(ctx, directory);
         if let Some(scene) = &self.scene {
             self.editor.finish_property_edit(ctx, scene);
@@ -818,7 +824,7 @@ impl MapView {
         if self.workbench.new_map {
             let mut create = false;
             let mut cancel = false;
-            let modal = egui::Modal::new(egui::Id::unique("new-map")).show(ctx, |ui| {
+            let modal = theme::modal(ctx, "new-map", |ui| {
                 ui.set_width(440.0_f32.min(ctx.content_rect().width() - 64.));
                 ui.set_max_height((ctx.content_rect().height() - 64.).max(120.));
                 ui.heading("新建地图");
@@ -868,7 +874,7 @@ impl MapView {
                         if directory.trim().is_empty() { ui.colored_label(theme::ACCENT, "请先选择游戏资源目录。"); }
                     });
                 ui.separator();
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                theme::right_to_left(ui, |ui| {
                     create = ui.add_enabled(valid, theme::primary("创建地图")).clicked();
                     cancel = ui.button("取消").clicked();
                 });
@@ -977,7 +983,6 @@ impl MapView {
             self.workbench.settings = open;
         }
         if self.workbench.playtest {
-            self.editor.refresh_play_displays(frame);
             theme::window(
                 ctx,
                 "VERA20k 试玩设置",

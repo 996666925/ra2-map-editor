@@ -10,6 +10,9 @@ use std::{
     sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
+#[cfg(test)]
+#[path = "layout_tests.rs"]
+mod layout_tests;
 #[path = "p2_smoke.rs"]
 mod p2_smoke;
 #[path = "p3_smoke.rs"]
@@ -512,7 +515,7 @@ impl MapView {
                         )
                         .truncate(),
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    crate::ui_theme::right_to_left(ui, |ui| {
                         if ui.button("适应地图").clicked() {
                             self.fit = true;
                         }
@@ -807,7 +810,7 @@ impl MapView {
             return;
         }
         let mut choice = 0;
-        let modal = egui::Modal::new(egui::Id::unique("unsaved-map")).show(ctx, |ui| {
+        let modal = crate::ui_theme::modal(ctx, "unsaved-map", |ui| {
             ui.set_width(420.0_f32.min(ctx.content_rect().width() - 64.));
             ui.heading("地图有未保存的修改");
             ui.label("保存当前地图后继续，或丢弃本次修改。");

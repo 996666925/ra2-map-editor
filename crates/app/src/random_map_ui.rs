@@ -47,7 +47,7 @@ impl MapView {
         }
         let mut create = false;
         let mut cancel = false;
-        let modal = egui::Modal::new(egui::Id::unique("random-map")).show(ctx, |ui| {
+        let modal = theme::modal(ctx, "random-map", |ui| {
             ui.set_width(490.0_f32.min((ctx.content_rect().width() - 64.).max(240.)));
             // Area remembers its previous size; bound it again after a native resize.
             ui.set_max_height((ctx.content_rect().height() - 64.).max(120.));
@@ -126,7 +126,7 @@ impl MapView {
                     if directory.trim().is_empty() { ui.colored_label(theme::ACCENT, "请先选择游戏资源目录。"); }
                 });
             ui.separator();
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            theme::right_to_left(ui, |ui| {
                 create = ui.add_enabled(valid, theme::primary("生成地图")).clicked();
                 cancel = ui.button("取消").clicked();
             });

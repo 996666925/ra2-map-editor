@@ -119,10 +119,38 @@ pub fn window<'a>(ctx: &egui::Context, title: &str, id: &str, size: Vec2) -> egu
         .constrain_to(bounds)
 }
 
+/// An anchored Area positions itself using the previous frame's size. Repaint
+/// when a form changes size so it settles at the center after a viewport resize.
+pub fn modal<R>(
+    ctx: &egui::Context,
+    id: &str,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::ModalResponse<R> {
+    let id = egui::Id::unique(id);
+    let previous_size = ctx.memory(|m| m.area_rect(id)).map(|r| r.size());
+    let response = egui::Modal::new(id).show(ctx, content);
+    if previous_size != Some(response.response.rect.size()) {
+        ctx.request_repaint();
+    }
+    response
+}
+
 pub fn primary(text: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(text).color(BACKGROUND).strong())
         .with_class("editor-primary")
         .min_size(egui::vec2(90., 30.))
+}
+
+/// Right-align a single row without consuming the parent's remaining height.
+pub fn right_to_left<R>(
+    ui: &mut egui::Ui,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+        egui::Layout::right_to_left(egui::Align::Center),
+        add_contents,
+    )
 }
 
 pub fn path_entry(ui: &mut egui::Ui, value: &mut String, hint: &str, browse: &str) -> bool {
@@ -169,7 +197,7 @@ pub fn section(ui: &mut egui::Ui, title: &str, detail: &str) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(title).strong().size(13.));
         if !detail.is_empty() {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            right_to_left(ui, |ui| {
                 ui.label(RichText::new(detail).size(10.).color(MUTED));
             });
         }
@@ -180,7 +208,7 @@ pub fn field(ui: &mut egui::Ui, name: &str, value: impl ToString) {
     let value = value.to_string();
     ui.horizontal(|ui| {
         ui.label(RichText::new(name).color(MUTED).size(12.));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        right_to_left(ui, |ui| {
             ui.add(egui::Label::new(RichText::new(&value).size(12.)).truncate())
                 .on_hover_text(&value);
         });
