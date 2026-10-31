@@ -711,7 +711,12 @@ impl MapView {
             };
         }
     }
-    pub fn settings_windows(&mut self, ctx: &egui::Context, directory: &mut String) {
+    pub fn settings_windows(
+        &mut self,
+        ctx: &egui::Context,
+        directory: &mut String,
+        frame: &eframe::Frame,
+    ) {
         self.random_map_window(ctx, directory);
         if let Some(scene) = &self.scene {
             self.editor.finish_property_edit(ctx, scene);
@@ -952,6 +957,7 @@ impl MapView {
             self.workbench.settings = open;
         }
         if self.workbench.playtest {
+            self.editor.refresh_play_displays(frame);
             theme::window(
                 ctx,
                 "VERA20k 试玩设置",

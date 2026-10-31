@@ -50,6 +50,11 @@ pub fn map_player_starts(map: &MapFile) -> Vec<u8> {
 }
 #[derive(Clone, Debug)]
 pub struct PlayOptions {
+    /// Window-system monitor name; None lets VERA follow the system.
+    pub display: Option<String>,
+    pub full_screen: bool,
+    /// Existing VERA profile scale: 0 for Auto, otherwise 100 and up in steps of 50.
+    pub zoom: u32,
     pub mission: bool,
     pub mission_difficulty: u8,
     pub side: u8,
@@ -70,6 +75,9 @@ pub struct PlayOptions {
 impl Default for PlayOptions {
     fn default() -> Self {
         Self {
+            display: None,
+            full_screen: false,
+            zoom: 100,
             mission: false,
             mission_difficulty: 1,
             side: 0,
@@ -90,6 +98,28 @@ impl Default for PlayOptions {
     }
 }
 impl PlayOptions {
+    pub(crate) fn write_settings(&self, directory: &std::path::Path) -> Result<()> {
+        ensure!(
+            self.zoom == 0 || ((100..=10_000).contains(&self.zoom) && self.zoom.is_multiple_of(50)),
+            "试玩游戏缩放档位无效"
+        );
+        if let Some(display) = &self.display {
+            ensure!(
+                !display.is_empty() && !display.contains(['\r', '\n', '\0']),
+                "试玩显示器设备名无效"
+            );
+        }
+        let settings = format!(
+            "[VERA]\r\nFullScreen={}\r\nDisplay={}\r\nZoom={}\r\n",
+            if self.full_screen { "Yes" } else { "No" },
+            self.display.as_deref().unwrap_or_default(),
+            self.zoom,
+        );
+        std::fs::create_dir_all(directory)?;
+        std::fs::write(directory.join("VERA.INI"), settings)?;
+        Ok(())
+    }
+
     pub fn spawn_ini(&self, map: &MapFile) -> Result<String> {
         if self.mission {
             ensure!(

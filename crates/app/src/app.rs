@@ -454,10 +454,10 @@ impl eframe::App for EditorApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         use crate::ui_theme as theme;
         self.map
-            .settings_windows(ui.ctx(), &mut self.directory_text);
+            .settings_windows(ui.ctx(), &mut self.directory_text, frame);
         self.map.dialogs(ui.ctx());
         egui::Panel::top("workbench-brand")
             .frame(

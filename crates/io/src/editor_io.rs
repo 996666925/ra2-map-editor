@@ -459,6 +459,7 @@ pub fn launch(
         &folder.join("settings").to_string_lossy(),
     );
     fs::write(folder.join("config.toml"), config)?;
+    options.write_settings(&folder.join("settings"))?;
     fs::write(folder.join("spawnmap.ini"), bytes)?;
     fs::write(folder.join("spawn.ini"), spawn)?;
     let revision = ra2_map_assets::profile::Revision::scan(&directory)?;

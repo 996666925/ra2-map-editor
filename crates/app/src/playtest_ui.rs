@@ -3,6 +3,22 @@ use super::*;
 use crate::ui_theme as theme;
 use ra2_map_io::playtest::{PLAYER_COLOR_COUNT, PlayOptions, player_start_indices};
 
+pub(super) struct PlayDisplay {
+    id: String,
+    label: String,
+    size: [u32; 2],
+    primary: bool,
+}
+
+fn resolution_surface(options: &PlayOptions, displays: &[PlayDisplay]) -> [u32; 2] {
+    let display = displays
+        .iter()
+        .find(|display| options.display.as_ref() == Some(&display.id))
+        .or_else(|| displays.iter().find(|display| display.primary))
+        .or_else(|| displays.first());
+    display.map_or([800, 600], |display| display.size)
+}
+
 const COUNTRIES: [&str; 10] = [
     "美国",
     "韩国",
@@ -66,7 +82,113 @@ fn speed(ui: &mut egui::Ui, options: &mut PlayOptions) {
     ui.small("向右加快；最快档不限制游戏帧率。");
 }
 
+fn display(ui: &mut egui::Ui, options: &mut PlayOptions, displays: &[PlayDisplay]) {
+    if displays.len() <= 1 {
+        return;
+    }
+    ui.horizontal(|ui| {
+        let label = ui.label("显示器");
+        egui::ComboBox::from_id_salt("playtest-display")
+            .selected_text(
+                displays
+                    .iter()
+                    .find(|display| options.display.as_ref() == Some(&display.id))
+                    .map_or("自动（跟随系统）", |display| display.label.as_str()),
+            )
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut options.display, None, "自动（跟随系统）");
+                for display in displays {
+                    ui.selectable_value(
+                        &mut options.display,
+                        Some(display.id.clone()),
+                        &display.label,
+                    );
+                }
+            })
+            .response
+            .labelled_by(label.id);
+    });
+}
+
+fn resolution(ui: &mut egui::Ui, options: &mut PlayOptions, surface: [u32; 2]) {
+    let [width, height] = surface;
+    // Match the existing game's Zoom choices and its minimum 640x480 view.
+    let largest = ((width * 100 / 640).min(height * 100 / 480) / 50 * 50).max(100);
+    if options.zoom != 0 {
+        options.zoom = options.zoom.clamp(100, largest);
+    }
+    let label_for = |zoom: u32| {
+        let percent = if zoom == 0 {
+            (width / 800).min(height / 600).max(1) * 100
+        } else {
+            zoom.clamp(100, largest)
+        };
+        let (width, height) = (width * 100 / percent, height * 100 / percent);
+        if zoom == 0 {
+            format!("自动（{width} × {height}）")
+        } else {
+            format!("{width} × {height}")
+        }
+    };
+    ui.horizontal(|ui| {
+        let label = ui.label("游戏内分辨率");
+        egui::ComboBox::from_id_salt("playtest-resolution")
+            .selected_text(label_for(options.zoom))
+            .show_ui(ui, |ui| {
+                for zoom in std::iter::once(0).chain((100..=largest).step_by(50)) {
+                    ui.selectable_value(&mut options.zoom, zoom, label_for(zoom));
+                }
+            })
+            .response
+            .labelled_by(label.id)
+            .on_hover_text(
+                "按所选显示器的实际像素列出档位。游戏会按实际绘制区域应用缩放，调整游戏窗口后渲染尺寸可能变化。",
+            );
+    });
+    ui.small("分辨率越高，画面越小，可见地图范围越大。");
+    ui.small(format!("按显示器 {width} × {height} 列出档位。"));
+}
+
 impl Editor {
+    pub(crate) fn refresh_play_displays(&mut self, frame: &eframe::Frame) {
+        self.play_displays = frame
+            .winit_window()
+            .map(|window| {
+                let primary = window.primary_monitor();
+                window
+                    .available_monitors()
+                    .filter_map(|monitor| {
+                        let id = monitor.name()?;
+                        let size = monitor.size();
+                        let suffix = if primary.as_ref() == Some(&monitor) {
+                            "（主显示器）"
+                        } else {
+                            ""
+                        };
+                        Some(PlayDisplay {
+                            id,
+                            label: format!("{} × {}{suffix}", size.width, size.height),
+                            size: [size.width, size.height],
+                            primary: primary.as_ref() == Some(&monitor),
+                        })
+                    })
+                    .enumerate()
+                    .map(|(index, mut display)| {
+                        display.label = format!("显示器 {} · {}", index + 1, display.label);
+                        display
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !self
+            .play_displays
+            .iter()
+            .any(|display| self.play_options.display.as_ref() == Some(&display.id))
+        {
+            self.play_options.display = None;
+        }
+    }
+
     pub fn playtest_controls(&mut self, ui: &mut egui::Ui) {
         ui.label("配置本次试玩，使用当前地图（包含未保存的修改）。");
         ui.horizontal_wrapped(|ui| {
@@ -166,6 +288,10 @@ impl Editor {
                     }
                 }
                 ui.separator();
+                display(ui, o, &self.play_displays);
+                ui.checkbox(&mut o.full_screen, "全屏");
+                let surface = resolution_surface(o, &self.play_displays);
+                resolution(ui, o, surface);
                 speed(ui, o);
                 if !o.mission {
                     egui::CollapsingHeader::new("资金、单位与对局规则").show(ui, |ui| {
@@ -245,6 +371,145 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn setup(ctx: &egui::Context) {
+        crate::ui_theme::install(ctx);
+        ctx.add_font_provider(Arc::new(
+            egui_system_font_provider::SystemFontProvider::new(),
+        ));
+    }
+
+    fn monitor(index: usize, size: [u32; 2]) -> PlayDisplay {
+        PlayDisplay {
+            id: format!(r"\\.\DISPLAY{index}"),
+            label: format!("显示器 {index} · {} × {}", size[0], size[1]),
+            size,
+            primary: index == 1,
+        }
+    }
+
+    #[test]
+    fn display_selector_is_hidden_without_multiple_monitors() {
+        use egui_kittest::kittest::Queryable as _;
+        let (mut editor, _ctx, _root) = super::super::tests::editor();
+        for count in 0..=1 {
+            editor.play_displays = (0..count).map(|i| monitor(i + 1, [1920, 1080])).collect();
+            let harness = crate::test_support::harness()
+                .with_context_setup(setup)
+                // Existing playtest controls do not all have accessible names.
+                .with_accessibility_check(false)
+                .with_size([640., 1000.])
+                .build_ui(|ui| editor.playtest_controls(ui));
+            assert!(harness.query_by_label("显示器").is_none());
+            harness.get_by_label("全屏");
+            harness.get_by_role_and_label(egui::accesskit::Role::ComboBox, "游戏内分辨率");
+        }
+    }
+
+    #[test]
+    fn resolution_list_matches_the_game_in_both_window_modes() {
+        use egui_kittest::kittest::Queryable as _;
+        for full_screen in [false, true] {
+            let (mut editor, _ctx, _root) = super::super::tests::editor();
+            editor.play_options.full_screen = full_screen;
+            editor.play_displays = vec![monitor(1, [2560, 1600])];
+            let mut harness = egui_kittest::Harness::<Editor>::builder()
+                .with_context_setup(setup)
+                .with_accessibility_check(false)
+                .with_size([640., 1000.])
+                .build_ui_state(|ui, editor| editor.playtest_controls(ui), editor);
+            harness
+                .get_by_role_and_label(egui::accesskit::Role::ComboBox, "游戏内分辨率")
+                .click();
+            harness.run();
+            for label in [
+                "自动（1280 × 800）",
+                "2560 × 1600",
+                "1706 × 1066",
+                "1280 × 800",
+                "1024 × 640",
+                "853 × 533",
+            ] {
+                harness.get_by_label(label);
+            }
+            harness.get_by_label("853 × 533").scroll_to_me();
+            harness.run();
+            harness.get_by_label("853 × 533").click();
+            harness.run();
+            assert_eq!(harness.state().play_options.zoom, 300);
+            harness.get_by_label("全屏").click();
+            harness.run();
+            assert_eq!(harness.state().play_options.zoom, 300);
+        }
+    }
+
+    #[test]
+    fn both_playtest_modes_can_select_a_monitor_and_return_to_auto() {
+        use egui_kittest::kittest::Queryable as _;
+        for mission in [false, true] {
+            let (mut editor, _ctx, _root) = super::super::tests::editor();
+            editor.play_options.mission = mission;
+            editor.play_displays = vec![monitor(1, [1920, 1080]), monitor(2, [2560, 1440])];
+            let mut harness = egui_kittest::Harness::<Editor>::builder()
+                .with_context_setup(setup)
+                .with_accessibility_check(false)
+                .with_size([640., 1000.])
+                .build_ui_state(|ui, editor| editor.playtest_controls(ui), editor);
+            assert_eq!(harness.state().play_options.zoom, 100);
+            harness
+                .get_by_role_and_label(egui::accesskit::Role::ComboBox, "游戏内分辨率")
+                .click();
+            harness.run();
+            harness.get_by_label("自动（1920 × 1080）").scroll_to_me();
+            harness.run();
+            harness.get_by_label("自动（1920 × 1080）").click();
+            harness.run();
+            assert_eq!(harness.state().play_options.zoom, 0);
+            assert!(!harness.state().play_options.full_screen);
+            harness.get_by_label("全屏").click();
+            harness.run();
+            assert!(harness.state().play_options.full_screen);
+            harness
+                .get_by_role_and_label(egui::accesskit::Role::ComboBox, "游戏内分辨率")
+                .click();
+            harness.run();
+            harness.get_by_label("1280 × 720").scroll_to_me();
+            harness.run();
+            harness.get_by_label("1280 × 720").click();
+            harness.run();
+            assert_eq!(harness.state().play_options.zoom, 150);
+            harness
+                .get_by_role_and_label(egui::accesskit::Role::ComboBox, "显示器")
+                .click();
+            harness.run();
+            harness.get_by_label("显示器 2 · 2560 × 1440").click();
+            harness.run();
+            assert_eq!(
+                harness.state().play_options.display.as_deref(),
+                Some(r"\\.\DISPLAY2")
+            );
+            assert_eq!(harness.state().play_options.zoom, 150);
+            harness
+                .get_by_role_and_label(egui::accesskit::Role::ComboBox, "游戏内分辨率")
+                .click();
+            harness.run();
+            harness.get_by_label("1706 × 960");
+            harness.get_by_label("2560 × 1440").click();
+            harness.run();
+            assert_eq!(harness.state().play_options.zoom, 100);
+            harness
+                .get_by_role_and_label(egui::accesskit::Role::ComboBox, "显示器")
+                .click();
+            harness.run();
+            harness.get_by_label("自动（跟随系统）").click();
+            harness.run();
+            assert_eq!(harness.state().play_options.display, None);
+            harness.get_by_label("全屏").click();
+            harness.run();
+            assert!(!harness.state().play_options.full_screen);
+        }
+    }
+
     #[test]
     fn all_thirty_map_starts_are_available_for_direct_launch() {
         let bytes = crate::new_map::NewMapOptions {

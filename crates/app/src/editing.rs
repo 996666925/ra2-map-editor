@@ -82,6 +82,7 @@ mod playtest_ui;
 
 pub struct Editor {
     pub play_options: ra2_map_io::playtest::PlayOptions,
+    play_displays: Vec<playtest_ui::PlayDisplay>,
     pub exporting: bool,
     pub lighting: bool,
     pub task_labels: bool,
@@ -161,6 +162,7 @@ impl Editor {
         Ok(Self {
             layers: [true; 3],
             play_options: Default::default(),
+            play_displays: Vec::new(),
             exporting: false,
             lighting: true,
             task_labels: true,

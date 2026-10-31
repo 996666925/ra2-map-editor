@@ -3139,6 +3139,7 @@ dependencies = [
  "anyhow",
  "eframe",
  "egui_kittest",
+ "egui_system_font_provider",
  "image",
  "log",
  "ra2-map-assets",

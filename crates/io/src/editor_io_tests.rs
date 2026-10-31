@@ -13,6 +13,60 @@ fn root() -> PathBuf {
     fs::create_dir_all(&root).unwrap();
     root
 }
+
+#[test]
+fn playtest_window_options_are_written_to_the_isolated_vera_profile() {
+    let root = root();
+    let settings = root.join("settings");
+    let mut options = crate::playtest::PlayOptions::default();
+    for display in [None, Some(r"\\.\DISPLAY2".to_owned())] {
+        for full_screen in [true, false] {
+            options.display = display.clone();
+            options.full_screen = full_screen;
+            options.zoom = if full_screen { 150 } else { 100 };
+            options.write_settings(&settings).unwrap();
+            let ini = vera20k_core::rules::ini_parser::IniFile::from_bytes(
+                &fs::read(settings.join("VERA.INI")).unwrap(),
+            )
+            .unwrap();
+            let vera = ini.section_or_empty("VERA");
+            assert_eq!(vera.read_bool("FullScreen", !full_screen), full_screen);
+            let video = ini.section_or_empty("Video");
+            assert!(!video.is_present("ScreenWidth"));
+            assert!(!video.is_present("ScreenHeight"));
+            assert_eq!(vera.read_int("Zoom", -1), options.zoom as i32);
+            assert!(!vera.is_present("WindowWidth"));
+            assert!(!vera.is_present("WindowHeight"));
+            assert_eq!(
+                vera.read_name("Display", 128).unwrap_or_default(),
+                display.as_deref().unwrap_or_default(),
+            );
+        }
+    }
+    options.display = Some("DISPLAY2\r\n[Audio]".into());
+    assert!(options.write_settings(&root.join("invalid")).is_err());
+    assert!(!root.join("invalid").exists());
+    options.display = None;
+    for zoom in [0, 100, 200] {
+        options.zoom = zoom;
+        options.write_settings(&settings).unwrap();
+        let ini = vera20k_core::rules::ini_parser::IniFile::from_bytes(
+            &fs::read(settings.join("VERA.INI")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            ini.section_or_empty("VERA").read_int("Zoom", -1),
+            zoom as i32
+        );
+    }
+    for percent in [25, 50, 75, 99, 125, 10050] {
+        options.zoom = percent;
+        assert!(options.write_settings(&root.join("invalid")).is_err());
+    }
+    assert!(!root.join("invalid").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn embedded_preview_export_preserves_custom_pixels_and_rejects_missing_or_broken_pack() {
     let root = root();
