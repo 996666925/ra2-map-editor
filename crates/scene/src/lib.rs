@@ -3,6 +3,7 @@ pub mod bridge_tools;
 pub mod cliff_authoring;
 pub mod cliff_tools;
 pub mod coastal_cliffs;
+pub mod fill_tools;
 pub mod map;
 pub mod placement;
 pub mod radar;

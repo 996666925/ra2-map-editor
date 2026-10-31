@@ -123,8 +123,9 @@ pub(super) fn check(
         })
         .context("没有 clear")?;
     let before = editor.doc.as_ref().unwrap().snapshot().bytes()?;
-    click(&mut editor, scene, [80, 80])?;
-    ensure!(editor.feedback.len() >= 9, "填充未识别 LAT 同类边缘");
+    editor.pointer(scene, Some([79, 79]), true, true, false, None);
+    editor.pointer(scene, Some([81, 81]), false, false, true, None);
+    ensure!(editor.feedback.len() >= 9, "框选铺地未覆盖拖框区域");
     undo_redo(&mut editor, scene, before)?;
 
     editor.terrain_mode = TerrainMode::Raise;

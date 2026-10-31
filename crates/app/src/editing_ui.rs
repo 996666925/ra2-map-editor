@@ -433,6 +433,9 @@ impl Editor {
         }
         match self.tool {
             Tool::Terrain => {
+                if self.terrain_mode == TerrainMode::Fill {
+                    self.prepare_fill_material(scene);
+                }
                 if let Some(brush) = scene.brushes.get(self.brush)
                     && !self.terrain_mode.planned()
                 {
@@ -475,16 +478,9 @@ impl Editor {
                 } else if self.terrain_mode == TerrainMode::Template {
                     self.terrain_template_options(ui, scene);
                 } else if self.terrain_mode == TerrainMode::Fill {
-                    ui.small("点击填充相连且等高的同类地面；请选择 1×1 模板。");
-                    if scene.brushes.get(self.brush).is_none_or(|b| {
-                        scene
-                            .palette
-                            .templates
-                            .get(&(b.key.tile_id, b.key.variant))
-                            .is_none_or(|t| t.width != 1 || t.height != 1)
-                    }) {
-                        ui.colored_label(theme::ACCENT, "请在下方选择可填充的地形素材。");
-                    }
+                    ui.small("左键拖框铺地，单击铺一格；松手提交，Esc 或右键取消。");
+                    ui.small("保留每格高度；绿色为铺地范围，橙色为保留的坡道、悬崖、道路和水岸。");
+                    ui.small("自动 LAT 会修补边缘，浅蓝色标出范围外的过渡调整。");
                 } else {
                     ui.small("拖动连续绘制，保留原有高度。");
                 }
@@ -533,6 +529,8 @@ impl Editor {
                 }
                 ui.checkbox(&mut self.allow_overlap, "允许对象重叠");
                 ui.small("轮廓显示实际占地；红色表示越界、占用或高低不平。");
+                ui.small("按住左键拖动连刷，同一笔按占地去重；不可放置的位置自动跳过。");
+                ui.small("松手提交，Esc / 右键取消整笔，Ctrl+Z 整笔撤销。");
             }
             Tool::Waypoint => {
                 ui.add(

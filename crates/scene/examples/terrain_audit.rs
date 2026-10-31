@@ -88,7 +88,14 @@ fn main() -> Result<()> {
                         && b.key.variant == 0
                 })
                 .context("no clear")?;
-            let filled = tools::fill(&mut doc, &scene, clear, [31, 31])?;
+            let filled = ra2_map_scene::fill_tools::plan(
+                &doc,
+                &scene,
+                clear,
+                ra2_map_scene::cliff_tools::rectangle([30, 30], [32, 32]),
+                true,
+            )?
+            .apply(&mut doc)?;
             ensure!(
                 filled.len() == 9,
                 "{theater}: LAT family fill: {}",
@@ -178,7 +185,10 @@ fn main() -> Result<()> {
         })
         .context("no rough")?;
     let started = Instant::now();
-    let count = tools::fill(&mut doc, &scene, brush, [256, 256])?.len();
+    let selected = scene.cells.iter().map(|c| [c.rx, c.ry]).collect();
+    let count = ra2_map_scene::fill_tools::plan(&doc, &scene, brush, selected, false)?
+        .apply(&mut doc)?
+        .len();
     let fill_ms = started.elapsed().as_secs_f64() * 1000.;
     doc.cancel();
     let started = Instant::now();

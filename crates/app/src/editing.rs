@@ -97,6 +97,8 @@ pub struct Editor {
     pub radius: u16,
     region: region_edit::RegionEdit,
     plateau: cliff_edit::PlateauEdit,
+    fill: fill_edit::FillEdit,
+    object_brush: object_brush::ObjectBrush,
     pub allow_overlap: bool,
     pub infantry_subcell: u8,
     property_extra: BTreeMap<usize, String>,
@@ -176,6 +178,8 @@ impl Editor {
             radius: 1,
             region: Default::default(),
             plateau: Default::default(),
+            fill: Default::default(),
+            object_brush: Default::default(),
             allow_overlap: false,
             infantry_subcell: 0,
             property_extra: BTreeMap::new(),
@@ -231,6 +235,8 @@ impl Editor {
     }
     pub fn attach(&mut self, scene: &MapScene) {
         self.plateau.cancel();
+        self.fill.cancel();
+        self.object_brush.cancel();
         self.region = Default::default();
         self.ui_state.textures.clear();
         self.ui_state.template_textures.clear();
@@ -284,6 +290,8 @@ impl Editor {
         path: PathBuf,
     ) {
         self.plateau.cancel();
+        self.fill.cancel();
+        self.object_brush.cancel();
         self.region = Default::default();
         self.document_name = meta.name.clone();
         let mut doc = MapDocument::new(base);
@@ -316,6 +324,7 @@ impl Editor {
         self.status = "已新建地图；Ctrl+S 选择保存位置。".into();
     }
     pub fn cache(&mut self, scene: &MapScene) {
+        self.region.invalidate_preview();
         self.visual_revision = self.visual_revision.wrapping_add(1);
         if self
             .ui_state
@@ -656,6 +665,8 @@ impl Editor {
             return;
         }
         self.plateau.cancel();
+        self.fill.cancel();
+        self.object_brush.cancel();
         self.region.cancel();
         self.stroking = false;
         self.last = None;
@@ -698,6 +709,8 @@ impl Editor {
         self.structural_refresh = true;
         self.region = Default::default();
         self.plateau.cancel();
+        self.fill.cancel();
+        self.object_brush.cancel();
         self.select(None);
         self.changed(scene);
     }
@@ -797,6 +810,12 @@ impl Editor {
         if press && self.tool != Tool::Select && !self.check_property_draft() {
             return;
         }
+        if self.object_pointer(scene, at, press, down, release) {
+            return;
+        }
+        if self.fill_pointer(scene, at, press, down, release) {
+            return;
+        }
         if self.plateau_pointer(scene, at, press, down, release) {
             return;
         }
@@ -811,8 +830,7 @@ impl Editor {
                 tool: self.tool,
                 mode: self.terrain_mode,
                 brush: self.brush,
-                radius: if self.tool == Tool::Terrain
-                    && matches!(self.terrain_mode, TerrainMode::Template | TerrainMode::Fill)
+                radius: if self.tool == Tool::Terrain && self.terrain_mode == TerrainMode::Template
                 {
                     1
                 } else {
@@ -844,45 +862,6 @@ impl Editor {
                 let result = (|| -> Result<()> {
                     let doc = self.doc.as_mut().unwrap();
                     match self.tool {
-                        Tool::Place => {
-                            ensure!(
-                                scene
-                                    .catalog
-                                    .object_types
-                                    .get(&self.section)
-                                    .is_some_and(|types| types.contains(&self.type_id)),
-                                "对象类型不在当前 rulesmd.ini 注册表中"
-                            );
-                            self.selected = Some(doc.atomic(|doc| {
-                                ensure!(
-                                    self.section != "Terrain"
-                                        || !doc.records().values().any(|r| {
-                                            r.section == "Terrain" && r.cell() == Some(at)
-                                        }),
-                                    "每格只能保存一条地形对象记录，请先移动或删除原对象"
-                                );
-                                let id =
-                                    doc.add_record(&self.section, at, &self.owner, &self.type_id)?;
-                                let mut record = doc.records()[&id].clone();
-                                if record.section == "Infantry" {
-                                    record = record
-                                        .patched(&[(5, self.infantry_subcell.to_string())])?;
-                                    doc.set(
-                                        Target::Record(id),
-                                        Some(Value::Record(record.clone())),
-                                    )?;
-                                }
-                                ra2_map_scene::placement::validate(
-                                    doc,
-                                    scene,
-                                    &[record],
-                                    &BTreeSet::from([id]),
-                                    self.allow_overlap,
-                                    &BTreeMap::new(),
-                                )?;
-                                Ok(id)
-                            })?);
-                        }
                         Tool::Waypoint => doc.waypoint(self.waypoint, at)?,
                         Tool::Move => {
                             let id = self.selected.context("请先选中对象或航点")?;
@@ -941,12 +920,6 @@ impl Editor {
                 let line = cell_line(self.last.unwrap_or(at), at);
                 self.last = Some(at);
                 for center in line {
-                    if stroke.tool == Tool::Terrain
-                        && stroke.mode == TerrainMode::Fill
-                        && !self.stroke_cells.is_empty()
-                    {
-                        break;
-                    }
                     for dx in 0..stroke.radius {
                         for dy in 0..stroke.radius {
                             let x =
@@ -1000,18 +973,14 @@ impl Editor {
                                             .brushes
                                             .get(stroke.brush)
                                             .context("请选择地形")?;
-                                        if stroke.mode == TerrainMode::Fill {
-                                            terrain_tools::fill(doc, scene, brush, cell)
-                                        } else {
-                                            terrain_tools::stamp_at_height(
-                                                doc,
-                                                scene,
-                                                brush,
-                                                cell,
-                                                stroke.mode == TerrainMode::Template,
-                                                stroke.template_level,
-                                            )
-                                        }
+                                        terrain_tools::stamp_at_height(
+                                            doc,
+                                            scene,
+                                            brush,
+                                            cell,
+                                            stroke.mode == TerrainMode::Template,
+                                            stroke.template_level,
+                                        )
                                     }
                                     Tool::Ore | Tool::Gems | Tool::Overlay | Tool::Erase => {
                                         let id = match stroke.tool {
@@ -1111,6 +1080,8 @@ impl Editor {
     }
     fn abort_stroke(&mut self, scene: &MapScene, error: anyhow::Error) {
         self.plateau.cancel();
+        self.fill.cancel();
+        self.object_brush.cancel();
         if let Some(doc) = &mut self.doc {
             doc.cancel();
         }
@@ -1133,6 +1104,10 @@ impl Editor {
         at: Option<Cell>,
     ) {
         if self.tool != Tool::Terrain {
+            return;
+        }
+        if self.terrain_mode == TerrainMode::Fill {
+            self.fill_preview(painter, scene, rect, camera, at);
             return;
         }
         let (Some(at), Some(doc)) = (at, self.doc.as_ref()) else {
@@ -1212,11 +1187,7 @@ impl Editor {
                 }
             }
         } else {
-            let radius = if self.terrain_mode == TerrainMode::Fill {
-                1
-            } else {
-                self.radius
-            };
+            let radius = self.radius;
             (0..radius)
                 .flat_map(|dx| (0..radius).map(move |dy| (dx, dy)))
                 .filter_map(|(dx, dy)| {
@@ -1381,6 +1352,10 @@ impl Editor {
 mod cliff_edit;
 #[path = "editing_ui.rs"]
 mod editing_ui;
+#[path = "fill_edit.rs"]
+mod fill_edit;
+#[path = "object_brush.rs"]
+mod object_brush;
 #[path = "terrain_ui.rs"]
 mod terrain_ui;
 #[path = "tool_palette.rs"]

@@ -277,11 +277,13 @@ impl MapView {
                 self.p2.building = [at[0], at[1] + 3];
                 self.editor
                     .pointer(scene, Some(self.p2.building), true, true, false, None);
+                self.editor.pointer(scene, None, false, false, true, None);
                 self.editor.section = "Infantry".into();
                 self.editor.type_id = "E1".into();
                 self.p2.infantry = [at[0] + 3, at[1] + 3];
                 self.editor
                     .pointer(scene, Some(self.p2.infantry), true, true, false, None);
+                self.editor.pointer(scene, None, false, false, true, None);
                 ensure!(
                     self.editor
                         .doc

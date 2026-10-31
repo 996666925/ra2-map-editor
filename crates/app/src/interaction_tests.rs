@@ -221,3 +221,18 @@ fn choosing_fill_material_keeps_fill_active_and_cannot_change_an_active_stroke()
     drop(e);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn b_shortcut_exits_fill_and_enters_the_subtile_brush() {
+    let (mut e, ctx, root) = editor();
+    let scene = terrain_scene();
+    e.attach(&scene);
+    e.activate_terrain_mode(TerrainMode::Fill);
+    let _ = crate::test_support::run_ui(&ctx, key(egui::Key::B, egui::Modifiers::NONE), |ui| {
+        e.shortcuts(ui.ctx(), &scene)
+    });
+    assert_eq!(e.tool, Tool::Terrain);
+    assert_eq!(e.terrain_mode, TerrainMode::Subtile);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}

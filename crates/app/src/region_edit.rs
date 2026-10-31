@@ -44,6 +44,10 @@ struct Preview {
     error: Option<String>,
 }
 impl RegionEdit {
+    pub(super) fn invalidate_preview(&mut self) {
+        self.preview = None;
+        self.revision += 1;
+    }
     pub fn cancel(&mut self) {
         self.input_op = None;
         if let Some(drag) = self.drag.take() {
@@ -532,6 +536,10 @@ impl Editor {
         camera: &crate::camera::MapCamera,
         at: Option<Cell>,
     ) {
+        self.object_brush_preview(painter, rect, camera);
+        if self.object_brush.active() {
+            return;
+        }
         let Some(doc) = self.doc.as_ref() else { return };
         let world = camera.world_rect(rect);
         let outline = |cell: Cell, level: u8, color: Color32| {

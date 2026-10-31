@@ -251,34 +251,6 @@ fn sparse_template_anchors_selected_subtile_preserves_height_and_ice_and_is_atom
 }
 
 #[test]
-fn fill_is_contiguous_height_bounded_and_accepts_only_single_cell_templates() {
-    let (mut doc, mut scene) = setup();
-    let b = brush(&mut scene, 2, 1, &[Some(0)]);
-    for at in [[20, 20], [21, 20], [21, 21], [24, 24]] {
-        put(&mut doc, &scene, at, 9, 0);
-    }
-    put(&mut doc, &scene, [20, 21], 9, 1);
-    doc.commit("fixture");
-    let before = doc.snapshot().bytes().unwrap();
-    assert_eq!(fill(&mut doc, &scene, &b, [20, 20]).unwrap().len(), 3);
-    assert_eq!(doc.terrain([24, 24]).unwrap().tile, 9);
-    assert_eq!(doc.terrain([20, 21]).unwrap().level, 1);
-    doc.commit("fill");
-    let after = doc.snapshot().bytes().unwrap();
-    let (source, _) =
-        SourceMap::parse("reopen.map".into(), "fixture".into(), after.clone()).unwrap();
-    let reopened = MapDocument::new(source.edit_base.unwrap());
-    assert_eq!(reopened.terrain([21, 21]).unwrap().tile, b.raw);
-    doc.undo();
-    assert_eq!(doc.snapshot().bytes().unwrap(), before);
-    doc.redo();
-    assert_eq!(doc.snapshot().bytes().unwrap(), after);
-    let multi = brush(&mut scene, 3, 2, &[Some(0), Some(0)]);
-    assert!(fill(&mut doc, &scene, &multi, [20, 20]).is_err());
-    assert_eq!(doc.snapshot().bytes().unwrap(), after);
-}
-
-#[test]
 fn incomplete_template_resources_are_rejected_before_writing_any_subtile() {
     let (mut doc, mut scene) = setup();
     let b = brush(&mut scene, 3, 2, &[Some(0), Some(0)]);

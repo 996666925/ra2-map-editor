@@ -4,7 +4,7 @@ use crate::map::MapScene;
 use anyhow::{Context, Result, ensure};
 use ra2_map_assets::catalog::{TerrainBrush, TerrainTemplate};
 use ra2_map_document::document::{Cell, MapDocument, Target, TerrainValue, Value};
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 use vera20k_core::map::{
     lat::{LatConfig, SlopeFixupConfig, apply_load_recalc_sweeps},
@@ -63,7 +63,7 @@ impl TerrainMode {
         match self {
             Self::Subtile => "子块画笔",
             Self::Template => "完整模板",
-            Self::Fill => "区域填充",
+            Self::Fill => "框选铺地",
             Self::Raise => "升高",
             Self::Lower => "降低",
             Self::Flatten => "平整",
@@ -329,63 +329,6 @@ fn apply(doc: &mut MapDocument, edits: Vec<(Cell, TerrainValue)>) -> Result<Vec<
         }
     }
     Ok(changed)
-}
-
-fn ground_family(tile: i32, scene: &MapScene) -> i32 {
-    if let Some(ids) = scene.palette.tile_ids {
-        for (base, lat) in [
-            (ids.rough, ids.rough_lat),
-            (ids.sand, ids.sand_lat),
-            (ids.green, ids.green_lat),
-            (ids.pave, ids.pave_lat),
-        ] {
-            if base >= 0 && (tile == base || lat >= 0 && (lat..lat + 16).contains(&tile)) {
-                return base;
-            }
-        }
-    }
-    tile
-}
-
-/// Iterative four-neighbour bucket fill, bounded by Size and original height.
-/// LAT edge variants belong to the same logical ground as their base tile.
-pub fn fill(
-    doc: &mut MapDocument,
-    scene: &MapScene,
-    brush: &TerrainBrush,
-    start: Cell,
-) -> Result<Vec<Cell>> {
-    doc.check_cell(start)?;
-    let t = template(scene, brush)?;
-    ensure!(t.width == 1 && t.height == 1, "区域填充请选择 1×1 地形模板");
-    let ids = translated(scene);
-    let initial = value(doc, scene, start);
-    let family = ground_family(tile_id(&ids, initial), scene);
-    let mut visited = BTreeSet::new();
-    let mut queue = VecDeque::from([start]);
-    let mut edits = Vec::new();
-    while let Some(at) = queue.pop_front() {
-        if !visited.insert(at) || doc.check_cell(at).is_err() {
-            continue;
-        }
-        let old = value(doc, scene, at);
-        if old.level != initial.level
-            || old.sub != initial.sub
-            || ground_family(tile_id(&ids, old), scene) != family
-        {
-            continue;
-        }
-        edits.push((
-            at,
-            TerrainValue {
-                tile: brush.raw,
-                sub: brush.key.sub_tile,
-                ..old
-            },
-        ));
-        queue.extend(neighbors(at));
-    }
-    apply(doc, edits)
 }
 
 pub fn neighbors(at: Cell) -> impl Iterator<Item = Cell> {

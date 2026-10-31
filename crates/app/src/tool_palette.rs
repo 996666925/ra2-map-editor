@@ -40,7 +40,7 @@ impl TerrainPage {
         match self {
             Self::Ground => &[
                 (Subtile, "地表画笔"),
-                (Fill, "填充 G"),
+                (Fill, "铺地 G"),
                 (Template, "手工模板"),
                 (Raise, "升高"),
                 (Lower, "降低"),
@@ -86,12 +86,14 @@ impl Editor {
         }
         self.activate_tool(Tool::Terrain);
         self.plateau.cancel();
+        self.fill.cancel();
+        self.object_brush.cancel();
         self.terrain_mode = mode;
         self.ui_state.terrain_page = TerrainPage::for_mode(mode);
         self.status = format!("{}；在左侧调整参数，Esc 取消当前操作。", mode.name());
     }
 
-    /// Selecting a fill material must keep the bucket active.
+    /// Selecting a fill material keeps rectangular ground painting active.
     pub(super) fn select_terrain_material(&mut self, index: usize, subtiles: bool) {
         if self.doc.is_none() || self.stroking {
             return;
@@ -140,7 +142,7 @@ impl Editor {
                 ui.label(egui::RichText::new("地形").color(theme::MUTED));
                 for (mode, label) in [
                     (TerrainMode::Subtile, "画笔"),
-                    (TerrainMode::Fill, "填充 G"),
+                    (TerrainMode::Fill, "铺地 G"),
                     (TerrainMode::CliffOutline, "围合悬崖 C"),
                     (TerrainMode::CliffFront, "悬崖线"),
                     (TerrainMode::Plateau, "高台 H"),

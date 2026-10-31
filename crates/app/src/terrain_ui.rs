@@ -84,6 +84,16 @@ impl Editor {
 
     pub(super) fn terrain_library(&mut self, ui: &mut egui::Ui, scene: &MapScene, filter: &str) {
         let filling = self.terrain_mode == TerrainMode::Fill && self.tool == Tool::Terrain;
+        let fill_groups: BTreeSet<_> = if filling {
+            scene
+                .brushes
+                .iter()
+                .filter(|b| ra2_map_scene::fill_tools::material(scene, b).is_ok())
+                .filter_map(|b| scene.palette.groups.get(&b.key.tile_id).map(|g| g.id))
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
         egui::CollapsingHeader::new("分类与模板选项").show(ui, |ui| {
             egui::ComboBox::from_id_salt("terrain-category")
                 .width(ui.available_width())
@@ -96,11 +106,12 @@ impl Editor {
                     let old = self.ui_state.terrain_category;
                     ui.selectable_value(&mut self.ui_state.terrain_category, None, "全部地形");
                     for category in TerrainCategory::ALL {
-                        if scene
-                            .palette
-                            .groups
-                            .values()
-                            .any(|g| g.category == category)
+                        if (!filling || category == TerrainCategory::Ground)
+                            && scene
+                                .palette
+                                .groups
+                                .values()
+                                .any(|g| g.category == category)
                         {
                             ui.selectable_value(
                                 &mut self.ui_state.terrain_category,
@@ -117,6 +128,7 @@ impl Editor {
                 .palette
                 .groups
                 .values()
+                .filter(|g| !filling || fill_groups.contains(&g.id))
                 .filter(|g| {
                     self.ui_state
                         .terrain_category
@@ -164,19 +176,14 @@ impl Editor {
         );
         if filling {
             matching.retain(|&index| {
-                let key = scene.brushes[index].key;
-                scene
-                    .palette
-                    .templates
-                    .get(&(key.tile_id, key.variant))
-                    .is_some_and(|t| t.width == 1 && t.height == 1)
+                ra2_map_scene::fill_tools::material(scene, &scene.brushes[index]).is_ok()
             });
         }
         ui.small(format!(
             "{} 个{}",
             matching.len(),
             if filling {
-                "填充素材（1×1）"
+                "可平铺地表"
             } else if subtiles {
                 "子块"
             } else {
