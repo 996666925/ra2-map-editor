@@ -169,7 +169,8 @@ pub fn overlay(
             ),
             SymbolKind::Building => (flags[2], 1.8, Color32::from_rgb(255, 135, 65)),
             SymbolKind::Unit => (flags[3], 1.1, Color32::from_rgb(255, 135, 65)),
-            SymbolKind::Start(_) => (flags[0], 3., Color32::BLACK),
+            // Leave padding around both single- and double-digit position labels.
+            SymbolKind::Start(_) => (flags[0], 5.5, Color32::BLACK),
         };
         if !visible {
             continue;
@@ -202,7 +203,8 @@ pub fn overlay(
         {
             let center = (symbol.position - bounds.min) / bounds.size()
                 * egui::vec2(size[0] as f32, size[1] as f32);
-            label(&mut image, center, number, scale);
+            // Player positions are one-based; map waypoint IDs remain zero-based.
+            label(&mut image, center, number + 1, scale);
         }
     }
     image
