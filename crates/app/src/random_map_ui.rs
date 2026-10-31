@@ -47,8 +47,10 @@ impl MapView {
         }
         let mut create = false;
         let mut cancel = false;
-        let modal = egui::Modal::new(egui::Id::new("random-map")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("random-map")).show(ctx, |ui| {
             ui.set_width(490.0_f32.min((ctx.content_rect().width() - 64.).max(240.)));
+            // Area remembers its previous size; bound it again after a native resize.
+            ui.set_max_height((ctx.content_rect().height() - 64.).max(120.));
             ui.heading("新建随机地图");
             ui.label("生成包含自然地貌、玩家起点和资源的遭遇战地图。");
             ui.separator();

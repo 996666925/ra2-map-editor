@@ -1134,13 +1134,13 @@ mod tests {
         form.draft.insert("Author".into(), String::new());
         assert!(!form.dirty());
         form.draft.insert("Name".into(), "新地图".into());
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             form.finish_edit(ui.ctx(), &mut editor, &scene)
         });
         assert!(!form.dirty());
         assert_eq!(form.draft.get("Author"), Some(&String::new()));
         form.draft.insert("Author".into(), "新作者".into());
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             form.finish_edit(ui.ctx(), &mut editor, &scene)
         });
         assert!(!form.dirty());
@@ -1167,7 +1167,7 @@ mod tests {
         form.rename_id = "keep-ui-state".into();
         let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
         form.draft.insert("Author".into(), "中文作者".into());
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             form.finish_edit(ui.ctx(), &mut editor, &scene)
         });
         assert!(!form.dirty());
@@ -1196,7 +1196,7 @@ mod tests {
             .set_ini("Basic", "Author", Some(b"newer".to_vec()))
             .unwrap();
         editor.commit(&scene, "external edit");
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             form.finish_edit(ui.ctx(), &mut editor, &scene)
         });
         assert!(form.dirty());

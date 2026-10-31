@@ -387,7 +387,7 @@ mod tests {
             .values
             .insert("Ambient".into(), "0.65".into());
         form.light_editing = true;
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             form.finish_lighting(ui.ctx(), &mut editor, &scene);
         });
         assert!(!form.dirty());
@@ -414,7 +414,7 @@ mod tests {
             .values
             .insert("Ambient".into(), "NaN".into());
         form.light_editing = true;
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             form.finish_lighting(ui.ctx(), &mut editor, &scene);
         });
         assert!(form.dirty());
@@ -436,7 +436,7 @@ mod tests {
             .set_ini("Lighting", "Ambient", Some(b"0.8".to_vec()))
             .unwrap();
         editor.commit(&scene, "external edit");
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             form.finish_lighting(ui.ctx(), &mut editor, &scene);
         });
         assert!(form.message.contains("文档已变化"));
@@ -456,7 +456,7 @@ mod tests {
         let mut form = MapSettingsUi::default();
         form.smoke_preview(editor.doc.as_ref().unwrap(), Profile::Ion);
         let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             form.finish_lighting(ui.ctx(), &mut editor, &scene);
         });
         assert_eq!(
@@ -465,7 +465,7 @@ mod tests {
         );
         form.light_editing = true;
         form.options.as_mut().unwrap().width += 1;
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             form.finish_lighting(ui.ctx(), &mut editor, &scene);
         });
         assert!(form.dirty());

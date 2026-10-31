@@ -319,7 +319,7 @@ impl MapView {
         );
         ui.scope_builder(
             egui::UiBuilder::new()
-                .id(egui::Id::new("workbench-playtest-action"))
+                .scope_id(egui::Id::unique("workbench-playtest-action"))
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
             |ui| {
                 if ui
@@ -515,7 +515,7 @@ impl MapView {
         self.workbench.overview_rect = Some(rect);
         let response = ui.interact(
             rect,
-            ui.id().with("map-navigator"),
+            ui.scope_id().with("map-navigator"),
             egui::Sense::click_and_drag(),
         );
         ui.painter().rect_filled(frame, 4, theme::BACKGROUND);
@@ -759,8 +759,9 @@ impl MapView {
         if self.workbench.new_map {
             let mut create = false;
             let mut cancel = false;
-            let modal = egui::Modal::new(egui::Id::new("new-map")).show(ctx, |ui| {
+            let modal = egui::Modal::new(egui::Id::unique("new-map")).show(ctx, |ui| {
                 ui.set_width(440.0_f32.min(ctx.content_rect().width() - 64.));
+                ui.set_max_height((ctx.content_rect().height() - 64.).max(120.));
                 ui.heading("新建地图");
                 ui.label(RichText::new("从平坦地面开始，创建遭遇战地图。").color(theme::MUTED));
                 ui.separator();

@@ -813,7 +813,7 @@ impl MapView {
             return;
         }
         let mut choice = 0;
-        let modal = egui::Modal::new(egui::Id::new("unsaved-map")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("unsaved-map")).show(ctx, |ui| {
             ui.set_width(420.0_f32.min(ctx.content_rect().width() - 64.));
             ui.heading("地图有未保存的修改");
             ui.label("保存当前地图后继续，或丢弃本次修改。");
@@ -944,17 +944,9 @@ impl MapView {
         }
         if gpu.paints.load(Ordering::Relaxed) >= 2 && !self.screenshot_requested {
             self.screenshot_requested = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            crate::screen_capture::request(ctx);
         }
-        let capture = ctx.input(|i| {
-            i.events.iter().find_map(|e| {
-                if let egui::Event::Screenshot { image, .. } = e {
-                    Some(image.clone())
-                } else {
-                    None
-                }
-            })
-        });
+        let capture = crate::screen_capture::take(ctx);
         if let Some(image) = capture {
             return Some((|| -> Result<()> {
                 let bytes: Vec<_> = image.pixels.iter().flat_map(|c| c.to_array()).collect();

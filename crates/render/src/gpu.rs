@@ -340,7 +340,7 @@ impl PreviewRenderer {
         })?;
         rx.recv_timeout(Duration::from_secs(15))
             .context("GPU 读回超时")??;
-        let mapped = readback.slice(..).get_mapped_range();
+        let mapped = readback.slice(..).get_mapped_range()?;
         let mut rgba = Vec::with_capacity(source.rgba.len());
         for row in mapped.chunks_exact(padded_row as usize) {
             rgba.extend_from_slice(&row[..width as usize * 4]);

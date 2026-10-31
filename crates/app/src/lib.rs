@@ -17,7 +17,10 @@ mod map_view;
 mod mission_overlay;
 mod mission_ui;
 mod overview;
+mod screen_capture;
 mod ui_theme;
 
+#[cfg(test)]
+mod test_support;
 #[cfg(test)]
 mod viewport_perf;

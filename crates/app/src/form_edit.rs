@@ -70,11 +70,12 @@ mod tests {
         let mut completion = EditCompletion::default();
         let mut value = String::from("name");
         let mut ready = false;
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             ui.text_edit_singleline(&mut value).request_focus();
             completion.observe(ui.ctx());
         });
-        let _ = ctx.run_ui(
+        let _ = crate::test_support::run_ui(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Text(" edited".into())],
                 ..Default::default()
@@ -86,7 +87,8 @@ mod tests {
             },
         );
         assert!(!ready, "typing must not commit partial text");
-        let _ = ctx.run_ui(
+        let _ = crate::test_support::run_ui(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::Enter,
@@ -105,7 +107,8 @@ mod tests {
         assert!(ready, "Enter completes a single-line text edit");
 
         for pressed in [true, false] {
-            let _ = ctx.run_ui(
+            let _ = crate::test_support::run_ui(
+                &ctx,
                 egui::RawInput {
                     events: vec![egui::Event::PointerButton {
                         pos: egui::pos2(50., 50.),
@@ -121,7 +124,7 @@ mod tests {
             );
             assert!(!ready, "drag and release frame must stay in one edit");
         }
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             ready = EditCompletion::default().ready(ui.ctx());
         });
         assert!(ready);
@@ -134,7 +137,7 @@ mod tests {
         let mut value = "name".to_owned();
         let mut navigation = egui::Pos2::ZERO;
         let mut cancel = egui::Pos2::ZERO;
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             ui.text_edit_singleline(&mut value).request_focus();
             navigation = ui.button("navigate").rect.center();
             let response = ui.button("cancel");
@@ -143,7 +146,8 @@ mod tests {
             completion.observe(ui.ctx());
         });
         let mut ready = false;
-        let _ = ctx.run_ui(
+        let _ = crate::test_support::run_ui(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::PointerButton {
                     pos: navigation,
@@ -159,7 +163,8 @@ mod tests {
             ready,
             "navigation must see the completed edit before handling the click"
         );
-        let _ = ctx.run_ui(
+        let _ = crate::test_support::run_ui(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::PointerButton {
                     pos: navigation,
@@ -177,7 +182,8 @@ mod tests {
                 completion.observe(ui.ctx());
             },
         );
-        let _ = ctx.run_ui(
+        let _ = crate::test_support::run_ui(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::PointerButton {
                     pos: cancel,

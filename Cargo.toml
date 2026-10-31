@@ -22,9 +22,9 @@ ra2-map-app = { path = "crates/app" }
 ra2-map-voxel = { path = "crates/voxel" }
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
-eframe = { version = "=0.35.0", default-features = false, features = ["default_fonts", "wgpu", "persistence", "x11", "wayland"] }
-egui = { version = "=0.35.0", default-features = false }
-egui-wgpu = { version = "=0.35.0", default-features = false }
+eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "wgpu", "persistence", "clipboard", "links", "x11", "wayland"] }
+egui = { version = "=0.37.0", default-features = false }
+egui-wgpu = { version = "=0.37.0", default-features = false }
 env_logger = "0.11"
 image = { version = "0.25", default-features = false, features = ["png"] }
 log = "0.4"
@@ -33,7 +33,7 @@ rfd = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 vera20k-core = { path = "vendor/vera20k/src", default-features = false }
-wgpu = "=29.0.4"
+wgpu = "=30.0.1"
 
 [package]
 name = "ra2-map-editor"

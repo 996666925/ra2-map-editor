@@ -252,7 +252,7 @@ impl EditorApp {
                     let info = self.gpu.adapter.get_info();
                     let report = serde_json::json!({
                         "game_directory": self.selection.directory,
-                        "theater": "TEMPERATE", "wgpu_version": "29.0.4",
+                        "theater": "TEMPERATE", "wgpu_version": "30.0.1",
                         "gpu": { "name": info.name, "backend": format!("{:?}", info.backend), "target": format!("{:?}", self.gpu.target_format) },
                         "device_owner": "eframe", "additional_device_created": false,
                         "tile": { "asset": loaded.assets.tile.info, "gpu_readback": tile_check },
@@ -280,18 +280,10 @@ impl EditorApp {
                     .is_none_or(|t| t.elapsed() >= Duration::from_millis(350))
             {
                 self.screenshot_requested = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
             }
         }
-        let screenshot = ctx.input(|input| {
-            input.events.iter().find_map(|event| {
-                if let egui::Event::Screenshot { image, .. } = event {
-                    Some(image.clone())
-                } else {
-                    None
-                }
-            })
-        });
+        let screenshot = crate::screen_capture::take(ctx);
         if let Some(image) = screenshot {
             let result = (|| -> Result<()> {
                 ensure!(
@@ -422,7 +414,7 @@ impl EditorApp {
             let info = self.gpu.adapter.get_info();
             ui.label(info.name);
             ui.label(format!("{:?} / {:?}", info.backend, self.gpu.target_format));
-            ui.small("主界面与两个预览共用图形设备；wgpu 29.0.4");
+            ui.small("主界面与两个预览共用图形设备；wgpu 30.0.1");
         });
     }
 }
@@ -437,7 +429,7 @@ impl eframe::App for EditorApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_loader();
         self.map.poll(ctx);
-        let dropped = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()));
+        let dropped = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()));
         if let Some(path) = dropped {
             self.show_map = true;
             self.map.open(

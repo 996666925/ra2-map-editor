@@ -55,11 +55,12 @@ fn bad_pack_and_oversized_dimensions_are_rejected() {
         )
         .is_err()
     );
+    // The updated core admits 512x512 headers using its extended cell grid.
     assert!(
         SourceMap::parse(
             "large".into(),
             "fixture".into(),
-            text.replace("Size=0,0,3,3", "Size=0,0,512,512")
+            text.replace("Size=0,0,3,3", "Size=0,0,513,512")
                 .into_bytes()
         )
         .is_err()

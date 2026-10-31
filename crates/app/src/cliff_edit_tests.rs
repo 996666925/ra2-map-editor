@@ -42,7 +42,7 @@ fn plateau_preview_is_cached_and_matches_release_even_after_tool_and_height_chan
         .generate(e.doc.as_ref().unwrap(), &scene, [38, 38])
         .unwrap();
     assert!(Arc::ptr_eq(&plan, &same));
-    let output = ctx.run_ui(Default::default(), |ui| {
+    let output = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
         e.terrain_preview(
             ui.painter(),
             &scene,
@@ -100,7 +100,7 @@ fn outline_release_includes_final_point_and_escape_cancels_without_history() {
         }],
         ..Default::default()
     };
-    let _ = ctx.run_ui(input, |ui| e.shortcuts(ui.ctx(), &scene));
+    let _ = crate::test_support::run_ui(&ctx, input, |ui| e.shortcuts(ui.ctx(), &scene));
     assert!(!e.stroking);
     assert!(e.plateau.gesture.is_none());
     e.pointer(&scene, Some([38, 38]), false, false, true, None);
@@ -129,7 +129,7 @@ fn bridge_gesture_freezes_type_previews_and_commits_all_rows_once() {
         .generate(e.doc.as_ref().unwrap(), &scene, [42, 30])
         .unwrap();
     assert!(Arc::ptr_eq(&p, &same));
-    let output = ctx.run_ui(Default::default(), |ui| {
+    let output = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
         e.terrain_preview(
             ui.painter(),
             &scene,
@@ -195,7 +195,7 @@ fn joining_gestures_cache_previews_freeze_the_mode_and_cancel_invalid_strokes() 
         let p = e.plateau_preview_plan(&scene, at).unwrap();
         let same = e.plateau_preview_plan(&scene, at).unwrap();
         assert!(Arc::ptr_eq(&p, &same));
-        let rendered = ctx.run_ui(Default::default(), |ui| {
+        let rendered = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
             e.terrain_preview(
                 ui.painter(),
                 &scene,

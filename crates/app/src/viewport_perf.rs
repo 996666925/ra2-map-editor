@@ -59,7 +59,8 @@ fn real_map_ui_profile() {
             let started = Instant::now();
             let mut markers_ms = 0.;
             let mut labels_ms = 0.;
-            let output = ctx.run_ui(
+            let output = crate::test_support::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(rect),
                     ..Default::default()
@@ -97,7 +98,8 @@ fn real_map_ui_profile() {
     let mut navigator_frames = Vec::new();
     for _ in 0..12 {
         let started = Instant::now();
-        let result = ctx.run_ui(
+        let result = crate::test_support::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(rect),
                 ..Default::default()

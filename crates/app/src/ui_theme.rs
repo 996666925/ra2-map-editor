@@ -89,7 +89,7 @@ pub fn window<'a>(ctx: &egui::Context, title: &str, id: &str, size: Vec2) -> egu
     let max = (bounds.size() - egui::vec2(26., 54.)).max(egui::vec2(240., 160.));
     let size = size.min(max);
     egui::Window::new(title)
-        .id(egui::Id::new(id))
+        .id(egui::Id::unique(id))
         .collapsible(false)
         .default_size(size)
         .min_size(egui::vec2(320., 180.).min(size))
@@ -365,7 +365,7 @@ pub fn button(
         );
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, text)
+        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, text)
     });
     response
 }

@@ -165,9 +165,7 @@ impl MapView {
                     );
                     std::fs::write(output.join("blank.map"), scene.source.bytes())?;
                     if !self.p2.new_map_captured {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
-                            egui::UserData::default(),
-                        ));
+                        crate::screen_capture::request(ctx);
                         self.p2.stage = 10;
                         return Ok(false);
                     }
@@ -604,19 +602,11 @@ impl MapView {
                 self.p2.stage = 5;
             }
             5 => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 6;
             }
             6 => {
-                let capture = ctx.input(|i| {
-                    i.events.iter().find_map(|e| {
-                        if let egui::Event::Screenshot { image, .. } = e {
-                            Some(image.clone())
-                        } else {
-                            None
-                        }
-                    })
-                });
+                let capture = crate::screen_capture::take(ctx);
                 if let Some(image) = capture {
                     let bytes: Vec<_> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
                     image::save_buffer(
@@ -645,16 +635,11 @@ impl MapView {
                 if self.p2.compact_started.unwrap().elapsed() < Duration::from_millis(250) {
                     return Ok(false);
                 }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 9;
             }
             9 => {
-                let capture = ctx.input(|i| {
-                    i.events.iter().find_map(|e| match e {
-                        egui::Event::Screenshot { image, .. } => Some(image.clone()),
-                        _ => None,
-                    })
-                });
+                let capture = crate::screen_capture::take(ctx);
                 if let Some(image) = capture {
                     let bytes: Vec<_> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
                     image::save_buffer(
@@ -740,7 +725,7 @@ impl MapView {
                 if self.p2.compact_started.unwrap().elapsed() < Duration::from_millis(250) {
                     return Ok(false);
                 }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 12;
             }
             12 => {
@@ -764,7 +749,7 @@ impl MapView {
                 if self.p2.compact_started.unwrap().elapsed() < Duration::from_millis(250) {
                     return Ok(false);
                 }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 15;
             }
             15 => {
@@ -812,7 +797,7 @@ impl MapView {
                 if self.p2.compact_started.unwrap().elapsed() < Duration::from_millis(250) {
                     return Ok(false);
                 }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 31;
             }
             31 => {
@@ -852,7 +837,7 @@ impl MapView {
                 if self.p2.compact_started.unwrap().elapsed() < Duration::from_millis(350) {
                     return Ok(false);
                 }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 34;
             }
             34 => {
@@ -940,7 +925,7 @@ impl MapView {
                 let c = &scene.cells[self.hover.context("高台预览没有拾取")?];
                 ensure!([c.rx, c.ry] == [94, 94], "高台拖动终点拾取错误");
                 self.p2.plateau_plan = Some(self.editor.plateau_preview_plan(scene, [94, 94])?);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 39;
             }
             39 => {
@@ -981,7 +966,7 @@ impl MapView {
                 let mut report: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
                 report["automatic_plateau_pointer"] = serde_json::json!({"passed":true,"raw_mouse_drag":true,"preview_no_writes":true,"preview_matches_release":true,"cells":plan.edits.len(),"cliff_stamps":plan.cliffs.len(),"preview":"automatic-plateau-preview.png","committed":"automatic-plateau-committed.png"});
                 std::fs::write(path, serde_json::to_vec_pretty(&report)?)?;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 51;
             }
             51 => {
@@ -1007,7 +992,7 @@ impl MapView {
                 self.p2.stage = 41;
             }
             41 => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 42;
             }
             42 => {
@@ -1051,7 +1036,7 @@ impl MapView {
                 if self.p2.compact_started.unwrap().elapsed() < Duration::from_millis(400) {
                     return Ok(false);
                 }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 44;
             }
             44 => {
@@ -1113,7 +1098,7 @@ impl MapView {
                 if self.p2.compact_started.unwrap().elapsed() < Duration::from_millis(400) {
                     return Ok(false);
                 }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 46;
             }
             46 => {
@@ -1228,7 +1213,7 @@ impl MapView {
                     self.editor.tool == Tool::Region,
                     "help window allowed background tool shortcut"
                 );
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 67;
             }
             67 => {
@@ -1268,7 +1253,7 @@ impl MapView {
                     egui::Popup::is_any_open(ctx),
                     "right click did not open context menu"
                 );
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 70;
             }
             70 => {
@@ -1590,12 +1575,7 @@ fn key_event(key: egui::Key, pressed: bool) -> egui::Event {
 }
 
 fn save_capture(ctx: &egui::Context, path: &Path) -> Result<bool> {
-    let capture = ctx.input(|i| {
-        i.events.iter().find_map(|e| match e {
-            egui::Event::Screenshot { image, .. } => Some(image.clone()),
-            _ => None,
-        })
-    });
+    let capture = crate::screen_capture::take(ctx);
     let Some(image) = capture else {
         return Ok(false);
     };

@@ -81,7 +81,8 @@ fn object_edits_auto_commit_once_after_drag_and_keep_invalid_input_out_of_histor
     editor.select(Some(id));
     let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
     for (pressed, value) in [(true, 200), (false, 128)] {
-        let _ = ctx.run_ui(
+        let _ = crate::test_support::run_ui(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::PointerButton {
                     pos: egui::pos2(50., 50.),
@@ -101,7 +102,7 @@ fn object_edits_auto_commit_once_after_drag_and_keep_invalid_input_out_of_histor
             before
         );
     }
-    let _ = ctx.run_ui(Default::default(), |ui| {
+    let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
         editor.finish_property_edit(ui.ctx(), &scene)
     });
     assert!(!editor.object_properties_dirty());
@@ -123,7 +124,7 @@ fn object_edits_auto_commit_once_after_drag_and_keep_invalid_input_out_of_histor
     );
     editor.select(Some(id));
     editor.property_type = "INVALID".into();
-    let _ = ctx.run_ui(Default::default(), |ui| {
+    let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
         editor.finish_property_edit(ui.ctx(), &scene)
     });
     assert!(!editor.property_error.is_empty());
@@ -187,7 +188,7 @@ fn building_ghost_matches_placed_pixels_across_foundations_height_and_zoom() {
                     center: egui::pos2(sx + 30., sy + 15.),
                     zoom,
                 };
-                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let output = crate::test_support::run_ui(&ctx, egui::RawInput::default(), |ui| {
                     editor.region_preview(ui.painter(), &scene, rect, &camera, Some(at));
                 });
                 assert!(editor.region.preview.as_ref().unwrap().error.is_none());
@@ -346,7 +347,8 @@ fn native_clipboard_events_copy_and_paste_complete_region_data_and_focus_protect
     editor.attach(&scene);
     editor.tool = Tool::Region;
     editor.region.cells = BTreeSet::from([[20, 20]]);
-    let output = ctx.run_ui(
+    let output = crate::test_support::run_ui(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Copy],
             ..Default::default()
@@ -367,7 +369,8 @@ fn native_clipboard_events_copy_and_paste_complete_region_data_and_focus_protect
         .unwrap();
     assert!(text.starts_with(CLIPBOARD_PREFIX));
     editor.region.clipboard = None;
-    let _ = ctx.run_ui(
+    let _ = crate::test_support::run_ui(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Paste(text)],
             ..Default::default()
@@ -378,7 +381,8 @@ fn native_clipboard_events_copy_and_paste_complete_region_data_and_focus_protect
     assert_eq!(editor.region.clipboard.as_ref().unwrap().cells.len(), 1);
     editor.tool = Tool::Region;
     let mut value = String::from("text");
-    let _ = ctx.run_ui(
+    let _ = crate::test_support::run_ui(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Paste("ordinary text".into())],
             ..Default::default()

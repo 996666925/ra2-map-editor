@@ -123,7 +123,7 @@ impl MapView {
                 self.p2.stage = 82;
             }
             82 => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.p2.stage = 81;
             }
             81 => {

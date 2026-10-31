@@ -230,7 +230,7 @@ impl MapView {
                 };
                 let rect = if let Some(id) = window {
                     let rect = ctx
-                        .memory(|m| m.area_rect(egui::Id::new(id)))
+                        .memory(|m| m.area_rect(egui::Id::unique(id)))
                         .context("missing dialog bounds")?;
                     ensure!(
                         bounds.expand(2.).contains_rect(rect),
@@ -249,16 +249,11 @@ impl MapView {
                     None
                 };
                 self.ui_smoke.captures.push(serde_json::json!({"panel":name,"logical_size":[size.x,size.y],"pixels_per_point":ctx.pixels_per_point(),"window_rect":rect,"image":file}));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                crate::screen_capture::request(ctx);
                 self.ui_smoke.phase = 2;
             }
             _ => {
-                let capture = ctx.input(|i| {
-                    i.events.iter().find_map(|e| match e {
-                        egui::Event::Screenshot { image, .. } => Some(image.clone()),
-                        _ => None,
-                    })
-                });
+                let capture = crate::screen_capture::take(ctx);
                 let Some(image) = capture else {
                     return Ok(false);
                 };

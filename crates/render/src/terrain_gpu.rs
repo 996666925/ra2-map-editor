@@ -497,7 +497,7 @@ impl TerrainGpu {
             })?;
             rx.recv_timeout(std::time::Duration::from_secs(15))
                 .context("地形 GPU 读回超时")??;
-            let bytes = readback.slice(..).get_mapped_range();
+            let bytes = readback.slice(..).get_mapped_range()?;
             let mut count = 0;
             let mut max_error = 0;
             for y in 0..64 {

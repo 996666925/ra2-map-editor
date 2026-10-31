@@ -122,7 +122,7 @@ pub(super) fn parameter(
                 .show_ui(ui, |ui| {
                     // Persistent egui field, separate per operand, keeps large CSF
                     // catalogs searchable without attaching state to document data.
-                    let id = ui.id().with("filter");
+                    let id = ui.scope_id().with("filter");
                     let mut filter = ui.data_mut(|d| d.get_temp::<String>(id).unwrap_or_default());
                     ui.add(
                         egui::TextEdit::singleline(&mut filter)

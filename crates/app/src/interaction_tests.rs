@@ -4,14 +4,16 @@ use crate::editing::tests::{editor, terrain_scene};
 
 fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::RawInput {
     egui::RawInput {
-        modifiers,
-        events: vec![egui::Event::Key {
-            key,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers,
-        }],
+        events: vec![
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            },
+        ],
         ..Default::default()
     }
 }
@@ -66,26 +68,26 @@ fn shortcuts_switch_tools_but_text_entry_and_open_menus_do_not_edit_the_map() {
     let scene = terrain_scene();
     e.attach(&scene);
     let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
-    let _ = ctx.run_ui(key(egui::Key::R, egui::Modifiers::NONE), |ui| {
+    let _ = crate::test_support::run_ui(&ctx, key(egui::Key::R, egui::Modifiers::NONE), |ui| {
         e.shortcuts(ui.ctx(), &scene)
     });
     assert_eq!(e.tool, Tool::Region);
-    let _ = ctx.run_ui(key(egui::Key::B, egui::Modifiers::ALT), |ui| {
+    let _ = crate::test_support::run_ui(&ctx, key(egui::Key::B, egui::Modifiers::ALT), |ui| {
         e.shortcuts(ui.ctx(), &scene)
     });
     assert_eq!(e.tool, Tool::Region);
     let mut text = String::new();
-    let _ = ctx.run_ui(Default::default(), |ui| {
+    let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
         ui.text_edit_singleline(&mut text).request_focus();
     });
-    let _ = ctx.run_ui(key(egui::Key::B, egui::Modifiers::NONE), |ui| {
+    let _ = crate::test_support::run_ui(&ctx, key(egui::Key::B, egui::Modifiers::NONE), |ui| {
         ui.text_edit_singleline(&mut text);
         e.shortcuts(ui.ctx(), &scene);
     });
     assert_eq!(e.tool, Tool::Region);
     ctx.memory_mut(|m| m.stop_text_input());
-    egui::Popup::open_id(&ctx, egui::Id::new("test-menu"));
-    let _ = ctx.run_ui(key(egui::Key::E, egui::Modifiers::NONE), |ui| {
+    egui::Popup::open_id(&ctx, egui::Id::unique("test-menu"));
+    let _ = crate::test_support::run_ui(&ctx, key(egui::Key::E, egui::Modifiers::NONE), |ui| {
         e.shortcuts(ui.ctx(), &scene)
     });
     assert_eq!(e.tool, Tool::Region);
@@ -100,24 +102,31 @@ fn escape_exits_repeat_placement_and_bracket_keys_clamp_the_brush() {
     let scene = terrain_scene();
     e.attach(&scene);
     e.tool = Tool::Clone;
-    let _ = ctx.run_ui(key(egui::Key::Escape, egui::Modifiers::NONE), |ui| {
-        e.shortcuts(ui.ctx(), &scene)
-    });
+    let _ =
+        crate::test_support::run_ui(&ctx, key(egui::Key::Escape, egui::Modifiers::NONE), |ui| {
+            e.shortcuts(ui.ctx(), &scene)
+        });
     assert_eq!(e.tool, Tool::Select);
     e.tool = Tool::Ore;
     e.radius = 5;
-    let _ = ctx.run_ui(key(egui::Key::CloseBracket, egui::Modifiers::NONE), |ui| {
-        e.shortcuts(ui.ctx(), &scene)
-    });
+    let _ = crate::test_support::run_ui(
+        &ctx,
+        key(egui::Key::CloseBracket, egui::Modifiers::NONE),
+        |ui| e.shortcuts(ui.ctx(), &scene),
+    );
     assert_eq!(e.radius, 5);
-    let _ = ctx.run_ui(key(egui::Key::OpenBracket, egui::Modifiers::NONE), |ui| {
-        e.shortcuts(ui.ctx(), &scene)
-    });
+    let _ = crate::test_support::run_ui(
+        &ctx,
+        key(egui::Key::OpenBracket, egui::Modifiers::NONE),
+        |ui| e.shortcuts(ui.ctx(), &scene),
+    );
     assert_eq!(e.radius, 4);
     e.radius = 1;
-    let _ = ctx.run_ui(key(egui::Key::OpenBracket, egui::Modifiers::NONE), |ui| {
-        e.shortcuts(ui.ctx(), &scene)
-    });
+    let _ = crate::test_support::run_ui(
+        &ctx,
+        key(egui::Key::OpenBracket, egui::Modifiers::NONE),
+        |ui| e.shortcuts(ui.ctx(), &scene),
+    );
     assert_eq!(e.radius, 1);
     drop(e);
     std::fs::remove_dir_all(root).unwrap();
@@ -148,7 +157,7 @@ fn terrain_shortcuts_reveal_the_workspace_and_preserve_text_entry_and_copy() {
     let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
     for &(key_code, mode, _) in &TERRAIN_KEYS {
         e.show_library(1, "Structures", "");
-        let _ = ctx.run_ui(key(key_code, egui::Modifiers::NONE), |ui| {
+        let _ = crate::test_support::run_ui(&ctx, key(key_code, egui::Modifiers::NONE), |ui| {
             e.shortcuts(ui.ctx(), &scene);
         });
         assert_eq!(e.tool, Tool::Terrain);
@@ -156,16 +165,16 @@ fn terrain_shortcuts_reveal_the_workspace_and_preserve_text_entry_and_copy() {
         assert_eq!(e.ui_state.tab, 0);
     }
     let mut text = String::new();
-    let _ = ctx.run_ui(Default::default(), |ui| {
+    let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
         ui.text_edit_singleline(&mut text).request_focus();
     });
-    let _ = ctx.run_ui(key(egui::Key::G, egui::Modifiers::NONE), |ui| {
+    let _ = crate::test_support::run_ui(&ctx, key(egui::Key::G, egui::Modifiers::NONE), |ui| {
         ui.text_edit_singleline(&mut text);
         e.shortcuts(ui.ctx(), &scene);
     });
     assert_eq!(e.terrain_mode, TerrainMode::Plateau);
     ctx.memory_mut(|m| m.stop_text_input());
-    let _ = ctx.run_ui(key(egui::Key::C, egui::Modifiers::COMMAND), |ui| {
+    let _ = crate::test_support::run_ui(&ctx, key(egui::Key::C, egui::Modifiers::COMMAND), |ui| {
         e.shortcuts(ui.ctx(), &scene);
     });
     assert_eq!(e.terrain_mode, TerrainMode::Plateau);

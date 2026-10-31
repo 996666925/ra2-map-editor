@@ -9,7 +9,7 @@ fn navigator_pixels_match_embedded_preview_at_the_same_size() {
     let radar = ra2_map_scene::radar::terrain(&scene).unwrap();
     let size = radar.image.size;
     let mut overview = crate::overview::OverviewOverlay::default();
-    let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         overview.draw(
             ui.painter(),
             &scene,
@@ -22,12 +22,14 @@ fn navigator_pixels_match_embedded_preview_at_the_same_size() {
     let symbols = output
         .textures_delta
         .set
-        .into_iter()
-        .find_map(|(_, delta)| {
-            let egui::ImageData::Color(image) = delta.image;
-            (image.size == size).then_some(image)
+        .values()
+        .flatten()
+        .find_map(|delta| {
+            let egui::ImageData::Color(image) = &delta.image;
+            (image.size == size).then(|| image.clone())
         })
         .unwrap();
+    output.textures_delta.clear();
     let navigator: Vec<_> = radar
         .image
         .pixels
@@ -62,7 +64,7 @@ fn cached_object_geometry_and_navigator_follow_move_history_and_layer_changes() 
     let mut overview = crate::overview::OverviewOverlay::default();
     let rect = egui::Rect::from_min_size(egui::pos2(30., 40.), egui::vec2(256., 128.));
     let mut draw = |editor: &Editor| {
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             overview.draw(
                 ui.painter(),
                 &scene,
@@ -72,17 +74,20 @@ fn cached_object_geometry_and_navigator_follow_move_history_and_layer_changes() 
                 scene.bounds,
             );
         });
-        output
+        let pixels = output
             .textures_delta
             .set
-            .into_iter()
-            .find_map(|(_, delta)| {
+            .values()
+            .flatten()
+            .find_map(|delta| {
                 if delta.image.size() != [256, 128] {
                     return None;
                 }
-                let egui::ImageData::Color(image) = delta.image;
+                let egui::ImageData::Color(image) = &delta.image;
                 Some(image.pixels.clone())
-            })
+            });
+        output.textures_delta.clear();
+        pixels
     };
     let before = draw(&editor).unwrap();
     assert!(before.iter().any(|p| p.a() != 0));
@@ -316,7 +321,7 @@ fn template_height_is_frozen_on_press_and_invalid_preview_does_not_write() {
     );
     let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
     editor.template_level = Some(15);
-    let _ = ctx.run_ui(Default::default(), |ui| {
+    let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
         let rect = ui.max_rect();
         editor.terrain_preview(
             ui.painter(),
@@ -377,7 +382,7 @@ fn terrain_template_ghost_matches_saved_tile_position_at_multiple_heights_and_zo
                 center: scene.bounds.center(),
                 zoom,
             };
-            let output = ctx.run_ui(Default::default(), |ui| {
+            let output = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
                 editor.terrain_preview(ui.painter(), &scene, rect, &camera, Some(at));
             });
             let mesh = output

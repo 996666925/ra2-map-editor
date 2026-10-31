@@ -64,7 +64,7 @@ impl Target {
         rx.recv_timeout(std::time::Duration::from_secs(15))
             .context("视口 GPU 读回超时")??;
         let pixels = {
-            let mapped = buffer.slice(..).get_mapped_range();
+            let mapped = buffer.slice(..).get_mapped_range()?;
             mapped
                 .chunks_exact(row as usize)
                 .flat_map(|r| &r[..size[0] as usize * 4])
@@ -172,7 +172,7 @@ impl TerrainGpu {
                 })?;
                 rx.recv_timeout(std::time::Duration::from_secs(15))
                     .context("场景 GPU 读回超时")??;
-                let bytes = readback.slice(..).get_mapped_range();
+                let bytes = readback.slice(..).get_mapped_range()?;
                 let expected = scene.visual.raster(rect, [128, 128], options)?;
                 let error = bytes
                     .iter()

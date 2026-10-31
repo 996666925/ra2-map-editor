@@ -142,7 +142,7 @@ mod tests {
                 zoom,
             };
             let mut hit = None;
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ = crate::test_support::run_ui(&ctx, egui::RawInput::default(), |ui| {
                 hit = overlay.draw(
                     ui.painter(),
                     doc,
