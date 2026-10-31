@@ -37,6 +37,40 @@ fn navigator_point(bounds: egui::Rect, rect: egui::Rect, pointer: egui::Pos2) ->
 }
 
 impl MapView {
+    /// Run after all widgets so this frame's last text or number update is
+    /// included in the snapshot. Dialogs with independent files keep ownership.
+    pub(crate) fn finish_save(&mut self, ctx: &egui::Context) {
+        let requested = self.editor.save_requested.take();
+        if self.pending.is_some()
+            || self.loading
+            || self.editor.structural_refresh
+            || self.workbench.new_map
+            || self.workbench.random_map
+            || self.workbench.settings
+            || self.workbench.help
+            || self.workbench.playtest
+            || self.workbench.mission.campaign.open
+        {
+            return;
+        }
+        let Some(as_new) = requested.or_else(|| crate::form_edit::take_save_shortcut(ctx)) else {
+            return;
+        };
+        let Some(scene) = &self.scene else { return };
+        self.workbench
+            .map_settings
+            .finish_for_save(ctx, &mut self.editor, scene);
+        self.editor.finish_property_for_save(ctx, scene);
+        self.workbench
+            .mission
+            .finish_for_save(ctx, &mut self.editor, scene);
+        if self.workbench.map_settings.allow_leave()
+            && self.workbench.mission.allow_leave()
+            && self.editor.check_property_draft()
+        {
+            self.editor.save(as_new);
+        }
+    }
     pub(super) fn editing_blocked(&self) -> bool {
         self.pending.is_some()
             || self.workbench.new_map
@@ -76,7 +110,7 @@ impl MapView {
         }
         if !ui.ctx().text_edit_focused()
             && !self.editing_blocked()
-            && !egui::Popup::is_any_open(ui.ctx())
+            && !crate::form_edit::popup_open(ui.ctx())
         {
             if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::N)) {
                 self.show_new_map();
@@ -115,7 +149,7 @@ impl MapView {
                 )
                 .clicked()
             {
-                self.editor.save(true);
+                self.editor.save_requested = Some(true);
                 ui.close();
             }
             if ui
@@ -688,7 +722,7 @@ impl MapView {
         if self.pending.is_none()
             && !self.workbench.new_map
             && !self.workbench.random_map
-            && !egui::Popup::is_any_open(ctx)
+            && !crate::form_edit::popup_open(ctx)
             && (self.workbench.help
                 || self.workbench.playtest
                 || self.workbench.settings
@@ -774,7 +808,7 @@ impl MapView {
                             && let Some(path) = rfd::FileDialog::new().pick_folder()
                         { *directory = path.display().to_string(); }
                         ui.label("地图名称");
-                        ui.add(egui::TextEdit::singleline(&mut self.workbench.new_options.title).desired_width(f32::INFINITY));
+                        ui.add(egui::TextEdit::singleline(&mut self.workbench.new_options.title).desired_width(f32::INFINITY)).accessible_name("地图名称");
                         let options = &mut self.workbench.new_options;
                         egui::Grid::new("new-map-fields").num_columns(2).spacing([20., 8.]).show(ui, |ui| {
                             ui.label("地图环境");
@@ -788,16 +822,16 @@ impl MapView {
                                 });
                             ui.end_row();
                             ui.label("地图宽度");
-                            ui.add(egui::DragValue::new(&mut options.width).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).suffix(" 格"));
+                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.width).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).suffix(" 格"), "地图宽度");
                             ui.end_row();
                             ui.label("地图高度");
-                            ui.add(egui::DragValue::new(&mut options.height).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).suffix(" 格"));
+                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.height).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).suffix(" 格"), "地图高度");
                             ui.end_row();
                             ui.label("初始地面高度");
-                            ui.add(egui::DragValue::new(&mut options.level).range(0..=14).suffix(" 层"));
+                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.level).range(0..=14).suffix(" 层"), "初始地面高度");
                             ui.end_row();
                             ui.label("玩家起点");
-                            ui.add(egui::DragValue::new(&mut options.players).range(2..=MAX_PLAYERS).suffix(" 个"));
+                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.players).range(2..=MAX_PLAYERS).suffix(" 个"), "玩家起点");
                             ui.end_row();
                         });
                         ui.small(format!("宽＋高 ≤ {MAX_MAP_SPAN}，例如 256 × 256 或 {MAX_MAP_DIMENSION} × {MIN_MAP_DIMENSION}。"));

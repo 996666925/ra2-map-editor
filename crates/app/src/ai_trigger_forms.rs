@@ -33,7 +33,7 @@ pub(super) fn form(
                 } else {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(label);
-                        ui.text_edit_singleline(&mut f[i]);
+                        ui.text_edit_singleline(&mut f[i]).accessible_name(label);
                     });
                 }
             });
@@ -49,7 +49,27 @@ pub(super) fn form(
         // scalar selection uses the same cached catalog as mission parameters.
         ui.horizontal_wrapped(|ui| {
             ui.label("对象类型（数量条件）");
-            ui.text_edit_singleline(&mut f[5]);
+            let choices: Vec<_> = scene
+                .catalog
+                .object_types
+                .iter()
+                .filter(|(section, _)| {
+                    matches!(
+                        section.as_str(),
+                        "Structures" | "Units" | "Infantry" | "Aircraft"
+                    )
+                })
+                .flat_map(|(_, ids)| ids)
+                .map(|id| (id.clone(), scene.catalog.object_label(id).into_owned()))
+                .collect();
+            crate::completion::reference(
+                ui,
+                ui.make_persistent_id("ai-type-text"),
+                &mut f[5],
+                &choices,
+                "对象类型（数量条件）",
+                155.,
+            );
             egui::ComboBox::from_id_salt("ai-type")
                 .selected_text("选择类型…")
                 .show_ui(ui, |ui| {
@@ -74,7 +94,7 @@ pub(super) fn form(
             let old = (amount, op);
             ui.horizontal_wrapped(|ui| {
                 ui.label("比较数量 / 资金");
-                ui.add(egui::DragValue::new(&mut amount));
+                crate::form_edit::number(ui, egui::DragValue::new(&mut amount), "比较数量 / 资金");
                 egui::ComboBox::from_id_salt("ai-comparison")
                     .selected_text(format!("运算 {op}"))
                     .show_ui(ui, |ui| {

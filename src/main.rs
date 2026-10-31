@@ -30,6 +30,7 @@ fn main() -> Result<()> {
     let smoke = options.smoke_output.is_some();
     let native = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
+        system_font_fallback: true,
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("尤里的复仇地图编辑器")
             .with_inner_size([1280.0, 800.0])

@@ -140,12 +140,11 @@ impl BaseNodesUi {
                     .unwrap_or(0);
                 ui.horizontal(|ui| {
                     ui.label(crate::labels::field("PercentBuilt")).on_hover_text("PercentBuilt");
-                    if ui
-                        .add(
+                    if crate::form_edit::number(ui,
                             egui::DragValue::new(&mut percent)
                                 .range(0..=100)
                                 .suffix(" %"),
-                        )
+                            "初始建成比例")
                         .changed()
                     {
                         let result = editor.doc.as_mut().unwrap().set_ini(
@@ -340,7 +339,7 @@ impl BaseNodesUi {
             return;
         }
         if painter.ctx().input(|i| i.key_pressed(egui::Key::Escape))
-            && !egui::Popup::is_any_open(painter.ctx())
+            && !crate::form_edit::popup_open(painter.ctx())
             && !painter.ctx().text_edit_focused()
         {
             if !self.cancel_drag() {

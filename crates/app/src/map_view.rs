@@ -486,13 +486,7 @@ impl MapView {
         };
         let editing = !self.editing_blocked();
         if editing {
-            if self.workbench.mission.has_draft()
-                && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S))
-            {
-                self.workbench.mission.allow_leave();
-            } else {
-                self.editor.shortcuts(ui.ctx(), scene);
-            }
+            self.editor.shortcuts(ui.ctx(), scene);
         }
         if scene.images.is_empty() {
             ui.centered_and_justified(|ui| {
@@ -549,7 +543,7 @@ impl MapView {
         self.workbench.canvas_extent = Some(rect.size());
         self.workbench.canvas_rect = Some(rect);
         let keyboard =
-            editing && !ui.ctx().text_edit_focused() && !egui::Popup::is_any_open(ui.ctx());
+            editing && !ui.ctx().text_edit_focused() && !crate::form_edit::popup_open(ui.ctx());
         if keyboard && (response.hovered() || response.has_focus()) {
             ui.input_mut(|i| {
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::Home) {

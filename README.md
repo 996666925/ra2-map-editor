@@ -74,6 +74,10 @@ VERA20k 通过 `vendor/vera20k` Git 子模块固定版本；切换编辑器版�
 
 一笔操作形成一次撤销。后台预览更新期间保留当前地图画面，准备完成后切换。对象属性、任务参数和光照在结束输入后自动生效：文本按回车或移开焦点，数值拖动松手后生效，勾选和下拉选择无需额外确认。每次完成的编辑可撤销；无效输入留在表单中提示，可修正或取消本次输入。地图尺寸裁切仍需检查预览并确认应用；保存地图继续使用 Ctrl+S。
 
+对象类型、所属方和任务引用字段支持输入补全，可搜索 ID 或显示名称，使用方向键选择、Enter / Tab 接受、Esc 关闭候选；仍可手工填写模组扩展值，也可使用原有下拉列表。编辑属性、任务参数和光照时，Ctrl+S / Ctrl+Shift+S 会先提交有效输入再保存 / 另存；无效值与未应用的尺寸草稿会阻止保存。输入框保留自己的文字撤销、复制和粘贴操作。
+
+界面按需使用系统字体补全中文、多语言文字和 Emoji；可通过 `--font PATH` 优先使用指定字体。原生界面已启用 AccessKit，并为引用、数值和光照等表单输入补充可访问名称。
+
 保存会内嵌最长边不超过 512 像素的 `PreviewPack`，小地图不放大。预览与右上角“地图导航”共用地形雷达色、资源、建筑、单位和玩家起点标记，按平面地图坐标保持完整范围和比例。只裁去外围半格边角，高台、悬崖和地形高度不会缩小取景范围。导航点击会按目标格高度定位到画布。内嵌预览始终包含全部标记，不包含导航视口框；批量发布使用相同生成方式。已有预览在重新保存时更新。保存后会重开校验，保留最多三份 `.yr-editor-*.bak` 备份。空闲后自动生成恢复快照；Windows 默认位置为 `%LOCALAPPDATA%/ra2-map-editor/recovery/`。恢复后需要手动保存。
 
 通过“文件 → 导出高清地图预览图 PNG…”选择保存位置，可使用游戏资源在后台导出完整地图场景，最长边 4096 像素，小地图保持原始分辨率。导出包含未保存的修改、House 换色和地图光照，不受编辑器图层与光照开关影响。地图自定义预览图片中的文字、装饰等不会参与重新渲染。
@@ -124,6 +128,14 @@ target/release/ra2-map-editor.exe publish --preset examples/presets/publish.exam
 cargo test --locked --workspace
 cargo clippy --locked --workspace --no-deps --all-targets -- -D warnings
 ./tools/format_workspace.ps1 -Check
+```
+
+补全与表单快捷键的 `egui_kittest` 测试包含控件名称检查和缺字检查。安装 `ffmpeg` 并加入 PATH 后，可选择录制补全交互过程，MP4 写入 `target/ui-tests/recordings/`：
+
+```powershell
+$env:KITTEST_RECORD = '1'
+cargo test --locked -p ra2-map-app --features ui-test-video completion::tests -- --test-threads=1
+Remove-Item Env:KITTEST_RECORD
 ```
 
 格式化时去掉 `-Check`。使用该脚本可只处理编辑器 workspace，避免 `cargo fmt --all` 遍历本地引擎依赖。

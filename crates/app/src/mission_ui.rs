@@ -134,10 +134,28 @@ impl MissionUi {
         editor: &mut Editor,
         scene: &MapScene,
     ) {
+        self.finish_edit_inner(ctx, editor, scene, false);
+    }
+    pub(crate) fn finish_for_save(
+        &mut self,
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        scene: &MapScene,
+    ) {
+        self.finish_edit_inner(ctx, editor, scene, true);
+    }
+    fn finish_edit_inner(
+        &mut self,
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        scene: &MapScene,
+        save: bool,
+    ) {
         if self.dirty()
             && !editor.stroking
             && self.pick.is_none()
-            && (!self.open
+            && (save
+                || !self.open
                 || ctx.input(|i| i.viewport().close_requested())
                 || self.completion.ready(ctx))
         {
@@ -783,7 +801,8 @@ impl MissionUi {
         }
         if self.kind.section_definition() {
             ui.horizontal_wrapped(|ui| {
-                ui.text_edit_singleline(&mut self.new_key);
+                ui.text_edit_singleline(&mut self.new_key)
+                    .accessible_name("新字段名称");
                 if ui.button("添加字段").clicked() && !self.new_key.is_empty() {
                     self.draft.entry(self.new_key.clone()).or_default();
                     self.new_key.clear();
@@ -866,19 +885,33 @@ fn reference_input(
         _ => None,
     };
     let width = (ui.available_width() - if kind.is_some() { 84. } else { 0. }).clamp(70., 220.);
-    ui.add(egui::TextEdit::singleline(value).desired_width(width));
-    if let Some(kind) = kind {
+    let choices: Vec<_> = kind
+        .into_iter()
+        .flat_map(|kind| definitions.candidates(doc, kind))
+        .map(|(id, external)| {
+            let source = if external {
+                definitions.source.as_str()
+            } else {
+                "地图"
+            };
+            (id.clone(), format!("{id} · {source}"))
+        })
+        .collect();
+    crate::completion::reference(
+        ui,
+        ui.make_persistent_id((key, "text")),
+        value,
+        &choices,
+        crate::labels::field(key),
+        width,
+    );
+    if kind.is_some() {
         egui::ComboBox::from_id_salt(key)
             .selected_text("选择")
             .width(70.)
             .show_ui(ui, |ui| {
-                for (id, external) in definitions.candidates(doc, kind) {
-                    let label = if external {
-                        format!("{id} · {}", definitions.source)
-                    } else {
-                        format!("{id} · 地图")
-                    };
-                    ui.selectable_value(value, id, label);
+                for (id, label) in &choices {
+                    ui.selectable_value(value, id.clone(), label);
                 }
             });
     }
@@ -910,7 +943,7 @@ fn csv_form(
         *value = fields.join(",");
     }
     egui::CollapsingHeader::new("原始 CSV").show(ui, |ui| {
-        ui.text_edit_singleline(value);
+        ui.text_edit_singleline(value).accessible_name("原始 CSV");
     });
 }
 fn list_editor(
@@ -1002,7 +1035,8 @@ fn list_editor(
                     for (col, v) in row.iter_mut().enumerate() {
                         ui.horizontal(|ui| {
                             ui.label(format!("字段 {col}"));
-                            ui.text_edit_singleline(v);
+                            ui.text_edit_singleline(v)
+                                .accessible_name(format!("字段 {col}"));
                         });
                     }
                 });
@@ -1038,7 +1072,8 @@ fn list_editor(
         ui.small("存在扩展或无法识别的字段，保留原文。");
     }
     egui::CollapsingHeader::new("原文（含数量字段）").show(ui, |ui| {
-        ui.text_edit_singleline(value);
+        ui.text_edit_singleline(value)
+            .accessible_name("原文（含数量字段）");
     });
 }
 /// Include removed slots and recover legacy tokens moved between list keys.
@@ -1119,6 +1154,46 @@ fn preserve_csv(original: Option<&[u8]>, draft: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saving_a_focused_task_field_commits_once_and_preserves_text_focus() {
+        let (mut editor, ctx, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        let mut form = MissionUi {
+            open: true,
+            kind: Kind::Basic,
+            selected: "Basic".into(),
+            ..Default::default()
+        };
+        form.load(&editor);
+        let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        form.draft.insert("Author".into(), "New author".into());
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+            ui.text_edit_singleline(form.draft.get_mut("Author").unwrap())
+                .request_focus();
+            form.completion.observe(ui.ctx());
+            form.finish_edit(ui.ctx(), &mut editor, &scene);
+            assert!(form.dirty());
+            form.finish_for_save(ui.ctx(), &mut editor, &scene);
+        });
+        assert!(!form.dirty());
+        assert!(ctx.text_edit_focused());
+        let after = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        form.finish_for_save(&ctx, &mut editor, &scene);
+        editor.history(false, &scene);
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            before
+        );
+        editor.history(true, &scene);
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            after
+        );
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn new_empty_fields_survive_until_filled_without_committing_empty_values() {
         let (mut editor, ctx, root) = crate::editing::tests::editor();

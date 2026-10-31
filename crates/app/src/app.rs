@@ -57,7 +57,6 @@ pub struct EditorApp {
     renderer: Arc<PreviewRenderer>,
     gpu: egui_wgpu::RenderState,
     cameras: [Camera; 2],
-    font_loaded: bool,
     smoke_output: Option<PathBuf>,
     smoke_outcome: SmokeOutcome,
     screenshot_requested: bool,
@@ -73,7 +72,7 @@ impl EditorApp {
         options: LaunchOptions,
         outcome: SmokeOutcome,
     ) -> Result<Self> {
-        let font_loaded = install_font(&cc.egui_ctx, options.font)?;
+        install_font(&cc.egui_ctx, options.font)?;
         crate::ui_theme::install(&cc.egui_ctx);
         let gpu = cc.wgpu_render_state.clone().context("P0 需要 wgpu 后端")?;
         log::info!(
@@ -132,7 +131,6 @@ impl EditorApp {
             renderer,
             gpu,
             cameras: Default::default(),
-            font_loaded,
             smoke_output: options.smoke_output,
             smoke_outcome: outcome,
             screenshot_requested: false,
@@ -402,7 +400,8 @@ impl EditorApp {
             ui.label(format!("已挂载 {} 个归档", loaded.assets.archive_count));
             ui.label(format!("{} 个地形索引槽位", loaded.assets.tileset_slots));
         }
-        if !self.font_loaded {
+        if !ui.fonts_mut(|fonts| fonts.has_glyphs(&egui::FontId::proportional(13.), "地图编辑器"))
+        {
             ui.colored_label(
                 egui::Color32::YELLOW,
                 "未找到中文字体，可通过 --font 指定字体文件。",
@@ -605,6 +604,9 @@ impl eframe::App for EditorApp {
                     });
                 }
             });
+        if self.show_map {
+            self.map.finish_save(ui.ctx());
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -703,35 +705,25 @@ fn image_panel(
     ));
 }
 
-fn install_font(ctx: &egui::Context, explicit: Option<PathBuf>) -> Result<bool> {
-    let candidates = if let Some(path) = explicit {
+fn install_font(ctx: &egui::Context, explicit: Option<PathBuf>) -> Result<()> {
+    // eframe's system_fonts provider discovers fallback fonts on every native
+    // platform. An explicit override remains first in both font families.
+    if let Some(path) = explicit {
         ensure!(path.is_file(), "指定的字体不存在：{}", path.display());
-        vec![path]
-    } else {
-        let mut paths = Vec::new();
-        if let Some(windir) = std::env::var_os("WINDIR") {
-            paths.push(PathBuf::from(windir).join("Fonts/msyh.ttc"));
-        }
-        paths.extend([
-            PathBuf::from("/System/Library/Fonts/PingFang.ttc"),
-            PathBuf::from("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-        ]);
-        paths
-    };
-    for path in candidates {
-        if path.is_file() {
-            let bytes = std::fs::read(&path)
-                .with_context(|| format!("读取字体失败：{}", path.display()))?;
-            let mut fonts = egui::FontDefinitions::default();
+        let bytes =
+            std::fs::read(&path).with_context(|| format!("读取字体失败：{}", path.display()))?;
+        let mut fonts = egui::FontDefinitions::default();
+        fonts
+            .font_data
+            .insert("user".into(), Arc::new(egui::FontData::from_owned(bytes)));
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
             fonts
-                .font_data
-                .insert("cjk".into(), Arc::new(egui::FontData::from_owned(bytes)));
-            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                fonts.families.entry(family).or_default().push("cjk".into());
-            }
-            ctx.set_fonts(fonts);
-            return Ok(true);
+                .families
+                .entry(family)
+                .or_default()
+                .insert(0, "user".into());
         }
+        ctx.set_fonts(fonts);
     }
-    Ok(false)
+    Ok(())
 }

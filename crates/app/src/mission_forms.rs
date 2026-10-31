@@ -20,7 +20,6 @@ pub(super) fn parameter(
     let mut pick = false;
     ui.horizontal_wrapped(|ui| {
         ui.label(p.label);
-        ui.add(egui::TextEdit::singleline(value).desired_width(155.));
         let mut choices = Vec::new();
         let mut resource_choices = None;
         match p.kind {
@@ -114,6 +113,14 @@ pub(super) fn parameter(
             }
         }
         let choices = resource_choices.unwrap_or(&choices);
+        crate::completion::reference(
+            ui,
+            ui.make_persistent_id(("parameter", p.index)),
+            value,
+            choices,
+            p.label,
+            155.,
+        );
         if !choices.is_empty() {
             egui::ComboBox::from_id_salt(p.index)
                 .selected_text("选择…")
@@ -128,7 +135,8 @@ pub(super) fn parameter(
                         egui::TextEdit::singleline(&mut filter)
                             .hint_text("搜索名称或编号…")
                             .desired_width(f32::INFINITY),
-                    );
+                    )
+                    .accessible_name(format!("搜索{}", p.label));
                     let lower = filter.to_lowercase();
                     for (token, label) in choices
                         .iter()
@@ -240,9 +248,12 @@ pub(super) fn slots(
                     let mut count = fields[0].parse::<i32>().unwrap_or(1);
                     ui.horizontal(|ui| {
                         ui.label("数量");
-                        if ui
-                            .add(egui::DragValue::new(&mut count).range(1..=i32::MAX))
-                            .changed()
+                        if crate::form_edit::number(
+                            ui,
+                            egui::DragValue::new(&mut count).range(1..=i32::MAX),
+                            "数量",
+                        )
+                        .changed()
                         {
                             fields[0] = count.to_string();
                         }
@@ -266,7 +277,7 @@ pub(super) fn slots(
                 }
             }
             egui::CollapsingHeader::new("原始行").show(ui, |ui| {
-                ui.text_edit_singleline(value);
+                ui.text_edit_singleline(value).accessible_name("原始行");
             });
             ui.separator();
         });

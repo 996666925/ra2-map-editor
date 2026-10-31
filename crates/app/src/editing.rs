@@ -144,6 +144,7 @@ pub struct Editor {
     property_health: u16,
     property_facing: u8,
     property_completion: crate::form_edit::EditCompletion,
+    pub(crate) save_requested: Option<bool>,
     property_error: String,
 }
 impl Editor {
@@ -176,6 +177,7 @@ impl Editor {
             infantry_subcell: 0,
             property_extra: BTreeMap::new(),
             property_completion: Default::default(),
+            save_requested: None,
             property_error: String::new(),
             terrain_mode: TerrainMode::Template,
             auto_lat: true,
@@ -566,17 +568,15 @@ impl Editor {
         }
     }
     pub fn shortcuts(&mut self, ctx: &egui::Context, scene: &MapScene) {
-        if ctx.text_edit_focused() || egui::Popup::is_any_open(ctx) {
+        if ctx.text_edit_focused() || crate::form_edit::popup_open(ctx) {
             return;
         }
-        let (undo, redo, save, save_as, cancel, delete) = ctx.input(|i| {
+        let (undo, redo, cancel, delete) = ctx.input(|i| {
             (
                 i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::Z),
                 i.modifiers.command
                     && (i.key_pressed(egui::Key::Y)
                         || (i.modifiers.shift && i.key_pressed(egui::Key::Z))),
-                i.modifiers.command && i.key_pressed(egui::Key::S),
-                i.modifiers.shift,
                 i.key_pressed(egui::Key::Escape),
                 i.key_pressed(egui::Key::Delete),
             )
@@ -587,13 +587,6 @@ impl Editor {
         }
         if undo || redo {
             self.history(redo, scene);
-        }
-        if save {
-            if self.stroking {
-                self.status = "请先松开鼠标完成当前一笔，再保存。".into();
-            } else {
-                self.save(save_as);
-            }
         }
         self.tool_shortcuts(ctx);
         if self.stroking {

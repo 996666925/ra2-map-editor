@@ -64,9 +64,16 @@ impl Editor {
         }
     }
     pub(crate) fn finish_property_edit(&mut self, ctx: &egui::Context, scene: &MapScene) {
+        self.finish_property_edit_inner(ctx, scene, false);
+    }
+    pub(crate) fn finish_property_for_save(&mut self, ctx: &egui::Context, scene: &MapScene) {
+        self.finish_property_edit_inner(ctx, scene, true);
+    }
+    fn finish_property_edit_inner(&mut self, ctx: &egui::Context, scene: &MapScene, save: bool) {
         if !self.stroking
             && self.object_properties_dirty()
-            && (ctx.input(|i| i.viewport().close_requested())
+            && (save
+                || ctx.input(|i| i.viewport().close_requested())
                 || self.property_completion.ready(ctx))
             && let Some((id, record)) = self
                 .selected
@@ -116,10 +123,17 @@ impl Editor {
                     ui.selectable_value(value, house.clone(), house);
                 }
             });
-        ui.add(
-            egui::TextEdit::singleline(value)
-                .desired_width(ui.available_width())
-                .hint_text("所属方 ID"),
+        let choices: Vec<_> = houses
+            .iter()
+            .map(|house| (house.clone(), house.clone()))
+            .collect();
+        crate::completion::reference(
+            ui,
+            ui.make_persistent_id((id, "text")),
+            value,
+            &choices,
+            "所属方 ID",
+            ui.available_width(),
         );
     }
     pub(super) fn apply_object_properties(
@@ -238,7 +252,22 @@ impl Editor {
         if r.section != "Waypoints" {
             ui.small("修改自动生效；文本按回车或移开焦点，数值拖动松手后生效。Ctrl+Z 撤销。");
             ui.label("类型");
-            ui.text_edit_singleline(&mut self.property_type);
+            let types: Vec<_> = scene
+                .catalog
+                .object_types
+                .get(&r.section)
+                .into_iter()
+                .flatten()
+                .map(|id| (id.clone(), scene.catalog.object_label(id).into_owned()))
+                .collect();
+            crate::completion::reference(
+                ui,
+                ui.make_persistent_id("object-type"),
+                &mut self.property_type,
+                &types,
+                "对象类型 ID",
+                ui.available_width(),
+            );
             ui.small(scene.catalog.object_name(&self.property_type));
             if !matches!(r.section.as_str(), "Terrain" | "Smudge") {
                 let houses = self.houses(scene);
@@ -262,20 +291,21 @@ impl Editor {
                                 }
                                 Kind::Number(min, max) => {
                                     let mut n = value.parse::<i32>().unwrap_or(min);
-                                    if ui
-                                        .add(
-                                            egui::DragValue::new(&mut n)
-                                                .range(min..=max)
-                                                .prefix(format!("{}  ", field.name)),
-                                        )
-                                        .changed()
+                                    if crate::form_edit::number(
+                                        ui,
+                                        egui::DragValue::new(&mut n)
+                                            .range(min..=max)
+                                            .prefix(format!("{}  ", field.name)),
+                                        field.name,
+                                    )
+                                    .changed()
                                     {
                                         *value = n.to_string();
                                     }
                                 }
                                 Kind::Text => {
                                     ui.label(field.name);
-                                    ui.text_edit_singleline(value);
+                                    ui.text_edit_singleline(value).accessible_name(field.name);
                                 }
                             }
                         }

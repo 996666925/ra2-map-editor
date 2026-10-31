@@ -1,4 +1,7 @@
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, RichText, Stroke, Vec2};
+use egui::class::HasClasses as _;
+use egui::theme::{DefaultStyle, StyleProvider};
+use egui::widget_style::{ButtonStyle, StyleArgs, WidgetState};
 
 pub const BACKGROUND: Color32 = Color32::from_rgb(17, 21, 26);
 pub const PANEL: Color32 = Color32::from_rgb(25, 30, 36);
@@ -75,6 +78,24 @@ pub fn install(ctx: &egui::Context) {
     v.widgets.open = v.widgets.hovered;
     style.visuals = v;
     ctx.set_global_style(style);
+    ctx.add_widget_theme::<ButtonStyle>(EditorButtons);
+}
+
+struct EditorButtons;
+impl StyleProvider<ButtonStyle> for EditorButtons {
+    fn style(&mut self, args: &StyleArgs<'_>) -> ButtonStyle {
+        let mut style: ButtonStyle = DefaultStyle.style(args);
+        if args.has_class("editor-primary") {
+            style.atom_layout.frame.fill = match args.state {
+                WidgetState::Hovered => ACCENT.gamma_multiply(1.1),
+                WidgetState::Active => ACCENT.gamma_multiply(0.85),
+                _ => ACCENT,
+            };
+            style.atom_layout.frame.stroke = Stroke::NONE;
+            style.atom_layout.text_style.color = BACKGROUND;
+        }
+        style
+    }
 }
 pub fn panel_frame() -> egui::Frame {
     egui::Frame::new()
@@ -100,8 +121,7 @@ pub fn window<'a>(ctx: &egui::Context, title: &str, id: &str, size: Vec2) -> egu
 
 pub fn primary(text: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(text).color(BACKGROUND).strong())
-        .fill(ACCENT)
-        .stroke(Stroke::NONE)
+        .with_class("editor-primary")
         .min_size(egui::vec2(90., 30.))
 }
 
@@ -112,6 +132,7 @@ pub fn path_entry(ui: &mut egui::Ui, value: &mut String, hint: &str, browse: &st
             [width, 28.],
             egui::TextEdit::singleline(value).hint_text(hint),
         )
+        .accessible_name(hint)
         .on_hover_text(value.as_str());
         ui.add_sized([68., 28.], egui::Button::new(browse))
             .clicked()
@@ -329,6 +350,26 @@ pub fn button(
     width: f32,
     selected: bool,
 ) -> egui::Response {
+    let name = if text.is_empty() {
+        match kind {
+            Icon::Undo => "撤销",
+            Icon::Redo => "重做",
+            Icon::Select => "选择",
+            Icon::Terrain => "地形",
+            Icon::Ore => "矿石",
+            Icon::Gem => "宝石",
+            Icon::Erase => "擦除",
+            Icon::Building => "建筑",
+            Icon::Flag => "航点",
+            Icon::Move => "移动",
+            Icon::Pick => "吸管",
+            Icon::Folder => "打开",
+            Icon::Save => "保存",
+            Icon::Play => "试玩",
+        }
+    } else {
+        text
+    };
     let response = ui
         .push_id(("icon-button", kind as u8, text), |ui| {
             ui.add_sized([width, 32.], egui::Button::new("").selected(selected))
@@ -365,7 +406,34 @@ pub fn button(
         );
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, text)
+        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, name)
     });
-    response
+    response.accessible_name(name)
+}
+
+#[cfg(all(test, feature = "ui-test-video"))]
+mod tests {
+    #[test]
+    fn primary_button_text_is_visible_with_the_editor_theme() {
+        let rect = std::cell::Cell::new(eframe::egui::Rect::NOTHING);
+        let mut harness = crate::test_support::harness().build_ui(|ui| {
+            rect.set(ui.add(super::primary("Create map")).rect);
+        });
+        harness.run();
+        let image = harness.render().unwrap();
+        let inside = rect.get().shrink(8.);
+        let dark_pixels = image
+            .enumerate_pixels()
+            .filter(|(x, y, pixel)| {
+                inside.contains(eframe::egui::pos2(*x as f32, *y as f32))
+                    && pixel[0] < 80
+                    && pixel[1] < 80
+                    && pixel[2] < 80
+            })
+            .count();
+        assert!(
+            dark_pixels > 20,
+            "primary button text disappeared: {dark_pixels} dark pixels"
+        );
+    }
 }

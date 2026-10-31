@@ -58,7 +58,7 @@ impl Editor {
                 .on_hover_text("保存当前地图  Ctrl+S")
                 .clicked()
             {
-                self.save(false);
+                self.save_requested = Some(false);
             }
         });
         let (undo, redo) = self

@@ -81,7 +81,7 @@ impl MapView {
                         choice(ui, "宽度档位", &mut t.width, &SIZES);
                         choice(ui, "高度档位", &mut t.height, &SIZES);
                         ui.label("玩家起点");
-                        ui.add(egui::DragValue::new(&mut t.num_players).range(2..=i32::from(crate::new_map::MAX_PLAYERS)).suffix(" 个"));
+                        crate::form_edit::number(ui, egui::DragValue::new(&mut t.num_players).range(2..=i32::from(crate::new_map::MAX_PLAYERS)).suffix(" 个"), "玩家起点");
                         ui.end_row();
                         for (label, value) in [
                             ("水域规模", &mut t.water_amount),
@@ -91,14 +91,14 @@ impl MapView {
                             ("起点分散程度", &mut t.tiberium_layout),
                         ] {
                             ui.label(label);
-                            ui.add(egui::Slider::new(value, 0..=100));
+                            ui.add(egui::Slider::new(value, 0..=100)).accessible_name(label);
                             ui.end_row();
                         }
                         ui.label("矿区");
                         ui.checkbox(&mut options.ore, "生成矿石资源");
                         ui.end_row();
                         ui.label("资源丰度");
-                        ui.add_enabled(options.ore, egui::Slider::new(&mut t.tiberium, 1..=100));
+                        ui.add_enabled(options.ore, egui::Slider::new(&mut t.tiberium, 1..=100)).accessible_name("资源丰度");
                         ui.end_row();
                         ui.label("宝石");
                         let mut gems = t.resources == 3;
@@ -111,7 +111,7 @@ impl MapView {
                         ui.end_row();
                         ui.label("随机种子");
                         ui.horizontal(|ui| {
-                            ui.add(egui::DragValue::new(&mut t.seed).range(0..=65535));
+                            crate::form_edit::number(ui, egui::DragValue::new(&mut t.seed).range(0..=65535), "随机种子");
                             if ui.button("换一个").clicked() { t.seed = fresh_seed(); }
                         });
                         ui.end_row();

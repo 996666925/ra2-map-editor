@@ -8,6 +8,7 @@ use ra2_map_scene::map;
 pub mod app;
 mod base_nodes_ui;
 mod campaign_ui;
+mod completion;
 mod editing;
 mod form_edit;
 mod labels;

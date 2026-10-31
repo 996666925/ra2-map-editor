@@ -74,12 +74,29 @@ impl MapSettingsUi {
         editor: &mut Editor,
         scene: &MapScene,
     ) {
+        self.finish_lighting_inner(ctx, editor, scene, false);
+    }
+    pub(crate) fn finish_for_save(
+        &mut self,
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        scene: &MapScene,
+    ) {
+        self.finish_lighting_inner(ctx, editor, scene, true);
+    }
+    fn finish_lighting_inner(
+        &mut self,
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        scene: &MapScene,
+        save: bool,
+    ) {
         if self.light_editing
             && self.tab == 1
             && self.light != self.original_light
             && self.options == self.original
             && !editor.stroking
-            && (ctx.input(|i| i.viewport().close_requested()) || self.completion.ready(ctx))
+            && (save || ctx.input(|i| i.viewport().close_requested()) || self.completion.ready(ctx))
         {
             let result = (|| -> anyhow::Result<()> {
                 let doc = editor
@@ -172,10 +189,10 @@ impl MapSettingsUi {
                     let options=self.options.as_mut().unwrap();
                     ui.label(format!("当前尺寸：{} × {}；宽＋高 ≤ 512。平移以投影平面左/上为单位。",doc.base.header.width,doc.base.header.height));
                     egui::Grid::new("map-dimensions").num_columns(2).show(ui,|ui|{
-                        for (name,value) in [("新宽度",&mut options.width),("新高度",&mut options.height)]{ui.label(name);changed|=ui.add(egui::DragValue::new(value).range(20..=492)).changed();ui.end_row();}
-                        ui.label("原图放置偏移（左、上）");ui.horizontal(|ui|{for value in &mut options.offset{changed|=ui.add(egui::DragValue::new(value).range(-512..=512)).changed();}});ui.end_row();
-                        ui.label("扩展区域清地高度");changed|=ui.add(egui::DragValue::new(&mut options.fill_level).range(0..=14)).changed();ui.end_row();
-                        ui.label("可玩区域（左、上、宽、高）").on_hover_text("LocalSize");ui.horizontal_wrapped(|ui|{for value in &mut options.local{changed|=ui.add(egui::DragValue::new(value).range(0..=512)).changed();}});ui.end_row();
+                        for (name,value) in [("新宽度",&mut options.width),("新高度",&mut options.height)]{ui.label(name);changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(20..=492),name).changed();ui.end_row();}
+                        ui.label("原图放置偏移（左、上）");ui.horizontal(|ui|{for (value,name) in options.offset.iter_mut().zip(["左侧偏移","顶部偏移"]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(-512..=512),name).changed();}});ui.end_row();
+                        ui.label("扩展区域清地高度");changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut options.fill_level).range(0..=14),"扩展区域清地高度").changed();ui.end_row();
+                        ui.label("可玩区域（左、上、宽、高）").on_hover_text("LocalSize");ui.horizontal_wrapped(|ui|{for (value,name) in options.local.iter_mut().zip(["可玩区域左侧","可玩区域顶部","可玩区域宽度","可玩区域高度"]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(0..=512),name).changed();}});ui.end_row();
                     });
                     ui.horizontal_wrapped(|ui|{
                         if ui.button("可玩区域铺满有效边距").clicked(){options.local=[2,4,i32::from(options.width)-4,i32::from(options.height)-10];changed=true;}
@@ -201,8 +218,8 @@ impl MapSettingsUi {
                     ui.small("光照参数结束输入后自动生效，可撤销。关闭面板恢复普通光照预览，保存与发布使用当前参数。空值使用引擎默认值。");
                     let light=self.light.as_mut().unwrap();
                     egui::Grid::new("lighting-components").num_columns(2).show(ui,|ui|{
-                        for component in COMPONENTS{let key=format!("{}{component}",self.profile.prefix());ui.label(crate::labels::field(&key)).on_hover_text(&key);changed|=ui.text_edit_singleline(light.values.get_mut(&key).unwrap()).changed();ui.end_row();}
-                        for key in ["DominatorAmbientChangeRate","NukeAmbientChangeRate"]{ui.label(crate::labels::field(key)).on_hover_text(key);changed|=ui.text_edit_singleline(light.values.get_mut(key).unwrap()).changed();ui.end_row();}
+                        for component in COMPONENTS{let key=format!("{}{component}",self.profile.prefix());let label=crate::labels::field(&key);ui.label(label).on_hover_text(&key);changed|=ui.text_edit_singleline(light.values.get_mut(&key).unwrap()).accessible_name(label).changed();ui.end_row();}
+                        for key in ["DominatorAmbientChangeRate","NukeAmbientChangeRate"]{let label=crate::labels::field(key);ui.label(label).on_hover_text(key);changed|=ui.text_edit_singleline(light.values.get_mut(key).unwrap()).accessible_name(label).changed();ui.end_row();}
                     });
                     ui.small("环境亮度与红绿蓝分量按 1%=1 单位量化；地面与每层高度亮度补偿按 0.001 量化。心灵控制器顶部层高使用原生核爆参数（每层补偿 0.1）。过渡间隔只编辑，不模拟动态淡入淡出。");
                     if let Ok(p)=light.effective(doc,self.profile){ui.label(format!("实际量化：环境亮度 {}%，红绿蓝 {:?}%，地面补偿 {} / 每层补偿 {}（千分单位）",p.units.ambient_percent,[p.units.red_percent,p.units.green_percent,p.units.blue_percent],p.units.ground_units,p.units.level_units));}
@@ -368,6 +385,73 @@ fn draw_preview(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_finishes_focused_lighting_but_preserves_invalid_input_and_resize_plans() {
+        let (mut editor, ctx, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        let mut form = MapSettingsUi {
+            open: true,
+            tab: 1,
+            ..Default::default()
+        };
+        form.load(editor.doc.as_ref().unwrap());
+        form.light_editing = true;
+        form.light
+            .as_mut()
+            .unwrap()
+            .values
+            .insert("Ambient".into(), "0.65".into());
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+            ui.text_edit_singleline(
+                form.light
+                    .as_mut()
+                    .unwrap()
+                    .values
+                    .get_mut("Ambient")
+                    .unwrap(),
+            )
+            .request_focus();
+            form.completion.observe(ui.ctx());
+            form.finish_lighting(ui.ctx(), &mut editor, &scene);
+            assert!(form.dirty());
+            form.finish_for_save(ui.ctx(), &mut editor, &scene);
+        });
+        assert!(!form.dirty());
+        assert_eq!(
+            editor.doc.as_ref().unwrap().ini_text("Lighting", "Ambient"),
+            "0.65"
+        );
+        let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        form.light_editing = true;
+        form.light
+            .as_mut()
+            .unwrap()
+            .values
+            .insert("Ambient".into(), "NaN".into());
+        form.finish_for_save(&ctx, &mut editor, &scene);
+        assert!(!form.allow_leave());
+        assert_eq!(form.light.as_ref().unwrap().values["Ambient"], "NaN");
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            before
+        );
+        form.light
+            .as_mut()
+            .unwrap()
+            .values
+            .insert("Ambient".into(), "0.7".into());
+        form.options.as_mut().unwrap().width += 1;
+        form.finish_for_save(&ctx, &mut editor, &scene);
+        assert!(!form.allow_leave());
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            before
+        );
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn completed_lighting_is_undoable_and_invalid_or_stale_input_cannot_write() {
