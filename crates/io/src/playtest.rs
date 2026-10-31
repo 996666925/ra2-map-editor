@@ -48,7 +48,8 @@ pub fn map_player_starts(map: &MapFile) -> Vec<u8> {
             .filter_map(|w| u8::try_from(w.index).ok()),
     )
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct PlayOptions {
     /// Window-system monitor name; None lets VERA follow the system.
     pub display: Option<String>,

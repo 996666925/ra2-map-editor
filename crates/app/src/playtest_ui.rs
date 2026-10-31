@@ -3,6 +3,13 @@ use super::*;
 use crate::ui_theme as theme;
 use ra2_map_io::playtest::{PLAYER_COLOR_COUNT, PlayOptions, player_start_indices};
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct PlaytestSettings {
+    executable: String,
+    options: PlayOptions,
+}
+
 pub(super) struct PlayDisplay {
     id: String,
     label: String,
@@ -150,6 +157,25 @@ fn resolution(ui: &mut egui::Ui, options: &mut PlayOptions, surface: [u32; 2]) {
 }
 
 impl Editor {
+    pub(crate) fn restore_playtest_settings(&mut self, storage: &dyn eframe::Storage) {
+        if let Some(settings) = eframe::get_value::<PlaytestSettings>(storage, "playtest-settings")
+        {
+            self.executable = settings.executable;
+            self.play_options = settings.options;
+        }
+    }
+
+    pub(crate) fn save_playtest_settings(&self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(
+            storage,
+            "playtest-settings",
+            &PlaytestSettings {
+                executable: self.executable.clone(),
+                options: self.play_options.clone(),
+            },
+        );
+    }
+
     pub(crate) fn refresh_play_displays(&mut self, frame: &eframe::Frame) {
         self.play_displays = frame
             .winit_window()
@@ -371,6 +397,84 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct SettingsStorage(BTreeMap<String, String>);
+
+    impl eframe::Storage for SettingsStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.into(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn playtest_settings_survive_restart_and_map_loading() {
+        let (mut editor, _ctx, _root) = super::super::tests::editor();
+        editor.executable = r"D:\游戏\vera20k.exe".into();
+        editor.play_options = PlayOptions {
+            display: Some(r"\\.\DISPLAY2".into()),
+            full_screen: true,
+            zoom: 200,
+            mission: true,
+            mission_difficulty: 2,
+            side: 9,
+            color: 4,
+            start: 3,
+            ai: 5,
+            ai_side: 2,
+            difficulty: 0,
+            credits: 25000,
+            speed: 6,
+            units: 10,
+            tech: 8,
+            superweapons: false,
+            crates: true,
+            short_game: false,
+            seed: 42,
+        };
+        let mut storage = SettingsStorage::default();
+        editor.save_playtest_settings(&mut storage);
+
+        let (mut reopened, _ctx, _root) = super::super::tests::editor();
+        reopened.restore_playtest_settings(&storage);
+        reopened.attach(&super::super::tests::terrain_scene());
+        assert_eq!(reopened.executable, editor.executable);
+        assert_eq!(reopened.play_options, editor.play_options);
+    }
+
+    #[test]
+    fn playtest_settings_accept_missing_fields_and_ignore_broken_storage() {
+        let (mut editor, _ctx, _root) = super::super::tests::editor();
+        let mut storage = SettingsStorage::default();
+        editor.restore_playtest_settings(&storage);
+        assert_eq!(editor.play_options, PlayOptions::default());
+        // Older settings can omit fields added in future versions.
+        storage.0.insert(
+            "playtest-settings".into(),
+            r#"(executable:"D:/game/vera20k.exe",options:(speed:6))"#.into(),
+        );
+        editor.restore_playtest_settings(&storage);
+        assert_eq!(editor.executable, "D:/game/vera20k.exe");
+        assert_eq!(
+            editor.play_options,
+            PlayOptions {
+                speed: 6,
+                ..Default::default()
+            }
+        );
+        storage
+            .0
+            .insert("playtest-settings".into(), "broken settings".into());
+        editor.restore_playtest_settings(&storage);
+        assert_eq!(editor.play_options.speed, 6);
+    }
 
     fn setup(ctx: &egui::Context) {
         crate::ui_theme::install(ctx);

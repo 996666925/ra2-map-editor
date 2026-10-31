@@ -139,6 +139,11 @@ impl EditorApp {
             started: Instant::now(),
             p2_smoke: options.p2_smoke,
         };
+        if app.smoke_output.is_none()
+            && let Some(storage) = cc.storage
+        {
+            app.map.editor.restore_playtest_settings(storage);
+        }
         if let Some(exe) = options.playtest_exe {
             app.map.editor.executable = exe.display().to_string();
             app.map.p2_playtest = options.p2_smoke;
@@ -613,6 +618,7 @@ impl eframe::App for EditorApp {
         if self.smoke_output.is_none() {
             self.selection.directory = PathBuf::from(self.directory_text.trim());
             eframe::set_value(storage, "asset-selection", &self.selection);
+            self.map.editor.save_playtest_settings(storage);
         }
     }
 }
