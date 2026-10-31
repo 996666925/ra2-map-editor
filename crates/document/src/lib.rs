@@ -2,6 +2,7 @@
 pub mod ai_triggers;
 pub mod base_nodes;
 pub mod campaign;
+pub mod crate_settings;
 pub mod document;
 #[cfg(test)]
 mod document_tests;

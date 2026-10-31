@@ -265,6 +265,26 @@ impl MapView {
                 if self.editor.check_property_draft() {
                     self.workbench.mission.open = false;
                     self.workbench.mission.campaign.open = false;
+                    self.workbench.map_settings.tab = 0;
+                    self.workbench.map_settings.open = true;
+                }
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    self.editor.doc.is_some()
+                        && !self.loading
+                        && !self.editor.stroking
+                        && !self.workbench.mission.has_draft()
+                        && !self.workbench.map_settings.open,
+                    egui::Button::new("箱子设置…"),
+                )
+                .clicked()
+            {
+                if self.editor.check_property_draft() {
+                    self.workbench.mission.open = false;
+                    self.workbench.mission.campaign.open = false;
+                    self.workbench.map_settings.tab = 2;
                     self.workbench.map_settings.open = true;
                 }
                 ui.close();

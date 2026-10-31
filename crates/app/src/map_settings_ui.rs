@@ -1,4 +1,4 @@
-//! Map geometry planning, automatic lighting edits and read-only previews.
+//! Map geometry planning, automatic lighting/crate edits and read-only previews.
 use crate::{editing::Editor, map::MapScene};
 use eframe::egui;
 use ra2_map_document::{
@@ -18,6 +18,8 @@ pub(crate) struct MapSettingsUi {
     original: Option<Options>,
     light: Option<Draft>,
     original_light: Option<Draft>,
+    crates: Option<ra2_map_document::crate_settings::Draft>,
+    original_crates: Option<ra2_map_document::crate_settings::Draft>,
     pub profile: Profile,
     preview: bool,
     due: Option<Instant>,
@@ -26,6 +28,7 @@ pub(crate) struct MapSettingsUi {
     message: String,
     completion: crate::form_edit::EditCompletion,
     light_editing: bool,
+    crates_editing: bool,
 }
 impl MapSettingsUi {
     pub(crate) fn smoke_preview(&mut self, doc: &MapDocument, profile: Profile) {
@@ -46,13 +49,15 @@ impl MapSettingsUi {
         self.light.as_ref().unwrap().apply(doc)
     }
     pub fn dirty(&self) -> bool {
-        self.options != self.original || self.light != self.original_light
+        self.options != self.original
+            || self.light != self.original_light
+            || self.crates != self.original_crates
     }
     pub fn allow_leave(&mut self) -> bool {
         if self.dirty() {
             self.open = true;
             self.message =
-                "请完成或取消光照输入；尺寸修改需检查预览并应用，或放弃尺寸修改。".into();
+                "请完成或取消光照、箱子设置输入；尺寸修改需检查预览并应用，或放弃尺寸修改。".into();
             false
         } else {
             true
@@ -64,18 +69,21 @@ impl MapSettingsUi {
         self.original = self.options.clone();
         self.light = Some(Draft::read(doc));
         self.original_light = self.light.clone();
+        self.crates = Some(ra2_map_document::crate_settings::Draft::read(doc));
+        self.original_crates = self.crates.clone();
         self.plan = None;
         self.worker = None;
         self.completion = Default::default();
         self.light_editing = false;
+        self.crates_editing = false;
     }
-    pub(crate) fn finish_lighting(
+    pub(crate) fn finish_edits(
         &mut self,
         ctx: &egui::Context,
         editor: &mut Editor,
         scene: &MapScene,
     ) {
-        self.finish_lighting_inner(ctx, editor, scene, false);
+        self.finish_edits_inner(ctx, editor, scene, false);
     }
     pub(crate) fn finish_for_save(
         &mut self,
@@ -83,9 +91,9 @@ impl MapSettingsUi {
         editor: &mut Editor,
         scene: &MapScene,
     ) {
-        self.finish_lighting_inner(ctx, editor, scene, true);
+        self.finish_edits_inner(ctx, editor, scene, true);
     }
-    fn finish_lighting_inner(
+    fn finish_edits_inner(
         &mut self,
         ctx: &egui::Context,
         editor: &mut Editor,
@@ -96,6 +104,7 @@ impl MapSettingsUi {
             && self.tab == 1
             && self.light != self.original_light
             && self.options == self.original
+            && self.crates == self.original_crates
             && !editor.stroking
             && (save || ctx.input(|i| i.viewport().close_requested()) || self.completion.ready(ctx))
         {
@@ -117,6 +126,41 @@ impl MapSettingsUi {
                     self.original_light = self.light.clone();
                     self.light_editing = false;
                     self.message = "光照已自动生效，可撤销。".into();
+                }
+                Err(error) => self.message = format!("尚未生效：{error:#}"),
+            }
+        }
+        if self.crates_editing
+            && self.tab == 2
+            && self.crates != self.original_crates
+            && self.options == self.original
+            && self.light == self.original_light
+            && !editor.stroking
+            && (save || ctx.input(|i| i.viewport().close_requested()) || self.completion.ready(ctx))
+        {
+            let result = (|| -> anyhow::Result<()> {
+                let doc = editor
+                    .doc
+                    .as_mut()
+                    .ok_or_else(|| anyhow::anyhow!("没有地图"))?;
+                anyhow::ensure!(
+                    self.identity == Some((doc.id, doc.state_id)),
+                    "文档已变化，请取消本次输入后重新编辑"
+                );
+                self.crates.as_ref().unwrap().apply(doc)
+            })();
+            match result {
+                Ok(()) => {
+                    editor.commit(scene, "箱子设置");
+                    self.identity = editor.doc.as_ref().map(|doc| (doc.id, doc.state_id));
+                    // Read back normalized values and removed overrides.
+                    self.crates = editor
+                        .doc
+                        .as_ref()
+                        .map(ra2_map_document::crate_settings::Draft::read);
+                    self.original_crates = self.crates.clone();
+                    self.crates_editing = false;
+                    self.message = "箱子设置已自动生效，可撤销。".into();
                 }
                 Err(error) => self.message = format!("尚未生效：{error:#}"),
             }
@@ -146,9 +190,10 @@ impl MapSettingsUi {
         {
             self.load(doc);
         }
-        self.finish_lighting(ctx, editor, scene);
+        self.finish_edits(ctx, editor, scene);
         let doc = editor.doc.as_ref().unwrap();
         let light_before = self.light.clone();
+        let crates_before = self.crates.clone();
         if let Some(rx) = &self.worker {
             match rx.try_recv() {
                 Ok(result) => {
@@ -177,13 +222,14 @@ impl MapSettingsUi {
         let mut inspect = false;
         let mut undo = false;
         let mut redo = false;
-        crate::ui_theme::window(ctx,"地图设置与光照","map-properties",egui::vec2(750.,690.)).open(&mut open).show(ctx,|ui|{
+        crate::ui_theme::window(ctx,"地图设置","map-properties",egui::vec2(750.,690.)).open(&mut open).show(ctx,|ui|{
             ui.horizontal_wrapped(|ui|{
                 ui.add_enabled_ui(!self.dirty(),|ui|{
                     changed|=ui.selectable_value(&mut self.tab,0,"尺寸与可玩区域").changed();
                     changed|=ui.selectable_value(&mut self.tab,1,"光照").changed();
+                    changed|=ui.selectable_value(&mut self.tab,2,"箱子设置").changed();
                 });
-                if self.dirty(){ui.colored_label(egui::Color32::YELLOW,if self.tab==1{"光照输入待完成"}else{"有未应用尺寸设置"});}
+                if self.dirty(){ui.colored_label(egui::Color32::YELLOW,match self.tab{1=>"光照输入待完成",2=>"箱子设置输入待完成",_=>"有未应用尺寸设置"});}
             });
             egui::ScrollArea::vertical().max_height((ui.available_height()-100.).max(140.)).show(ui,|ui|{
                 if self.tab==0 {
@@ -211,7 +257,7 @@ impl MapSettingsUi {
                         if s.affected.len()>100{ui.label("其余项目见预览统计；裁切前请检查边界内容。");}
                         apply_map=ui.add_enabled(plan.can_apply(),egui::Button::new("应用地图设置（整笔撤销）")).clicked();
                     }
-                }else{
+                }else if self.tab==1{
                     ui.horizontal_wrapped(|ui|{
                         for p in Profile::ALL{changed|=ui.selectable_value(&mut self.profile,p,p.label()).changed();}
                         changed|=ui.checkbox(&mut self.preview,"在画布实时预览").changed();
@@ -228,11 +274,13 @@ impl MapSettingsUi {
                     ui.horizontal_wrapped(|ui|{
                         if ui.button("所选配置使用引擎默认").clicked(){for c in COMPONENTS{light.values.insert(format!("{}{c}",self.profile.prefix()),String::new());}changed=true;}
                     });
+                }else{
+                    crate_fields(ui,self.crates.as_mut().unwrap());
                 }
             });
             ui.separator();
             ui.horizontal_wrapped(|ui|{
-                let cancel=ui.button(if self.tab==1{"取消本次输入"}else{"放弃尺寸修改"});
+                let cancel=ui.button(if self.tab==0{"放弃尺寸修改"}else{"取消本次输入"});
                 self.completion.cancel_button(&cancel);
                 discard=cancel.clicked();
                 undo=ui.add_enabled(!self.dirty(),egui::Button::new("撤销")).clicked();
@@ -279,7 +327,10 @@ impl MapSettingsUi {
         if self.light != light_before {
             self.light_editing = true;
         }
-        self.finish_lighting(ctx, editor, scene);
+        if self.crates != crates_before {
+            self.crates_editing = true;
+        }
+        self.finish_edits(ctx, editor, scene);
         if discard {
             self.load(editor.doc.as_ref().unwrap());
             editor.refresh = true;
@@ -306,6 +357,42 @@ impl MapSettingsUi {
         }
     }
 }
+fn crate_fields(ui: &mut egui::Ui, draft: &mut ra2_map_document::crate_settings::Draft) {
+    ui.heading("随机箱子");
+    ui.label("控制本张地图的箱子数量与刷新。结束输入后自动生效，可撤销；保存地图后保留设置。");
+    ui.small("留空表示继承游戏或 Mod 规则，字段提示中的原版参考值仅供参考。");
+    ui.add_space(8.);
+    egui::Grid::new("crate-settings")
+        .num_columns(2)
+        .spacing([18., 12.])
+        .show(ui, |ui| {
+            for field in &ra2_map_document::crate_settings::FIELDS {
+                ui.label(field.label)
+                    .on_hover_text(format!("[CrateRules] {}\n{}", field.key, field.hint));
+                ui.add(
+                    egui::TextEdit::singleline(draft.values.get_mut(field.key).unwrap())
+                        .desired_width(160.)
+                        .hint_text("继承游戏 / Mod"),
+                )
+                .accessible_name(field.label)
+                .on_hover_text(field.hint);
+                ui.end_row();
+            }
+        });
+    ui.add_space(10.);
+    ui.label("固定开局数量：将最少和最多箱子数设为相同值；最多设为 0 可禁止开局随机生成。");
+    ui.small("初始数量按人类玩家人数限制在上下限之间，实际生成还取决于可放置位置。刷新间隔越小，未拾取箱子换位置越频繁；实际间隔在约 0.5～2 倍之间随机，拾取后会尝试立即补充。");
+    ui.small("遭遇战或试玩需同时开启“随机箱子”。单人任务中预放的箱子不使用随机刷新机制。");
+    if let Err(error) = draft.validate() {
+        ui.colored_label(egui::Color32::LIGHT_RED, error.to_string());
+    }
+    if ui.button("全部继承游戏 / Mod 规则").clicked() {
+        for value in draft.values.values_mut() {
+            value.clear();
+        }
+    }
+}
+
 pub(crate) fn footprints(scene: &MapScene, doc: &MapDocument) -> Footprints {
     doc.records()
         .values()
@@ -388,6 +475,229 @@ mod tests {
     use super::*;
 
     #[test]
+    fn crate_settings_finish_for_save_and_protect_invalid_or_stale_drafts() {
+        let (mut editor, ctx, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        let mut form = MapSettingsUi {
+            open: true,
+            tab: 2,
+            ..Default::default()
+        };
+        form.load(editor.doc.as_ref().unwrap());
+        let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        form.crates
+            .as_mut()
+            .unwrap()
+            .values
+            .insert("CrateRegen".into(), "0.5".into());
+        form.crates_editing = true;
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+            ui.text_edit_singleline(
+                form.crates
+                    .as_mut()
+                    .unwrap()
+                    .values
+                    .get_mut("CrateRegen")
+                    .unwrap(),
+            )
+            .request_focus();
+            form.completion.observe(ui.ctx());
+            form.finish_edits(ui.ctx(), &mut editor, &scene);
+            assert!(form.dirty(), "typing stays a draft");
+            form.finish_for_save(ui.ctx(), &mut editor, &scene);
+        });
+        assert!(!form.dirty());
+        assert_eq!(
+            editor
+                .doc
+                .as_ref()
+                .unwrap()
+                .ini_text("CrateRules", "CrateRegen"),
+            "0.5"
+        );
+        let after = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        editor.history(false, &scene);
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            before
+        );
+        editor.history(true, &scene);
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            after
+        );
+
+        form.load(editor.doc.as_ref().unwrap());
+        form.crates
+            .as_mut()
+            .unwrap()
+            .values
+            .insert("CrateRegen".into(), "NaN".into());
+        form.crates_editing = true;
+        form.finish_for_save(&ctx, &mut editor, &scene);
+        assert!(!form.allow_leave());
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            after
+        );
+        assert_eq!(form.crates.as_ref().unwrap().values["CrateRegen"], "NaN");
+        form.crates
+            .as_mut()
+            .unwrap()
+            .values
+            .insert("CrateRegen".into(), "1".into());
+        editor
+            .doc
+            .as_mut()
+            .unwrap()
+            .set_ini("CrateRules", "CrateRegen", Some(b"2".to_vec()))
+            .unwrap();
+        editor.commit(&scene, "external edit");
+        form.finish_for_save(&ctx, &mut editor, &scene);
+        assert!(form.message.contains("文档已变化"));
+        assert_eq!(
+            editor
+                .doc
+                .as_ref()
+                .unwrap()
+                .ini_text("CrateRules", "CrateRegen"),
+            "2"
+        );
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn crate_panel_typing_cancel_reset_and_undo_use_real_widgets() {
+        use egui_kittest::kittest::Queryable as _;
+        let (mut editor, _ctx, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        let form = MapSettingsUi {
+            open: true,
+            tab: 2,
+            ..Default::default()
+        };
+        let mut harness = egui_kittest::Harness::<(MapSettingsUi, Editor)>::builder()
+            .with_context_setup(|ctx| {
+                crate::ui_theme::install(ctx);
+                ctx.add_font_provider(std::sync::Arc::new(
+                    egui_system_font_provider::SystemFontProvider::new(),
+                ));
+            })
+            .with_size([1000., 850.])
+            .build_ui_state(
+                |ui, (form, editor)| form.show(ui.ctx(), editor, &scene),
+                (form, editor),
+            );
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::TextInput, "刷新间隔（游戏分钟）")
+            .focus();
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::TextInput, "刷新间隔（游戏分钟）")
+            .type_text("0.5");
+        harness.run();
+        assert!(harness.state().0.dirty());
+        assert!(
+            harness
+                .state()
+                .1
+                .doc
+                .as_ref()
+                .unwrap()
+                .ini_text("CrateRules", "CrateRegen")
+                .is_empty()
+        );
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert!(!harness.state().0.dirty());
+        assert_eq!(
+            harness
+                .state()
+                .1
+                .doc
+                .as_ref()
+                .unwrap()
+                .ini_text("CrateRules", "CrateRegen"),
+            "0.5"
+        );
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::TextInput, "最少箱子数")
+            .focus();
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::TextInput, "最少箱子数")
+            .type_text("-1");
+        harness.run();
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert!(harness.state().0.dirty());
+        harness.get_by_label("取消本次输入").click();
+        harness.run();
+        assert!(!harness.state().0.dirty());
+        assert!(
+            harness
+                .state()
+                .1
+                .doc
+                .as_ref()
+                .unwrap()
+                .ini_text("CrateRules", "CrateMinimum")
+                .is_empty()
+        );
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::TextInput, "最少箱子数")
+            .focus();
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::TextInput, "最少箱子数")
+            .type_text("4");
+        harness.run();
+        harness.get_by_label("取消本次输入").click();
+        harness.run();
+        assert!(!harness.state().0.dirty());
+        assert!(
+            harness
+                .state()
+                .1
+                .doc
+                .as_ref()
+                .unwrap()
+                .ini_text("CrateRules", "CrateMinimum")
+                .is_empty()
+        );
+        harness.get_by_label("全部继承游戏 / Mod 规则").click();
+        harness.run();
+        assert!(!harness.state().0.dirty());
+        assert!(
+            harness
+                .state()
+                .1
+                .doc
+                .as_ref()
+                .unwrap()
+                .ini_text("CrateRules", "CrateRegen")
+                .is_empty()
+        );
+        harness.get_by_label("撤销").click();
+        harness.run();
+        assert_eq!(
+            harness
+                .state()
+                .1
+                .doc
+                .as_ref()
+                .unwrap()
+                .ini_text("CrateRules", "CrateRegen"),
+            "0.5"
+        );
+        drop(harness);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn save_finishes_focused_lighting_but_preserves_invalid_input_and_resize_plans() {
         let (mut editor, ctx, root) = crate::editing::tests::editor();
         let scene = crate::editing::tests::terrain_scene();
@@ -415,7 +725,7 @@ mod tests {
             )
             .request_focus();
             form.completion.observe(ui.ctx());
-            form.finish_lighting(ui.ctx(), &mut editor, &scene);
+            form.finish_edits(ui.ctx(), &mut editor, &scene);
             assert!(form.dirty());
             form.finish_for_save(ui.ctx(), &mut editor, &scene);
         });
@@ -473,7 +783,7 @@ mod tests {
             .insert("Ambient".into(), "0.65".into());
         form.light_editing = true;
         let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
-            form.finish_lighting(ui.ctx(), &mut editor, &scene);
+            form.finish_edits(ui.ctx(), &mut editor, &scene);
         });
         assert!(!form.dirty());
         assert_eq!(
@@ -500,7 +810,7 @@ mod tests {
             .insert("Ambient".into(), "NaN".into());
         form.light_editing = true;
         let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
-            form.finish_lighting(ui.ctx(), &mut editor, &scene);
+            form.finish_edits(ui.ctx(), &mut editor, &scene);
         });
         assert!(form.dirty());
         assert!(form.message.starts_with("尚未生效"));
@@ -522,7 +832,7 @@ mod tests {
             .unwrap();
         editor.commit(&scene, "external edit");
         let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
-            form.finish_lighting(ui.ctx(), &mut editor, &scene);
+            form.finish_edits(ui.ctx(), &mut editor, &scene);
         });
         assert!(form.message.contains("文档已变化"));
         assert_eq!(
@@ -542,7 +852,7 @@ mod tests {
         form.smoke_preview(editor.doc.as_ref().unwrap(), Profile::Ion);
         let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
         let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
-            form.finish_lighting(ui.ctx(), &mut editor, &scene);
+            form.finish_edits(ui.ctx(), &mut editor, &scene);
         });
         assert_eq!(
             editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
@@ -551,7 +861,7 @@ mod tests {
         form.light_editing = true;
         form.options.as_mut().unwrap().width += 1;
         let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
-            form.finish_lighting(ui.ctx(), &mut editor, &scene);
+            form.finish_edits(ui.ctx(), &mut editor, &scene);
         });
         assert!(form.dirty());
         assert_eq!(

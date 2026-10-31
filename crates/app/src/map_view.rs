@@ -231,7 +231,7 @@ impl MapView {
         if let Some(scene) = &self.scene {
             self.workbench
                 .map_settings
-                .finish_lighting(ctx, &mut self.editor, scene);
+                .finish_edits(ctx, &mut self.editor, scene);
             self.editor.finish_property_edit(ctx, scene);
             self.workbench
                 .mission
