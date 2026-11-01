@@ -2,8 +2,11 @@
 /target/
 /.cargo/
 
-# Private development documents (kept locally)
-/docs/
+# Private development documents (kept locally), except public guides
+/docs/*
+!/docs/user-guide.md
+!/docs/cli.md
+!/docs/development.md
 /ARCHITECTURE.md
 
 # Local editor settings
