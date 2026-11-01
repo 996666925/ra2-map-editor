@@ -414,7 +414,7 @@ fn map_settings_tabs_stay_inside_the_viewport_without_document_writes() {
     let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
     let mut settings = crate::map_settings_ui::MapSettingsUi::default();
     settings.open = true;
-    for tab in 0..3 {
+    for tab in 0..4 {
         settings.tab = tab;
         let mut harness = crate::test_support::harness()
             .with_context_setup(setup)

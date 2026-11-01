@@ -17,6 +17,19 @@ pub const THEATERS: [(&str, &str); 6] = [
     ("LUNAR", "月球"),
 ];
 
+pub fn validate_title(title: &str) -> Result<()> {
+    let title = title.trim();
+    ensure!(
+        !title.is_empty() && title.len() <= 120,
+        "地图名称不能为空，最多 120 字节"
+    );
+    ensure!(
+        !title.chars().any(|c| c.is_control() || c == ';'),
+        "地图名称不能包含控制字符或分号"
+    );
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 pub struct NewMapOptions {
     pub title: String,
@@ -40,19 +53,11 @@ impl Default for NewMapOptions {
 }
 impl NewMapOptions {
     pub fn validate(&self) -> Result<()> {
-        let title = self.title.trim();
         ensure!(
             THEATERS.iter().any(|(id, _)| *id == self.theater),
             "未知地图环境"
         );
-        ensure!(
-            !title.is_empty() && title.len() <= 120,
-            "地图名称不能为空，最多 120 字节"
-        );
-        ensure!(
-            !title.chars().any(|c| c.is_control() || c == ';'),
-            "地图名称不能包含控制字符或分号"
-        );
+        validate_title(&self.title)?;
         ensure!(
             (MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).contains(&self.width)
                 && (MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).contains(&self.height),

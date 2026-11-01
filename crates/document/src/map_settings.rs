@@ -17,6 +17,12 @@ use vera20k_core::{
     util::{lcw, lzo},
 };
 
+/// Rename the displayed map title within the caller's ordinary edit transaction.
+pub fn rename(doc: &mut MapDocument, title: &str) -> Result<()> {
+    crate::new_map::validate_title(title)?;
+    doc.set_ini("Basic", "Name", Some(title.trim().as_bytes().to_vec()))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Options {
     pub width: u16,

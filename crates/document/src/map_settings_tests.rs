@@ -17,6 +17,31 @@ fn document() -> MapDocument {
 }
 
 #[test]
+fn map_name_edits_preserve_map_data_roundtrip_utf8_and_undo() {
+    let mut doc = document();
+    let before = doc.snapshot().bytes().unwrap();
+    rename(&mut doc, "  中文地图名称  ").unwrap();
+    doc.commit("rename");
+    let after = doc.snapshot().bytes().unwrap();
+    let (source, _) =
+        crate::source::SourceMap::parse("map.map".into(), "test".into(), after.clone()).unwrap();
+    assert_eq!(source.title, "中文地图名称");
+    let expected = String::from_utf8(before.clone())
+        .unwrap()
+        .replacen("Name=New Map", "Name=中文地图名称", 1)
+        .into_bytes();
+    assert_eq!(after, expected, "only the map name changes");
+    doc.undo();
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    doc.redo();
+    assert_eq!(doc.snapshot().bytes().unwrap(), after);
+    for name in ["", "  ", "map;comment", "map\n[Injected]", &"中".repeat(41)] {
+        assert!(rename(&mut doc, name).is_err());
+        assert_eq!(doc.snapshot().bytes().unwrap(), after);
+    }
+}
+
+#[test]
 fn resizing_across_grid_layouts_preserves_high_cells_edits_and_undo() {
     let mut doc = document();
     let terrain = TerrainValue {
