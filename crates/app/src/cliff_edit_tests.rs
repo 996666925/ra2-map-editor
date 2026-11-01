@@ -183,6 +183,10 @@ fn joining_gestures_cache_previews_freeze_the_mode_and_cancel_invalid_strokes() 
             TerrainMode::WaterOutline,
             vec![[28, 28], [42, 28], [42, 42], [28, 42]],
         ),
+        (
+            TerrainMode::WaterOutline,
+            vec![[28, 38], [38, 28], [48, 38], [38, 48]],
+        ),
         (TerrainMode::Road, vec![[28, 28], [42, 28]]),
     ] {
         e.tool = Tool::Terrain;

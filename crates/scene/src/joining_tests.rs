@@ -55,6 +55,143 @@ fn undoable(doc: &mut MapDocument, p: &PlateauPlan) {
     }
 }
 
+#[test]
+fn freehand_water_outlines_fit_diagonal_edges_and_small_pointer_jitter() {
+    let (mut d, s) = setup();
+    let path = [
+        [60, 70],
+        [63, 65],
+        [68, 61],
+        [72, 60],
+        [75, 63],
+        [79, 65],
+        [81, 70],
+        [80, 74],
+        [76, 78],
+        [71, 80],
+        [66, 78],
+        [62, 75],
+    ];
+    let raw = cliff_tools::enclose(&path).unwrap();
+    assert!(
+        shore_tools::plan(&d, &s, raw, Some(true)).is_err(),
+        "fixture must reproduce the one-cell shoreline failure"
+    );
+    let before = d.snapshot().bytes().unwrap();
+    let p = shore_tools::outline(&d, &s, &path).unwrap();
+    assert_eq!(d.snapshot().bytes().unwrap(), before);
+    undoable(&mut d, &p);
+    complete(&d, &s, &p);
+}
+
+#[test]
+fn freehand_water_is_bounded_reversible_and_preserves_valid_contours() {
+    let (mut d, s) = setup();
+    for path in [
+        vec![[60, 70], [70, 60], [80, 70], [70, 80]],
+        vec![[60, 60], [78, 60], [78, 66], [69, 66], [69, 78], [60, 78]],
+        vec![
+            [60, 60],
+            [67, 60],
+            [68, 59],
+            [69, 60],
+            [78, 60],
+            [78, 68],
+            [77, 69],
+            [78, 70],
+            [78, 78],
+            [60, 78],
+        ],
+    ] {
+        for shift in [[0, 0], [1, 0], [0, 1], [1, 1]] {
+            let mut path: Vec<_> = path
+                .iter()
+                .map(|p| [p[0] + shift[0], p[1] + shift[1]])
+                .collect();
+            let raw = cliff_tools::enclose(&path).unwrap();
+            let p = shore_tools::outline(&d, &s, &path).unwrap();
+            assert!(raw.is_subset(&p.interior), "removed enclosed water");
+            assert!(
+                p.interior
+                    .iter()
+                    .all(|at| (-1..=1).any(|dx| (-1..=1).any(|dy| {
+                        shore_tools::offset(*at, dx, dy).is_some_and(|n| raw.contains(&n))
+                    }))),
+                "expanded by more than one cell"
+            );
+            if let Ok(exact) = shore_tools::plan(&d, &s, raw.clone(), Some(true)) {
+                assert_eq!(p.edits, exact.edits, "changed a valid contour");
+            }
+            path.reverse();
+            assert_eq!(p.edits, shore_tools::outline(&d, &s, &path).unwrap().edits);
+            undoable(&mut d, &p);
+            complete(&d, &s, &p);
+            assert!(
+                raw.iter()
+                    .all(|&at| shore_tools::wet(&s, value(&d, &s, at)))
+            );
+            assert!(
+                shore_tools::outline(&d, &s, &path)
+                    .unwrap()
+                    .edits
+                    .is_empty(),
+                "repaint changed contour"
+            );
+            let repair = cliff_tools::rectangle([54, 54], [86, 86]);
+            assert!(
+                shore_tools::plan(&d, &s, repair, None)
+                    .unwrap()
+                    .edits
+                    .is_empty()
+            );
+            d.undo();
+        }
+    }
+}
+
+#[test]
+fn snapped_water_outlines_protect_added_cells_and_reject_missing_shores() {
+    let (mut d, mut s) = setup();
+    let path = [[60, 70], [70, 60], [80, 70], [70, 80]];
+    let raw = cliff_tools::enclose(&path).unwrap();
+    let p = shore_tools::outline(&d, &s, &path).unwrap();
+    let at = *p.interior.difference(&raw).next().unwrap();
+    for object in [false, true] {
+        if object {
+            d.add_record("Structures", at, "Neutral", "B").unwrap();
+        } else {
+            d.set(Target::Overlay(at), Some(Value::Overlay(0, 0)))
+                .unwrap();
+        }
+        let before = d.snapshot().bytes().unwrap();
+        assert!(shore_tools::outline(&d, &s, &path).is_err());
+        assert_eq!(d.snapshot().bytes().unwrap(), before);
+        d.cancel();
+    }
+    // Outline expansion must not hide a height mismatch or cross map borders.
+    d.set(
+        Target::Terrain(at),
+        Some(Value::Terrain(TerrainValue {
+            level: 5,
+            ..value(&d, &s, at)
+        })),
+    )
+    .unwrap();
+    let before = d.snapshot().bytes().unwrap();
+    assert!(shore_tools::outline(&d, &s, &path).is_err());
+    assert_eq!(d.snapshot().bytes().unwrap(), before);
+    d.cancel();
+    assert!(shore_tools::outline(&d, &s, &[[80, 1], [86, 1], [86, 7], [80, 7]]).is_err());
+    let base = s.palette.tile_ids.unwrap().shore;
+    Arc::get_mut(&mut s.palette)
+        .unwrap()
+        .images
+        .retain(|k, _| !(base..base + 40).contains(&i32::from(k.tile_id)));
+    let before = d.snapshot().bytes().unwrap();
+    assert!(shore_tools::outline(&d, &s, &path).is_err());
+    assert_eq!(d.snapshot().bytes().unwrap(), before);
+}
+
 fn shore_ground(scene: &mut MapScene) {
     use ra2_map_assets::catalog::{TerrainSubtile, TerrainTemplate};
     use vera20k_core::map::theater::TileKey;

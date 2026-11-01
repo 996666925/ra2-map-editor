@@ -57,7 +57,7 @@ pub fn rectangle(a: Cell, b: Cell) -> BTreeSet<Cell> {
 pub fn enclose(path: &[Cell]) -> Result<BTreeSet<Cell>> {
     ensure!(
         path.len() >= 3,
-        "拖出高台轮廓；松开时自动连接起点并填充内部"
+        "拖出闭合轮廓；松开时自动连接起点并填充内部"
     );
     let mut wall = BTreeSet::new();
     for (a, b) in path
@@ -77,7 +77,7 @@ pub fn enclose(path: &[Cell]) -> Result<BTreeSet<Cell>> {
     ];
     ensure!(
         max[0] > min[0] && max[1] > min[1],
-        "高台轮廓需要围出至少 2×2 格的区域"
+        "轮廓需要围出至少 2×2 格的区域"
     );
     let lo = [i32::from(min[0]) - 1, i32::from(min[1]) - 1];
     let hi = [i32::from(max[0]) + 1, i32::from(max[1]) + 1];

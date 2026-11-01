@@ -70,11 +70,12 @@ impl PlateauEdit {
                     )?));
                 }
                 if key.mode.joining() {
-                    let cells = if key.mode == TerrainMode::WaterOutline {
-                        cliff_tools::enclose(&key.path)?
-                    } else {
-                        cliff_tools::rectangle(g.start, at)
-                    };
+                    if key.mode == TerrainMode::WaterOutline {
+                        return Ok(Arc::new(ra2_map_scene::shore_tools::outline(
+                            doc, scene, &key.path,
+                        )?));
+                    }
+                    let cells = cliff_tools::rectangle(g.start, at);
                     if key.mode == TerrainMode::CoastalCliff {
                         return Ok(Arc::new(ra2_map_scene::coastal_cliffs::plan(
                             doc, scene, cells,
@@ -484,7 +485,9 @@ impl Editor {
                 TerrainMode::Water => {
                     "拖动矩形绘制水域；自动生成直岸、内角和外角，与已有水域合并。"
                 }
-                TerrainMode::WaterOutline => "按住描绘水域轮廓，松开闭合并填水；自动衔接已有岸线。",
+                TerrainMode::WaterOutline => {
+                    "按住描绘水域轮廓，松开闭合并填水；无法拼接的细小折角会按 2×2 格向外规整，以预览为准。"
+                }
                 TerrainMode::LandFill => "拖动矩形回填为平地；自动移除旧岸线，修补湖岸和岛屿。",
                 TerrainMode::ShoreRepair => {
                     "拖动矩形修复水陆边界，保持现有水域范围；包含邻近的完整岸线模板。"

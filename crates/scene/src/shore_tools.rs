@@ -124,6 +124,16 @@ struct Candidate {
     cells: Vec<(Cell, TerrainValue)>,
     edges: Vec<usize>,
 }
+
+#[derive(Debug)]
+struct ShoreGeometryError(&'static str);
+impl std::fmt::Display for ShoreGeometryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for ShoreGeometryError {}
+
 /// Cover every water/land edge exactly once, with disjoint, complete templates.
 /// Explicit search frames keep long coastlines off the call stack.
 fn solve(candidates: &[Candidate], by_edge: &[Vec<usize>]) -> Result<Vec<usize>> {
@@ -138,10 +148,11 @@ fn solve(candidates: &[Candidate], by_edge: &[Vec<usize>]) -> Result<Vec<usize>>
     let mut steps = 0;
     loop {
         steps += 1;
-        ensure!(
-            steps <= 50_000,
-            "岸线转角过密，无法构造完整模板；请加宽水道或分段绘制"
-        );
+        if steps > 50_000 {
+            return Err(
+                ShoreGeometryError("岸线转角过密，无法构造完整模板；请加宽水道或分段绘制").into(),
+            );
+        }
         let mut best: Option<Vec<usize>> = None;
         for (_, choices) in by_edge.iter().enumerate().filter(|(e, _)| !covered[*e]) {
             let options: Vec<_> = choices
@@ -171,9 +182,9 @@ fn solve(candidates: &[Candidate], by_edge: &[Vec<usize>]) -> Result<Vec<usize>>
         });
         loop {
             let Some(f) = stack.last_mut() else {
-                anyhow::bail!(
-                    "岸线过窄、斜角相接或资源缺失，无法完整拼接；请让水道和陆地至少宽 2 格并加宽急转角"
-                );
+                return Err(ShoreGeometryError(
+                    "岸线过窄、斜角相接或资源缺失，无法完整拼接；请让水道和陆地至少宽 2 格并加宽急转角",
+                ).into());
             };
             if let Some(c) = f.active.take() {
                 for (at, _) in &candidates[c].cells {
@@ -196,6 +207,28 @@ fn solve(candidates: &[Candidate], by_edge: &[Vec<usize>]) -> Result<Vec<usize>>
             }
             stack.pop();
         }
+    }
+}
+
+/// Freehand sampling produces one-cell stair steps that complete shore TMPs
+/// cannot cover. Keep exact outlines when possible; otherwise expand to 2x2
+/// blocks, adding at most one cell per axis around the enclosed selection.
+/// Rectangle painting and repair keep their exact geometry. Only tiling
+/// failures trigger snapping; both attempts validate terrain and protection.
+pub fn outline(doc: &MapDocument, scene: &MapScene, path: &[Cell]) -> Result<PlateauPlan> {
+    let selection = crate::cliff_tools::enclose(path)?;
+    match plan(doc, scene, selection.clone(), Some(true)) {
+        Ok(plan) => Ok(plan),
+        Err(e) if e.is::<ShoreGeometryError>() => {
+            let mut snapped = BTreeSet::new();
+            for at in selection {
+                let x = at[0] / 2 * 2;
+                let y = at[1] / 2 * 2;
+                snapped.extend([[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]);
+            }
+            plan(doc, scene, snapped, Some(true))
+        }
+        Err(e) => Err(e),
     }
 }
 

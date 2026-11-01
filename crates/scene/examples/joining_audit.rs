@@ -181,6 +181,41 @@ fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json:
         }
         cases.push(verify(install, &scene, &mut doc, &p, out, name, true)?);
     }
+    for (name, path) in [
+        (
+            "outline-diagonal",
+            vec![[60, 70], [70, 60], [80, 70], [70, 80]],
+        ),
+        (
+            "outline-freehand",
+            vec![
+                [60, 70],
+                [63, 65],
+                [68, 61],
+                [72, 60],
+                [75, 63],
+                [79, 65],
+                [81, 70],
+                [80, 74],
+                [76, 78],
+                [71, 80],
+                [66, 78],
+                [62, 75],
+            ],
+        ),
+        (
+            "outline-concave",
+            vec![[60, 60], [78, 60], [78, 66], [69, 66], [69, 78], [60, 78]],
+        ),
+    ] {
+        let mut d = document(&scene);
+        let p = shore_tools::outline(&d, &scene, &path).with_context(|| name)?;
+        cases.push(verify(install, &scene, &mut d, &p, out, name, true)?);
+        ensure!(
+            shore_tools::outline(&d, &scene, &path)?.edits.is_empty(),
+            "{theater}: {name} repaint changed contour"
+        );
+    }
     if let (Some(_), Some(water_base)) = (ids.cliffs.cliff_set, ids.cliffs.water_cliffs) {
         let mut d = document(&scene);
         cliff_tools::plan(&d, &scene, cliff_tools::rectangle([55, 55], [85, 70]), 4)?
