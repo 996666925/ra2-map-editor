@@ -2,6 +2,70 @@ use super::*;
 use crate::editing::tests::{editor, terrain_scene};
 
 #[test]
+fn startup_owner_property_dropdown_auto_commits_and_undo_restores_graph() {
+    use egui_kittest::kittest::Queryable as _;
+    use ra2_map_document::{mission, startup_owner};
+    let (mut editor, _, root) = editor();
+    let scene = terrain_scene();
+    editor.attach(&scene);
+    let id = editor
+        .doc
+        .as_mut()
+        .unwrap()
+        .add_record("Units", [20, 20], "Americans", "GI")
+        .unwrap();
+    editor.commit(&scene, "place");
+    editor.select(Some(id));
+    let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    {
+        let mut harness = crate::test_support::harness()
+            .with_context_setup(|ctx| {
+                crate::ui_theme::install(ctx);
+                ctx.add_font_provider(Arc::new(
+                    egui_system_font_provider::SystemFontProvider::new(),
+                ));
+            })
+            .with_size(egui::vec2(450., 1200.))
+            .build_ui(|ui| {
+                editor.selection_properties(ui, &scene);
+            });
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::ComboBox, "开局交给")
+            .click();
+        harness.run();
+        harness.get_by_label("航点 0 的玩家").click();
+        harness.run();
+    }
+    assert!(!editor.object_properties_dirty());
+    assert_eq!(editor.property_startup_owner, Some(0));
+    assert_eq!(editor.property_owner, "Neutral");
+    assert_eq!(
+        startup_owner::get(editor.doc.as_ref().unwrap(), &editor.records[&id]),
+        Some(0)
+    );
+    let after = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    editor.history(false, &scene);
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        before
+    );
+    editor.history(true, &scene);
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        after
+    );
+    editor.property_startup_owner = None;
+    let ctx = egui::Context::default();
+    let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+        editor.finish_property_for_save(ui.ctx(), &scene)
+    });
+    assert!(!editor.object_properties_dirty());
+    assert!(mission::ids(editor.doc.as_ref().unwrap(), mission::Kind::Trigger).is_empty());
+    drop(editor);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn selection_modifiers_are_temporary_and_frozen_on_mouse_down() {
     let (mut e, _, root) = editor();
     let scene = terrain_scene();

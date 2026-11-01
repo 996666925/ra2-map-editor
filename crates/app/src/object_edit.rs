@@ -1,6 +1,7 @@
 //! Object forms patch selected CSV columns and preserve every other byte.
 use super::*;
 use ra2_map_document::object_properties::{self, Kind};
+use ra2_map_document::startup_owner;
 
 impl Editor {
     pub(crate) fn check_property_draft(&mut self) -> bool {
@@ -19,6 +20,10 @@ impl Editor {
         }
         let f = r.fields();
         self.property_type != r.type_id()
+            || self
+                .doc
+                .as_ref()
+                .is_some_and(|doc| startup_owner::get(doc, r) != self.property_startup_owner)
             || (!matches!(r.section.as_str(), "Terrain" | "Smudge")
                 && (f.first() != Some(&self.property_owner)
                     || f.get(2).and_then(|n| n.parse().ok()).unwrap_or(256)
@@ -47,7 +52,10 @@ impl Editor {
         self.property_error.clear();
         self.property_completion = Default::default();
         self.property_extra.clear();
+        self.property_startup_owner = None;
         if let Some(r) = id.and_then(|id| self.records.get(&id)) {
+            self.property_startup_owner =
+                self.doc.as_ref().and_then(|doc| startup_owner::get(doc, r));
             let f = r.fields();
             self.property_owner = f.first().cloned().unwrap_or_default();
             self.property_type = r.type_id();
@@ -122,7 +130,9 @@ impl Editor {
                 for house in houses {
                     ui.selectable_value(value, house.clone(), house);
                 }
-            });
+            })
+            .response
+            .accessible_name("所属方");
         let choices: Vec<_> = houses
             .iter()
             .map(|house| (house.clone(), house.clone()))
@@ -223,7 +233,14 @@ impl Editor {
                 &BTreeMap::new(),
             )?;
         }
-        doc.set(Target::Record(id), Some(Value::Record(changed)))?;
+        let startup_changed = startup_owner::get(doc, r) != self.property_startup_owner;
+        doc.atomic(|doc| {
+            doc.set(Target::Record(id), Some(Value::Record(changed)))?;
+            if startup_changed {
+                startup_owner::set(doc, id, self.property_startup_owner)?;
+            }
+            Ok(())
+        })?;
         self.commit(scene, "修改对象属性");
         self.select(Some(id));
         Ok(())
@@ -272,13 +289,60 @@ impl Editor {
             if !matches!(r.section.as_str(), "Terrain" | "Smudge") {
                 let houses = self.houses(scene);
                 ui.label("所属方");
-                Self::house_picker(ui, "object-owner", &mut self.property_owner, &houses);
+                ui.add_enabled_ui(self.property_startup_owner.is_none(), |ui| {
+                    Self::house_picker(ui, "object-owner", &mut self.property_owner, &houses);
+                });
+                if let Some(doc) = &self.doc {
+                    ui.label("开局交给");
+                    ui.add_enabled_ui(startup_owner::available(doc, &r), |ui| {
+                        egui::ComboBox::from_id_salt("object-startup-owner")
+                            .selected_text(self.property_startup_owner.map_or_else(
+                                || "保持所属方".into(),
+                                |slot| format!("航点 {slot} 的玩家"),
+                            ))
+                            .width(ui.available_width())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.property_startup_owner,
+                                    None,
+                                    "保持所属方",
+                                );
+                                for slot in 0..8 {
+                                    if self.records.values().any(|r| {
+                                        r.section == "Waypoints" && r.key == slot.to_string()
+                                    }) {
+                                        ui.selectable_value(
+                                            &mut self.property_startup_owner,
+                                            Some(slot),
+                                            format!("航点 {slot} 的玩家"),
+                                        );
+                                    }
+                                }
+                            })
+                            .response
+                            .accessible_name("开局交给");
+                    });
+                    if startup_owner::available(doc, &r) {
+                        ui.small("开局由中立方转交给该起点的玩家或电脑；无人使用时保持中立。支持航点 0～7。");
+                    } else {
+                        ui.small("对象已有关联标签，请通过任务触发器设置开局归属。");
+                    }
+                }
                 ui.add(egui::Slider::new(&mut self.property_health, 0..=256).text("生命"));
                 ui.add(egui::Slider::new(&mut self.property_facing, 0..=255).text("朝向"));
                 egui::CollapsingHeader::new("分类属性")
                     .default_open(true)
                     .show(ui, |ui| {
                         for field in object_properties::fields(&r.section) {
+                            if Some(field.index) == startup_owner::tag_column(&r.section)
+                                && self
+                                    .doc
+                                    .as_ref()
+                                    .is_some_and(|doc| startup_owner::get(doc, &r).is_some())
+                            {
+                                ui.label("关联标签：由开局归属自动管理");
+                                continue;
+                            }
                             let Some(value) = self.property_extra.get_mut(&field.index) else {
                                 continue;
                             };

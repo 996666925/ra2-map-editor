@@ -16,6 +16,7 @@ pub mod random_map;
 pub mod raw_ini;
 pub mod region;
 pub mod source;
+pub mod startup_owner;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
