@@ -264,6 +264,17 @@ fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json:
         )?);
     }
     if ids.paved_roads >= 0 && ids.paved_road_ends >= 0 {
+        let mut d = document(&scene);
+        let p = road_tools::plan(&d, &scene, [70, 55], [70, 85], false)?;
+        cases.push(verify(
+            install,
+            &scene,
+            &mut d,
+            &p,
+            out,
+            "road-straight-y",
+            true,
+        )?);
         for (n, (a, b, c)) in [
             ([60, 60], [80, 60], [80, 80]),
             ([80, 60], [60, 60], [60, 80]),

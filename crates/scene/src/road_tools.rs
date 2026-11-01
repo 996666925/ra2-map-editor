@@ -42,11 +42,13 @@ fn decode(scene: &MapScene, tile: u16) -> Result<(u8, [i32; 2], [u16; 2])> {
     if ids.paved_road_ends >= 0
         && (ids.paved_road_ends..ids.paved_road_ends + 4).contains(&i32::from(tile))
     {
+        // Stock end pieces connect W, S, E, N respectively. In particular,
+        // the two 3x1 caps must face into the road along the Y axis.
         return Ok(match i32::from(tile) - ids.paved_road_ends {
             0 => (8, [0, 1], [1, 3]),
-            1 => (1, [1, 0], [3, 1]),
+            1 => (4, [1, 0], [3, 1]),
             2 => (2, [0, 1], [1, 3]),
-            _ => (4, [1, 0], [3, 1]),
+            _ => (1, [1, 0], [3, 1]),
         });
     }
     profile(tile - ids.paved_roads as u16).context("遇到毁坏道路或特殊道路，请避开该完整模板")
@@ -261,9 +263,9 @@ pub fn plan(
             continue;
         }
         let (tile, origin) = match mask {
-            1 => (ids.paved_road_ends + 1, offset(at, -1, 0)),
+            1 => (ids.paved_road_ends + 3, offset(at, -1, 0)),
             2 => (ids.paved_road_ends + 2, offset(at, 0, -1)),
-            4 => (ids.paved_road_ends + 3, offset(at, -1, 0)),
+            4 => (ids.paved_road_ends + 1, offset(at, -1, 0)),
             8 => (ids.paved_road_ends, offset(at, 0, -1)),
             5 => (ids.paved_roads + 1, offset(at, -1, 0)),
             10 => (ids.paved_roads, offset(at, 0, -1)),

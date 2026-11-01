@@ -160,6 +160,47 @@ fn automatic_terrain_protects_entire_foundations_and_overlays() {
     assert!(road_tools::plan(&d, &s, [70, 75], [80, 75], false).is_err());
 }
 #[test]
+fn roads_use_inward_facing_caps_for_both_axes_after_drawing_extending_and_cutting() {
+    // Stock PavedRoadEnds order: +X end, -Y end, -X end, +Y end.
+    for (axis, low_cap, high_cap) in [(0, 2, 0), (1, 1, 3)] {
+        let at = |n| if axis == 0 { [n, 70] } else { [70, n] };
+        for reverse in [false, true] {
+            let (mut d, s) = setup();
+            let base = s.palette.tile_ids.unwrap().paved_road_ends as u16;
+            let assert_cap = |d: &MapDocument, n, cap| {
+                let v = value(d, &s, at(n));
+                assert_eq!(
+                    s.palette.raw_ids[&v.tile],
+                    base + cap,
+                    "wrong cap at {:?}, reverse={reverse}",
+                    at(n)
+                );
+                assert_eq!(v.sub, 1, "endpoint must remain on the centreline");
+            };
+            for (lo, hi) in [(60, 80), (50, 90)] {
+                let (a, b) = if reverse { (hi, lo) } else { (lo, hi) };
+                let p = road_tools::plan(&d, &s, at(a), at(b), false).unwrap();
+                undoable(&mut d, &p);
+                complete(&d, &s, &p);
+                assert_cap(&d, lo, low_cap);
+                assert_cap(&d, hi, high_cap);
+                assert!(
+                    road_tools::plan(&d, &s, at(a), at(b), false)
+                        .unwrap()
+                        .edits
+                        .is_empty()
+                );
+            }
+            let p = road_tools::plan(&d, &s, at(66), at(74), true).unwrap();
+            undoable(&mut d, &p);
+            complete(&d, &s, &p);
+            for (n, cap) in [(50, low_cap), (65, high_cap), (75, low_cap), (90, high_cap)] {
+                assert_cap(&d, n, cap);
+            }
+        }
+    }
+}
+#[test]
 fn roads_recover_all_curves_and_t_junctions_and_repair_crossing_cuts() {
     for (a, b, c, corner) in [
         ([60, 60], [80, 60], [80, 80], 10),
