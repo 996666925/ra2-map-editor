@@ -45,6 +45,7 @@ fn localized_object_names_search_and_map_overrides_preserve_type_identity() {
     let map = b"[VehicleTypes]\n2=MODNEW\n[MTNK]\nUIName=MOD:TANK\n[MODNEW]\nUIName=NAME:POWER\n";
     let custom = catalog.with_map(map);
     assert_eq!(custom.object_name("MTNK"), "自定义战车");
+    assert_eq!(custom.object_name_zh("MTNK"), "自定义战车");
     assert_eq!(custom.object_name("MODNEW"), "发电厂");
     assert_eq!(catalog.object_name("MTNK"), "灰熊坦克");
     assert_eq!(
@@ -96,4 +97,22 @@ fn missing_or_invalid_language_tables_keep_object_types_available() {
         assert_eq!(catalog.object_label("E1"), "GI · E1");
         assert_eq!(catalog.object_types["Infantry"], ["E1"]);
     }
+}
+
+#[test]
+fn chinese_stock_fallback_translates_english_names_but_preserves_mod_renames() {
+    let mut catalog = Catalog {
+        rules: IniFile::from_str(
+            "[VehicleTypes]\n0=TTNK\n1=HTNK\n2=MOD\n[TTNK]\nName=Tesla Tank\n[HTNK]\nName=Rhino Heavy Tank\n[MOD]\nName=Tesla Tank\n",
+        ),
+        ..Default::default()
+    };
+    catalog.read_registries();
+    assert_eq!(catalog.object_name("TTNK"), "Tesla Tank");
+    assert_eq!(catalog.object_name_zh("TTNK"), "磁能坦克");
+    assert_eq!(catalog.object_name_zh("HTNK"), "犀牛坦克");
+    assert_eq!(catalog.object_name_zh("MOD"), "Tesla Tank");
+    let renamed = std::sync::Arc::new(catalog).with_map(b"[TTNK]\nName=Custom Tesla Tank\n");
+    assert_eq!(renamed.object_name_zh("TTNK"), "Custom Tesla Tank");
+    assert_eq!(renamed.object_name_zh("UNKNOWN"), "UNKNOWN");
 }

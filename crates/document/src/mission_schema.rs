@@ -85,6 +85,13 @@ macro_rules! opcode {
 }
 pub const EVENTS: &[Opcode] = &[
     opcode!(
+        7,
+        "附着对象被摧毁",
+        0,
+        [],
+        "对象销毁事件入口；需要给目标对象绑定 Tag。"
+    ),
+    opcode!(
         1,
         "进入附着格 / 对象",
         0,

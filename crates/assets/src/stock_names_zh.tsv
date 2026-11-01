@@ -1,0 +1,143 @@
+E1	美国大兵	GI|G.I.|Allied GI
+E2	动员兵	Conscript
+E3	工程师	Engineer
+ENGINEER	工程师	Engineer
+SENGINEER	苏军工程师	Soviet Engineer|Engineer
+YENGINEER	尤里工程师	Yuri Engineer|Engineer
+ADOG	盟军军犬	Allied Attack Dog|Attack Dog|Dog
+DOG	苏军军犬	Soviet Attack Dog|Attack Dog|Dog
+SHK	磁暴步兵	Tesla Trooper|Shock Trooper
+FLAKT	防空步兵	Flak Trooper
+JUMPJET	火箭飞行兵	Rocketeer|Jumpjet Infantry
+GHOST	海豹突击队	SEAL|Navy SEAL
+TANY	谭雅	Tanya
+BORIS	鲍里斯	Boris
+SNIPE	狙击手	Sniper
+SPY	间谍	Spy
+CLEG	超时空军团兵	Chrono Legionnaire
+GGI	重装大兵	Guardian GI
+DESO	辐射工兵	Desolator
+TERROR	恐怖分子	Terrorist
+IVAN	疯狂伊文	Crazy Ivan
+YURI	尤里复制人	Yuri|Yuri Clone
+YURIPR	尤里改	Yuri Prime
+INIT	尤里新兵	Initiate
+BRUTE	狂兽人	Brute
+VIRUS	病毒狙击手	Virus
+LUNR	登月火箭员	Cosmonaut|Lunar Infantry
+CMON	超时空突击队	Chrono Commando
+PTROOP	心灵突击队	Psi Commando
+CIVAN	超时空伊文	Chrono Ivan
+MTNK	灰熊坦克	Grizzly Battle Tank|Grizzly Tank
+HTNK	犀牛坦克	Rhino Heavy Tank|Rhino Tank
+TTNK	磁能坦克	Tesla Tank
+FTNK	喷火坦克	Flame Tank
+APOC	天启坦克	Apocalypse|Apocalypse Tank
+FV	多功能步兵车	IFV|Infantry Fighting Vehicle
+BFRT	战斗要塞	Battle Fortress
+SREF	光棱坦克	Prism Tank
+MGTK	幻影坦克	Mirage Tank
+TNKD	坦克杀手	Tank Destroyer
+V3	V3 火箭发射车	V3 Launcher|V3 Rocket Launcher
+FLSH	防空履带车	Flak Track
+HTK	防空履带车	Flak Track
+DRON	恐怖机器人	Terror Drone
+HORV	武装采矿车	War Miner
+HARV	武装采矿车	War Miner|Harvester
+CMIN	超时空采矿车	Chrono Miner
+CMONMIN	超时空采矿车	Chrono Miner
+SLAV	奴隶矿场	Slave Miner
+SMIN	奴隶矿场	Slave Miner
+PCV	尤里机动基地车	Yuri Construction Vehicle|Yuri MCV
+MCV	盟军机动基地车	Allied Construction Vehicle|Allied MCV|Mobile Construction Vehicle
+AMCV	盟军机动基地车	Allied Construction Vehicle|Allied MCV
+SMCV	苏军机动基地车	Soviet Construction Vehicle|Soviet MCV
+LTNK	狂风坦克	Lasher Light Tank|Lasher Tank
+YTNK	盖特机炮坦克	Gattling Tank|Gatling Tank
+CAOS	神经突击车	Chaos Drone
+MIND	精神控制车	Master Mind|Mastermind
+TELE	磁电坦克	Magnetron
+DISK	雷射幽浮	Floating Disc
+DTRUCK	自爆卡车	Demolition Truck
+SAPC	苏军两栖运输艇	Soviet Amphibious Transport|Amphibious Transport
+LCRF	盟军两栖运输艇	Allied Amphibious Transport|Amphibious Transport
+YHVR	尤里气垫运输艇	Yuri Hover Transport|Hover Transport
+ROBO	遥控坦克	Robot Tank
+SCHP	武装直升机	Siege Chopper
+ZEP	基洛夫空艇	Kirov Airship
+ORCA	入侵者战机	Harrier
+BEAG	黑鹰战机	Black Eagle
+SHAD	夜鹰直升机	Nighthawk Transport|BlackHawk Transport
+HIND	雌鹿直升机	Hind Transport|Hind
+PDPLANE	运输机	Cargo Plane|Paradrop Plane
+ASW	反潜直升机	ASW Helicopter|Osprey
+HORNET	大黄蜂舰载机	Hornet
+V3ROCKET	V3 火箭	V3 Rocket
+DREDMIS	无畏级导弹	Dreadnought Missile
+DMISL	无畏级导弹	Dreadnought Missile
+DEST	驱逐舰	Destroyer
+AEGIS	神盾巡洋舰	Aegis Cruiser
+CARRIER	航空母舰	Aircraft Carrier
+DLPH	海豚	Dolphin
+HYD	海蝎	Sea Scorpion
+SUB	台风级潜艇	Typhoon Attack Sub|Typhoon Submarine|Submarine
+DRED	无畏级战舰	Dreadnought
+SQD	巨型乌贼	Giant Squid
+BSUB	雷鸣攻击潜艇	Boomer|Boomer Submarine
+AMERICANS	美国	America|Americans|United States
+ALLIANCE	韩国	Korea|Koreans
+BRITISH	英国	Great Britain|Britain|British
+FRENCH	法国	France|French
+GERMANS	德国	Germany|Germans
+RUSSIANS	苏联	Russia|Russians|Soviet Union
+CONFEDERATION	古巴	Cuba|Cubans
+AFRICANS	利比亚	Libya|Libyans
+ARABS	伊拉克	Iraq|Iraqis
+YURICOUNTRY	尤里	Yuri|Yuri's Country
+GACNST	盟军建造厂	Allied Construction Yard|Construction Yard
+NACNST	苏军建造厂	Soviet Construction Yard|Construction Yard
+YACNST	尤里建造厂	Yuri Construction Yard|Construction Yard
+GAPOWR	发电厂	Power Plant|Allied Power Plant
+NAPOWR	磁能反应炉	Tesla Reactor|Soviet Power Plant
+YAPOWR	生化反应炉	Bio Reactor|Bio-Reactor
+GAPILE	盟军兵营	Allied Barracks|Barracks
+NAHAND	苏军兵营	Soviet Barracks|Hand of Nod|Barracks
+YABRCK	尤里兵营	Yuri Barracks|Barracks
+GAREFN	盟军矿石精炼厂	Allied Ore Refinery|Ore Refinery
+NAREFN	苏军矿石精炼厂	Soviet Ore Refinery|Ore Refinery
+GAWEAP	盟军战车工厂	Allied War Factory|War Factory
+NAWEAP	苏军战车工厂	Soviet War Factory|War Factory
+YAWEAP	尤里战车工厂	Yuri War Factory|War Factory
+GAYARD	盟军船坞	Allied Shipyard|Naval Shipyard
+NAYARD	苏军船坞	Soviet Shipyard|Naval Shipyard
+YAYARD	尤里船坞	Yuri Shipyard|Naval Shipyard
+GAAIRC	空指部	Airforce Command Headquarters|Air Force Command Headquarters
+AMRADR	美国空指部	American Airforce Command Headquarters|American Air Force Command Headquarters
+NARADR	雷达	Radar Tower|Radar
+GATECH	盟军作战实验室	Allied Battle Lab|Battle Lab
+NATECH	苏军作战实验室	Soviet Battle Lab|Battle Lab
+YATECH	尤里作战实验室	Yuri Battle Lab|Battle Lab
+GAPILL	机枪碉堡	Pill Box|Pillbox
+NALASR	哨戒炮	Sentry Gun
+ATESLA	光棱塔	Prism Tower
+TESLA	磁暴线圈	Tesla Coil
+GAGAP	裂缝产生器	Gap Generator
+NASAM	爱国者飞弹	Patriot Missile|Patriot Missile System
+NAFLAK	防空炮	Flak Cannon
+YAGGUN	盖特机炮	Gattling Cannon|Gatling Cannon
+YAPSYT	心灵控制塔	Psychic Tower
+GAWALL	盟军围墙	Allied Wall|Concrete Wall
+NAWALL	苏军围墙	Soviet Wall|Concrete Wall
+YAWALL	尤里围墙	Yuri Wall|Concrete Wall
+NAIRON	铁幕装置	Iron Curtain|Iron Curtain Device
+GAWEAT	天气控制机	Weather Control Device|Weather Control Machine
+GACSPH	超时空传送仪	Chronosphere
+NAMISL	核弹发射井	Nuclear Missile Silo|Nuclear Missile
+NANRCT	核子反应炉	Nuclear Reactor
+YAPPET	心灵控制器	Psychic Dominator
+YAGNTC	基因突变器	Genetic Mutator
+CATECH01	科技机场	Tech Airport|Airport
+CAOILD	科技钻油井	Tech Oil Derrick|Oil Derrick
+CAHOSP	科技医院	Tech Hospital|Hospital
+CAMACH	科技机器商店	Tech Machine Shop|Machine Shop
+CAPOWR	科技电厂	Tech Power Plant|Civilian Power Plant

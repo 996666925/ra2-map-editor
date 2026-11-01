@@ -635,12 +635,18 @@ pub fn references(doc: &MapDocument) -> Vec<Reference> {
             ("TaskForce", Kind::TaskForce),
             ("Tag", Kind::Tag),
         ] {
-            add(
-                (Kind::Team, id.clone()),
-                k,
-                (kind, doc.ini_text(&id, k)),
-                None,
-            );
+            let value = doc.ini_text(&id, k);
+            // TeamType House has native start-player selectors, not House IDs.
+            let bytes = value.as_bytes();
+            if k == "House"
+                && bytes.len() == 12
+                && bytes.starts_with(b"<Player @ ")
+                && (b'A'..=b'H').contains(&bytes[10])
+                && bytes[11] == b'>'
+            {
+                continue;
+            }
+            add((Kind::Team, id.clone()), k, (kind, value), None);
         }
     }
     for id in ids(doc, Kind::AiTrigger) {

@@ -5,6 +5,7 @@ mod editor_io_tests;
 
 pub mod campaign;
 pub mod cli;
+pub mod mission_script;
 pub mod playtest;
 pub mod provenance;
 pub mod publication;

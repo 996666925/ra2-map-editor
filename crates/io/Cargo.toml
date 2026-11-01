@@ -9,6 +9,7 @@ publish.workspace = true
 ra2-map-document.workspace = true
 ra2-map-scene.workspace = true
 ra2-map-assets.workspace = true
+ra2-map-mission-script.workspace = true
 image.workspace = true
 anyhow.workspace = true
 egui.workspace = true

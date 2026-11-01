@@ -9,6 +9,36 @@ fn parse(bytes: Vec<u8>) -> MapDocument {
     let map = map_file::load_from_bytes(bytes.clone()).unwrap();
     MapDocument::new(Baseline::parse(Arc::from(bytes), &map).unwrap())
 }
+
+#[test]
+fn native_team_start_owners_are_distinct_from_fixed_house_references() {
+    let mut doc = crate::test_support::document();
+    doc.set_ini("TeamTypes", "GIFT", Some(b"GIFT".to_vec()))
+        .unwrap();
+    for owner in ["<Player @ A>", "<Player @ H>"] {
+        doc.set_ini("GIFT", "House", Some(owner.as_bytes().to_vec()))
+            .unwrap();
+        assert!(
+            !references(&doc)
+                .iter()
+                .any(|r| r.from.0 == Kind::Team && r.field == "House")
+        );
+    }
+    for owner in [
+        "Russians",
+        "<Player @ I>",
+        "<player @ A>",
+        "<Player @ A>extra",
+    ] {
+        doc.set_ini("GIFT", "House", Some(owner.as_bytes().to_vec()))
+            .unwrap();
+        assert!(
+            references(&doc)
+                .iter()
+                .any(|r| r.from.0 == Kind::Team && r.to == (Kind::House, owner.into()))
+        );
+    }
+}
 #[test]
 fn physical_ini_edits_preserve_duplicates_legacy_bytes_and_share_spatial_history() {
     let mut bytes = crate::test_support::fixture();

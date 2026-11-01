@@ -1,0 +1,23 @@
+[package]
+name = "ra2-map-mission-script"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ra2-map-document.workspace = true
+boa_engine = { version = "0.22", default-features = false, features = ["annex-b"] }
+swc_common = "27"
+swc_ecma_ast = "30"
+swc_ecma_parser = { version = "47", default-features = false, features = ["typescript"] }
+swc_ecma_codegen = "33"
+swc_ecma_transforms_base = { version = "51", features = ["inline-helpers"] }
+swc_ecma_transforms_typescript = "57"
+swc_ecma_transforms_module = "58"
+
+[dev-dependencies]
+ra2-map-document = { workspace = true, features = ["test-support"] }
