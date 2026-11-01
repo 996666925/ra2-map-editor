@@ -1,4 +1,4 @@
-//! Map name, geometry planning, automatic lighting/crate edits and read-only previews.
+//! Map information, geometry planning, automatic lighting/crate edits and read-only previews.
 use crate::{editing::Editor, map::MapScene};
 use eframe::egui;
 use ra2_map_document::{
@@ -22,6 +22,8 @@ pub(crate) struct MapSettingsUi {
     original_crates: Option<ra2_map_document::crate_settings::Draft>,
     name: Option<String>,
     original_name: Option<String>,
+    players: u8,
+    original_players: u8,
     pub profile: Profile,
     preview: bool,
     due: Option<Instant>,
@@ -31,7 +33,7 @@ pub(crate) struct MapSettingsUi {
     completion: crate::form_edit::EditCompletion,
     light_editing: bool,
     crates_editing: bool,
-    name_editing: bool,
+    info_editing: bool,
 }
 impl MapSettingsUi {
     pub(crate) fn smoke_preview(&mut self, doc: &MapDocument, profile: Profile) {
@@ -56,12 +58,13 @@ impl MapSettingsUi {
             || self.light != self.original_light
             || self.crates != self.original_crates
             || self.name != self.original_name
+            || self.players != self.original_players
     }
     pub fn allow_leave(&mut self) -> bool {
         if self.dirty() {
             self.open = true;
             self.message =
-                "请完成或取消地图名称、光照、箱子设置输入；尺寸修改需检查预览并应用，或放弃尺寸修改。".into();
+                "请完成或取消地图名称、出生点、光照、箱子设置输入；尺寸修改需检查预览并应用，或放弃尺寸修改。".into();
             false
         } else {
             true
@@ -77,12 +80,16 @@ impl MapSettingsUi {
         self.original_crates = self.crates.clone();
         self.name = Some(doc.ini_text("Basic", "Name"));
         self.original_name = self.name.clone();
+        self.players = ra2_map_document::player_starts::from_document(doc)
+            .len()
+            .clamp(2, 30) as u8;
+        self.original_players = self.players;
         self.plan = None;
         self.worker = None;
         self.completion = Default::default();
         self.light_editing = false;
         self.crates_editing = false;
-        self.name_editing = false;
+        self.info_editing = false;
     }
     pub(crate) fn finish_edits(
         &mut self,
@@ -113,6 +120,7 @@ impl MapSettingsUi {
             && self.options == self.original
             && self.crates == self.original_crates
             && self.name == self.original_name
+            && self.players == self.original_players
             && !editor.stroking
             && (save || ctx.input(|i| i.viewport().close_requested()) || self.completion.ready(ctx))
         {
@@ -144,6 +152,7 @@ impl MapSettingsUi {
             && self.options == self.original
             && self.light == self.original_light
             && self.name == self.original_name
+            && self.players == self.original_players
             && !editor.stroking
             && (save || ctx.input(|i| i.viewport().close_requested()) || self.completion.ready(ctx))
         {
@@ -174,9 +183,9 @@ impl MapSettingsUi {
                 Err(error) => self.message = format!("尚未生效：{error:#}"),
             }
         }
-        if self.name_editing
+        if self.info_editing
             && self.tab == 3
-            && self.name != self.original_name
+            && (self.name != self.original_name || self.players != self.original_players)
             && self.options == self.original
             && self.light == self.original_light
             && self.crates == self.original_crates
@@ -192,17 +201,26 @@ impl MapSettingsUi {
                     self.identity == Some((doc.id, doc.state_id)),
                     "文档已变化，请取消本次输入后重新编辑"
                 );
-                map_settings::rename(doc, self.name.as_deref().unwrap())
+                doc.atomic(|doc| {
+                    if self.name != self.original_name {
+                        map_settings::rename(doc, self.name.as_deref().unwrap())?;
+                    }
+                    if self.players != self.original_players {
+                        ra2_map_document::player_starts::set_count(doc, self.players)?;
+                    }
+                    Ok(())
+                })
             })();
             match result {
                 Ok(()) => {
-                    editor.commit(scene, "修改地图名称");
+                    editor.commit(scene, "修改地图信息");
                     let doc = editor.doc.as_ref().unwrap();
                     self.identity = Some((doc.id, doc.state_id));
                     self.name = Some(doc.ini_text("Basic", "Name"));
                     self.original_name = self.name.clone();
-                    self.name_editing = false;
-                    self.message = "地图名称已自动生效，可撤销。".into();
+                    self.original_players = self.players;
+                    self.info_editing = false;
+                    self.message = "地图信息已自动生效，可撤销。".into();
                 }
                 Err(error) => self.message = format!("尚未生效：{error:#}"),
             }
@@ -237,6 +255,7 @@ impl MapSettingsUi {
         let light_before = self.light.clone();
         let crates_before = self.crates.clone();
         let name_before = self.name.clone();
+        let players_before = self.players;
         if let Some(rx) = &self.worker {
             match rx.try_recv() {
                 Ok(result) => {
@@ -268,12 +287,12 @@ impl MapSettingsUi {
         crate::ui_theme::window(ctx,"地图设置","map-properties",egui::vec2(750.,690.)).open(&mut open).show(ctx,|ui|{
             ui.horizontal_wrapped(|ui|{
                 ui.add_enabled_ui(!self.dirty(),|ui|{
-                    changed|=ui.selectable_value(&mut self.tab,3,"地图名称").changed();
+                    changed|=ui.selectable_value(&mut self.tab,3,"地图信息").changed();
                     changed|=ui.selectable_value(&mut self.tab,0,"尺寸与可玩区域").changed();
                     changed|=ui.selectable_value(&mut self.tab,1,"光照").changed();
                     changed|=ui.selectable_value(&mut self.tab,2,"箱子设置").changed();
                 });
-                if self.dirty(){ui.colored_label(egui::Color32::YELLOW,match self.tab{1=>"光照输入待完成",2=>"箱子设置输入待完成",3=>"地图名称输入待完成",_=>"有未应用尺寸设置"});}
+                if self.dirty(){ui.colored_label(egui::Color32::YELLOW,match self.tab{1=>"光照输入待完成",2=>"箱子设置输入待完成",3=>"地图信息输入待完成",_=>"有未应用尺寸设置"});}
             });
             egui::ScrollArea::vertical().max_height((ui.available_height()-100.).max(140.)).show(ui,|ui|{
                 if self.tab==0 {
@@ -324,6 +343,11 @@ impl MapSettingsUi {
                     changed|=ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY)).accessible_name("地图名称").changed();
                     ui.small("修改地图显示名称，支持中文；按回车或移开焦点后自动生效，可撤销。Ctrl+S 保存地图。");
                     if let Err(error)=ra2_map_document::new_map::validate_title(name){ui.colored_label(egui::Color32::LIGHT_RED,error.to_string());}
+                    ui.separator();
+                    ui.label("出生点数量");
+                    changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut self.players).range(2..=ra2_map_document::new_map::MAX_PLAYERS),"出生点数量").changed();
+                    ui.small("支持 2～30 个出生点，对应从 0 开始的连续航点。增加时补齐缺少的航点，保留已有位置；减少时删除多余出生点，其他任务航点保留。");
+                    ui.small("结束输入后自动生效，可撤销。可用航点工具调整位置；Ctrl+S 会先提交修改再保存。");
                 }else{
                     crate_fields(ui,self.crates.as_mut().unwrap());
                 }
@@ -380,8 +404,8 @@ impl MapSettingsUi {
         if self.crates != crates_before {
             self.crates_editing = true;
         }
-        if self.name != name_before {
-            self.name_editing = true;
+        if self.name != name_before || self.players != players_before {
+            self.info_editing = true;
         }
         self.finish_edits(ctx, editor, scene);
         if discard {
@@ -526,6 +550,109 @@ fn draw_preview(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_count_input_commits_on_enter_and_save_and_supports_history() {
+        use egui_kittest::kittest::Queryable as _;
+        let (mut editor, _, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        let form = MapSettingsUi {
+            open: true,
+            tab: 3,
+            ..Default::default()
+        };
+        let mut harness = egui_kittest::Harness::<(MapSettingsUi, Editor)>::builder()
+            .with_context_setup(|ctx| {
+                crate::ui_theme::install(ctx);
+                ctx.add_font_provider(std::sync::Arc::new(
+                    egui_system_font_provider::SystemFontProvider::new(),
+                ));
+            })
+            .with_size([1000., 850.])
+            .build_ui_state(
+                |ui, (form, editor): &mut (MapSettingsUi, Editor)| {
+                    form.show(ui.ctx(), editor, &scene);
+                    if crate::form_edit::take_save_shortcut(ui.ctx()).is_some() {
+                        form.finish_for_save(ui.ctx(), editor, &scene);
+                    }
+                },
+                (form, editor),
+            );
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::SpinButton, "出生点数量")
+            .focus();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::SpinButton, "出生点数量")
+            .type_text("4");
+        harness.run();
+        assert_eq!(
+            harness
+                .state()
+                .1
+                .doc
+                .as_ref()
+                .unwrap()
+                .snapshot()
+                .bytes()
+                .unwrap(),
+            before
+        );
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert_eq!(
+            ra2_map_document::player_starts::from_document(harness.state().1.doc.as_ref().unwrap()),
+            vec![0, 1, 2, 3]
+        );
+        assert!(!harness.state().0.dirty());
+        harness.get_by_label("撤销").click();
+        harness.run();
+        assert_eq!(
+            harness
+                .state()
+                .1
+                .doc
+                .as_ref()
+                .unwrap()
+                .snapshot()
+                .bytes()
+                .unwrap(),
+            before
+        );
+        harness.get_by_label("重做").click();
+        harness.run();
+        assert_eq!(
+            harness
+                .state()
+                .1
+                .doc
+                .as_ref()
+                .unwrap()
+                .ini_text("Basic", "MaxPlayers"),
+            "4"
+        );
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::SpinButton, "出生点数量")
+            .focus();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::SpinButton, "出生点数量")
+            .type_text("2");
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
+        harness.run();
+        assert_eq!(
+            ra2_map_document::player_starts::from_document(harness.state().1.doc.as_ref().unwrap()),
+            vec![0, 1]
+        );
+        assert!(!harness.state().0.dirty());
+        drop(harness);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn map_name_input_commits_on_enter_and_save_and_supports_history_and_cancel() {

@@ -40,7 +40,15 @@ impl OverviewOverlay {
             let symbols = editor
                 .doc
                 .as_ref()
-                .map(|doc| ra2_map_scene::radar::symbols(scene, doc))
+                .map(|doc| {
+                    let mut symbols = ra2_map_scene::radar::symbols(scene, doc);
+                    if !editor.layers[0] {
+                        symbols.retain(|symbol| {
+                            !matches!(symbol.kind, ra2_map_scene::radar::SymbolKind::Bridge(_))
+                        });
+                    }
+                    symbols
+                })
                 .unwrap_or_default();
             let flags = [
                 flags[0] && editor.layers[2],

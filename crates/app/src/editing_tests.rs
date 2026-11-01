@@ -43,6 +43,66 @@ fn navigator_pixels_match_embedded_preview_at_the_same_size() {
 }
 
 #[test]
+fn navigator_bridge_surface_follows_edits_history_and_overlay_visibility() {
+    let (mut editor, ctx, root) = editor();
+    let scene = terrain_scene();
+    editor.attach(&scene);
+    let radar = ra2_map_scene::radar::terrain(&scene).unwrap();
+    let size = radar.image.size;
+    let mut overview = crate::overview::OverviewOverlay::default();
+    let mut draw = |editor: &Editor| {
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            overview.draw(
+                ui.painter(),
+                &scene,
+                editor,
+                egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(size[0] as f32, size[1] as f32),
+                ),
+                [false; 4],
+                radar.bounds,
+            );
+        });
+        let pixels = output
+            .textures_delta
+            .set
+            .values()
+            .flatten()
+            .find_map(|delta| {
+                let egui::ImageData::Color(image) = &delta.image;
+                (image.size == size).then(|| image.pixels.clone())
+            })
+            .unwrap();
+        output.textures_delta.clear();
+        pixels
+    };
+    let before = draw(&editor);
+    assert!(before.iter().all(|p| p.a() == 0));
+    for x in 16..=24 {
+        editor
+            .doc
+            .as_mut()
+            .unwrap()
+            .set(Target::Overlay([x, 20]), Some(Value::Overlay(24, 0)))
+            .unwrap();
+    }
+    editor.commit(&scene, "bridge");
+    let bridge = draw(&editor);
+    assert!(bridge.iter().any(|p| p.a() != 0));
+    editor.layers[0] = false;
+    assert_eq!(draw(&editor), before);
+    editor.layers[0] = true;
+    assert_eq!(draw(&editor), bridge);
+    editor.history(false, &scene);
+    assert_eq!(draw(&editor), before);
+    editor.history(true, &scene);
+    assert_eq!(draw(&editor), bridge);
+    drop(editor);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cached_object_geometry_and_navigator_follow_move_history_and_layer_changes() {
     let (mut editor, ctx, _root) = editor();
     let scene = terrain_scene();

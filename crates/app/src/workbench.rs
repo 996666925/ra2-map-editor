@@ -260,7 +260,7 @@ impl MapView {
                         && !self.editor.stroking
                         && !self.workbench.mission.has_draft()
                         && !self.workbench.map_settings.open,
-                    egui::Button::new("地图名称…"),
+                    egui::Button::new("地图信息…"),
                 )
                 .clicked()
             {

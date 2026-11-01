@@ -2,7 +2,8 @@
 use crate::map::MapScene;
 use anyhow::Result;
 use egui::{Color32, ColorImage, Pos2, Rect};
-use ra2_map_document::document::MapDocument;
+use ra2_map_document::document::{Cell, MapDocument};
+use std::collections::{BTreeMap, HashMap};
 
 pub const MAX_EDGE: u32 = 512;
 
@@ -17,6 +18,8 @@ pub enum SymbolKind {
     Building,
     Unit,
     Start(u8),
+    /// A cell of bridge deck, drawn at map scale beneath optional markers.
+    Bridge(Color32),
 }
 
 pub struct Symbol {
@@ -26,7 +29,6 @@ pub struct Symbol {
 
 /// Radar geography is flat: elevation changes colours, never the map frame.
 pub fn terrain(scene: &MapScene) -> Result<RadarImage> {
-    use std::collections::HashMap;
     let mut bounds = Rect::NOTHING;
     let mut cells = HashMap::with_capacity(scene.cells.len());
     for cell in &scene.cells {
@@ -113,9 +115,33 @@ pub fn radar_position(scene: &MapScene, position: Pos2) -> Pos2 {
 
 pub fn symbols(scene: &MapScene, doc: &MapDocument) -> Vec<Symbol> {
     let mut symbols = Vec::new();
+    let mut bridges = BTreeMap::new();
+    let starts = ra2_map_document::player_starts::from_document(doc);
     for cell in &scene.cells {
         let at = [cell.rx, cell.ry];
         let (id, _) = doc.overlay(at);
+        if vera20k_core::rules::overlay_types::is_bridge_overlay_index(id) {
+            let color = bridge_color(scene, id);
+            if let Some((_, direction)) =
+                vera20k_core::map::bridge_facts::high_bridge_stamp_for_overlay(id)
+            {
+                // High overlays author one anchor per cross row. Include its
+                // opposite neighbour and two forward structural deck cells.
+                let (dx, dy) = vera20k_core::util::direction::direction_delta(direction).unwrap();
+                for step in -1..=2 {
+                    let x = i32::from(at[0]) + dx * step;
+                    let y = i32::from(at[1]) + dy * step;
+                    if let (Ok(x), Ok(y)) = (u16::try_from(x), u16::try_from(y))
+                        && doc.terrain([x, y]).is_some()
+                    {
+                        bridges.insert([x, y], color);
+                    }
+                }
+            } else {
+                // Low bridges already store all three cross-row cells.
+                bridges.insert(at, color);
+            }
+        }
         let gem = scene.catalog.gem_family(id);
         if gem || scene.catalog.ore_family(id) {
             symbols.push(Symbol {
@@ -133,6 +159,9 @@ pub fn symbols(scene: &MapScene, doc: &MapDocument) -> Vec<Symbol> {
                 let Ok(number @ 0..=29) = record.key.parse::<u8>() else {
                     continue;
                 };
+                if record.key != number.to_string() || !starts.contains(&number) {
+                    continue;
+                }
                 SymbolKind::Start(number)
             }
             _ => continue,
@@ -142,10 +171,35 @@ pub fn symbols(scene: &MapScene, doc: &MapDocument) -> Vec<Symbol> {
             kind,
         });
     }
+    symbols.extend(bridges.into_iter().map(|(at, color)| Symbol {
+        position: cell_position(at),
+        kind: SymbolKind::Bridge(color),
+    }));
     symbols
 }
 
+fn bridge_color(scene: &MapScene, id: u8) -> Color32 {
+    let fallback = if matches!(id, 74..=101 | 122..=125 | 237 | 238) {
+        [174, 145, 103]
+    } else {
+        [184, 188, 192]
+    };
+    let rgb = scene
+        .catalog
+        .overlays
+        .get(usize::from(id))
+        .map_or(fallback, |name| {
+            scene
+                .catalog
+                .rules
+                .section_or_empty(name)
+                .read_color_rgb("RadarColor", fallback, None)
+        });
+    Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+}
+
 /// Flags are starts/resources/buildings/units; scale is pixels per symbol unit.
+/// Bridges are geographic features and remain visible when markers are hidden.
 pub fn overlay(
     size: [usize; 2],
     bounds: Rect,
@@ -154,10 +208,12 @@ pub fn overlay(
     scale: f32,
 ) -> ColorImage {
     let mut image = ColorImage::new(size, vec![Color32::TRANSPARENT; size[0] * size[1]]);
+    draw_bridges(&mut image, bounds, symbols);
     for symbol in symbols {
         let center = (symbol.position - bounds.min) / bounds.size()
             * egui::vec2(size[0] as f32, size[1] as f32);
         let (visible, radius, color) = match symbol.kind {
+            SymbolKind::Bridge(_) => continue,
             SymbolKind::Resource(gem) => (
                 flags[1],
                 1.,
@@ -208,6 +264,64 @@ pub fn overlay(
         }
     }
     image
+}
+
+/// Sample the union of deck cells, so adjacent cells form a continuous strip
+/// instead of dots or overlapping outlines. Subpixel samples retain thin spans
+/// when a large map is reduced to a small navigator.
+fn draw_bridges(image: &mut ColorImage, bounds: Rect, symbols: &[Symbol]) {
+    let mut cells = HashMap::<Cell, Color32>::new();
+    let mut deck_bounds = Rect::NOTHING;
+    for symbol in symbols {
+        if let SymbolKind::Bridge(color) = symbol.kind {
+            let (x, y) =
+                vera20k_core::map::terrain::screen_to_iso(symbol.position.x, symbol.position.y);
+            cells.insert([x.round() as u16, y.round() as u16], color);
+            deck_bounds = deck_bounds.union(Rect::from_center_size(
+                symbol.position,
+                egui::vec2(60., 30.),
+            ));
+        }
+    }
+    if cells.is_empty() {
+        return;
+    }
+    let [width, height] = image.size;
+    let pixels = egui::vec2(width as f32, height as f32);
+    let start = (deck_bounds.min - bounds.min) / bounds.size() * pixels;
+    let end = (deck_bounds.max - bounds.min) / bounds.size() * pixels;
+    for y in (start.y.floor().max(0.) as usize)..(end.y.ceil().max(0.) as usize).min(height) {
+        for x in (start.x.floor().max(0.) as usize)..(end.x.ceil().max(0.) as usize).min(width) {
+            let mut sum = [0u32; 3];
+            let mut hits = 0;
+            for dy in [0.125, 0.375, 0.625, 0.875] {
+                for dx in [0.125, 0.375, 0.625, 0.875] {
+                    let p = bounds.min
+                        + bounds.size() * (egui::vec2(x as f32 + dx, y as f32 + dy) / pixels);
+                    let (rx, ry) = vera20k_core::map::terrain::screen_to_iso(p.x, p.y);
+                    if rx >= 0.
+                        && ry >= 0.
+                        && let Some(color) = cells.get(&[rx.round() as u16, ry.round() as u16])
+                    {
+                        for (total, channel) in
+                            sum.iter_mut().zip([color.r(), color.g(), color.b()])
+                        {
+                            *total += u32::from(channel);
+                        }
+                        hits += 1;
+                    }
+                }
+            }
+            if let Some(red) = sum[0].checked_div(hits) {
+                image.pixels[y * width + x] = Color32::from_rgba_unmultiplied(
+                    red as u8,
+                    (sum[1] / hits) as u8,
+                    (sum[2] / hits) as u8,
+                    (hits * 255 / 16) as u8,
+                );
+            }
+        }
+    }
 }
 
 fn label(image: &mut ColorImage, center: egui::Vec2, number: u8, scale: f32) {
@@ -386,6 +500,8 @@ mod tests {
             .unwrap();
         doc.waypoint(29, [23, 20]).unwrap();
         doc.waypoint(30, [24, 20]).unwrap();
+        doc.set_ini("Basic", "MaxPlayers", Some(b"30".to_vec()))
+            .unwrap();
         let symbols = symbols(&scene, &doc);
         assert_eq!(
             symbols
@@ -437,5 +553,127 @@ mod tests {
                 assert!(image.pixels.contains(&Color32::WHITE));
             }
         }
+    }
+
+    #[test]
+    fn mission_waypoints_are_excluded_from_preview_and_navigation_starts() {
+        let scene = scene(20, 20, 0);
+        let mut doc = MapDocument::new(scene.source.edit_base.as_ref().unwrap().clone());
+        for n in [8, 29, 30, 50] {
+            doc.waypoint(n, [20, 20]).unwrap();
+        }
+        let starts = |doc: &MapDocument| {
+            symbols(&scene, doc)
+                .into_iter()
+                .filter_map(|s| {
+                    if let SymbolKind::Start(n) = s.kind {
+                        Some(n)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        assert_eq!(starts(&doc), std::collections::BTreeSet::from([0, 1]));
+        // Native ordinary maps recognize authored start slots 0 through 7.
+        doc.waypoint(7, [21, 20]).unwrap();
+        assert_eq!(starts(&doc), std::collections::BTreeSet::from([0, 1, 7]));
+        // Pending metadata changes affect every caller of the shared symbols.
+        doc.set_ini("Basic", "MaxPlayers", Some(b"30".to_vec()))
+            .unwrap();
+        assert_eq!(
+            starts(&doc),
+            std::collections::BTreeSet::from([0, 1, 7, 8, 29])
+        );
+    }
+
+    #[test]
+    fn bridge_decks_cover_both_axes_and_materials_at_navigator_and_preview_sizes() {
+        use ra2_map_document::document::{Target, Value};
+        let scene = scene(20, 20, 0);
+        let radar = terrain(&scene).unwrap();
+        for id in [24, 25, 237, 238, 74, 83, 101, 122, 205, 214, 232, 233] {
+            let mut doc = MapDocument::new(scene.source.edit_base.as_ref().unwrap().clone());
+            let high = vera20k_core::rules::overlay_types::is_high_bridge_index(id);
+            let along_x = !matches!(id, 25 | 238 | 83 | 214);
+            let rotate = |[x, y]: Cell| if along_x { [x, y] } else { [y, x] };
+            for x in 16..=24 {
+                if high {
+                    doc.set(
+                        Target::Overlay(rotate([x, 20])),
+                        Some(Value::Overlay(id, if along_x { 0 } else { 9 })),
+                    )
+                    .unwrap();
+                } else {
+                    for y in 19..=21 {
+                        doc.set(
+                            Target::Overlay(rotate([x, y])),
+                            Some(Value::Overlay(id, (y - 19) as u8)),
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+            let symbols = symbols(&scene, &doc);
+            assert_eq!(
+                symbols
+                    .iter()
+                    .filter(|s| matches!(s.kind, SymbolKind::Bridge(_)))
+                    .count(),
+                if high { 36 } else { 27 }
+            );
+            for size in [[96, 48], [256, 128], radar.image.size] {
+                // Bridge geography is independent of optional marker toggles.
+                let image = overlay(size, radar.bounds, &symbols, [false; 4], 1.);
+                for step in 0..=64 {
+                    let a = cell_position(rotate([16, 20]));
+                    let b = cell_position(rotate([24, 20]));
+                    let position = a.lerp(b, step as f32 / 64.);
+                    let pixel = (position - radar.bounds.min) / radar.bounds.size()
+                        * egui::vec2(size[0] as f32, size[1] as f32);
+                    assert!(
+                        image.pixels[pixel.y as usize * size[0] + pixel.x as usize].a() > 0,
+                        "missing bridge {id} at {step} in {size:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bridge_surface_tracks_pending_edits_history_and_rules_colors() {
+        use ra2_map_document::document::{Target, Value};
+        let mut scene = scene(20, 20, 0);
+        let catalog = std::sync::Arc::make_mut(&mut scene.catalog);
+        catalog.overlays.resize(256, String::new());
+        catalog.overlays[24] = "BRIDGE1".into();
+        catalog.rules = vera20k_core::rules::ini_parser::IniFile::from_str(
+            "[BRIDGE1]\nRadarColor=90,160,200\n",
+        );
+        let mut doc = MapDocument::new(scene.source.edit_base.as_ref().unwrap().clone());
+        let radar = terrain(&scene).unwrap();
+        let render = |doc: &MapDocument| {
+            overlay(
+                radar.image.size,
+                radar.bounds,
+                &symbols(&scene, doc),
+                [false; 4],
+                1.,
+            )
+        };
+        let before = render(&doc);
+        assert!(before.pixels.iter().all(|p| p.a() == 0));
+        doc.set(Target::Overlay([20, 20]), Some(Value::Overlay(24, 0)))
+            .unwrap();
+        let after = render(&doc);
+        assert!(after.pixels.contains(&Color32::from_rgb(90, 160, 200)));
+        doc.commit("bridge");
+        doc.undo();
+        assert_eq!(render(&doc), before);
+        doc.redo();
+        assert_eq!(render(&doc), after);
+        doc.set(Target::Overlay([20, 20]), Some(Value::Overlay(255, 0)))
+            .unwrap();
+        assert_eq!(render(&doc), before);
     }
 }

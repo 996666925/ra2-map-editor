@@ -4,21 +4,7 @@ use vera20k_core::map::map_file::MapFile;
 pub const MAX_PLAYTEST_PLAYERS: u8 = ra2_map_document::new_map::MAX_PLAYERS;
 pub const PLAYER_COLOR_COUNT: u8 = 8;
 
-/// Explicit extended rosters may be sparse. Without a declaration only a
-/// contiguous extended roster distinguishes starts from mission waypoints.
-pub fn player_start_indices(declared: Option<u8>, starts: impl IntoIterator<Item = u8>) -> Vec<u8> {
-    let starts: std::collections::BTreeSet<_> = starts
-        .into_iter()
-        .filter(|&n| n < MAX_PLAYTEST_PLAYERS)
-        .collect();
-    let contiguous = (0..MAX_PLAYTEST_PLAYERS)
-        .take_while(|n| starts.contains(n))
-        .count() as u8;
-    let limit = declared
-        .filter(|n| (9..=MAX_PLAYTEST_PLAYERS).contains(n))
-        .unwrap_or(contiguous.max(8));
-    starts.into_iter().filter(|&n| n < limit).collect()
-}
+pub use ra2_map_document::player_starts::indices as player_start_indices;
 
 pub fn map_player_starts(map: &MapFile) -> Vec<u8> {
     let (Ok(width), Ok(height)) = (

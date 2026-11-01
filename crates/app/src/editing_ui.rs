@@ -543,10 +543,7 @@ impl Editor {
                         .range(0..=701)
                         .prefix("航点编号  "),
                 );
-                ui.small(format!(
-                    "0–{} 为 VERA20k 玩家起点，点击地图设置位置。",
-                    crate::new_map::MAX_PLAYERS - 1
-                ));
+                ui.small("点击地图设置航点位置。0～7 用于出生点；9～30 人地图还使用扩展编号。可在“设置 → 地图信息”中增减数量。");
             }
             Tool::Move => {
                 ui.checkbox(&mut self.allow_overlap, "允许对象重叠");

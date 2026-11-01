@@ -1,7 +1,7 @@
 //! Play setup stays visible; optional economy/rules settings can be expanded.
 use super::*;
 use crate::ui_theme as theme;
-use ra2_map_io::playtest::{PLAYER_COLOR_COUNT, PlayOptions, player_start_indices};
+use ra2_map_io::playtest::{PLAYER_COLOR_COUNT, PlayOptions};
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -43,20 +43,7 @@ const SPEEDS: [&str; 7] = ["最慢", "更慢", "慢", "正常", "快", "更快",
 
 /// Query current document records, including pending edits, for launch starts.
 fn map_starts(doc: &MapDocument) -> Vec<u8> {
-    let starts: BTreeSet<_> = doc
-        .records()
-        .values()
-        .filter_map(|r| {
-            let slot = r.key.parse::<u8>().ok()?;
-            (r.section == "Waypoints"
-                && slot < crate::new_map::MAX_PLAYERS
-                && r.key == slot.to_string()
-                && r.cell()
-                    .is_some_and(|at| at != [0, 0] && doc.terrain(at).is_some()))
-            .then_some(slot)
-        })
-        .collect();
-    player_start_indices(doc.ini_text("Basic", "MaxPlayers").parse().ok(), starts)
+    ra2_map_document::player_starts::from_document(doc)
 }
 
 fn country(ui: &mut egui::Ui, id: &str, label: &str, value: &mut u8) {
