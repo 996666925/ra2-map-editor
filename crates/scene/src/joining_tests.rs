@@ -54,6 +54,161 @@ fn undoable(doc: &mut MapDocument, p: &PlateauPlan) {
         assert_eq!(doc.snapshot().bytes().unwrap(), after);
     }
 }
+
+fn shore_ground(scene: &mut MapScene) {
+    use ra2_map_assets::catalog::{TerrainSubtile, TerrainTemplate};
+    use vera20k_core::map::theater::TileKey;
+    let image = scene.palette.images.values().next().unwrap().clone();
+    let palette = Arc::get_mut(&mut scene.palette).unwrap();
+    let ids = palette.tile_ids.as_mut().unwrap();
+    ids.green = 1000;
+    ids.green_lat = 1001;
+    for tile in 1000..1017 {
+        palette.templates.insert(
+            (tile, 0),
+            TerrainTemplate {
+                width: 1,
+                height: 1,
+                cells: vec![Some(TerrainSubtile {
+                    height: 0,
+                    slope: 0,
+                    terrain: 14,
+                })],
+            },
+        );
+        palette.images.insert(
+            TileKey {
+                tile_id: tile,
+                sub_tile: 0,
+                variant: 0,
+            },
+            image.clone(),
+        );
+        // Stock LAT art is flat ground even when Morphable is not enabled.
+        // Exercise legacy disk ids separately from the resolved art ids.
+        palette.raw_ids.insert(2000 + i32::from(tile), tile);
+        Arc::make_mut(&mut scene.catalog)
+            .raw_tiles
+            .insert(tile, 2000 + i32::from(tile));
+    }
+}
+
+#[test]
+fn lake_ground_transitions_cover_four_sides_and_corners_and_repair_old_lakes() {
+    let (mut d, mut s) = setup();
+    let selection = cliff_tools::rectangle([60, 60], [72, 72]);
+    // Reproduce an existing lake authored before ground transitions were added.
+    shore_tools::plan(&d, &s, selection.clone(), Some(true))
+        .unwrap()
+        .apply(&mut d)
+        .unwrap();
+    d.commit("old lake");
+    shore_ground(&mut s);
+    let before = d.snapshot().bytes().unwrap();
+    let p = shore_tools::plan(&d, &s, selection.clone(), None).unwrap();
+    assert_eq!(
+        d.snapshot().bytes().unwrap(),
+        before,
+        "preview mutated document"
+    );
+    for (at, mask) in [
+        ([58, 66], 8),
+        ([74, 66], 2),
+        ([66, 58], 1),
+        ([66, 74], 4),
+        ([58, 58], 9),
+        ([74, 58], 3),
+        ([74, 74], 6),
+        ([58, 74], 12),
+    ] {
+        let v = p.edits.get(&at).expect("missing outer shore transition");
+        assert_eq!(
+            s.palette.raw_ids[&v.tile],
+            1001 + mask,
+            "wrong LAT orientation at {at:?}"
+        );
+        assert_eq!((v.sub, v.level), (0, 4));
+    }
+    assert!(!p.edits.contains_key(&[55, 55]), "distant ground changed");
+    undoable(&mut d, &p);
+    complete(&d, &s, &p);
+    assert!(
+        shore_tools::plan(&d, &s, selection.clone(), None)
+            .unwrap()
+            .edits
+            .is_empty()
+    );
+    let mut fresh = setup().0;
+    let fresh_plan = shore_tools::plan(&fresh, &s, selection, Some(true)).unwrap();
+    fresh_plan.apply(&mut fresh).unwrap();
+    assert_eq!(
+        fresh.snapshot().bytes().unwrap(),
+        d.snapshot().bytes().unwrap()
+    );
+    // Expansion and refill must accept the generated transition cells as ground.
+    let p = shore_tools::plan(
+        &d,
+        &s,
+        cliff_tools::rectangle([68, 65], [80, 78]),
+        Some(true),
+    )
+    .unwrap();
+    undoable(&mut d, &p);
+    complete(&d, &s, &p);
+    let p = shore_tools::plan(
+        &d,
+        &s,
+        cliff_tools::rectangle([55, 55], [85, 85]),
+        Some(false),
+    )
+    .unwrap();
+    undoable(&mut d, &p);
+    assert_eq!(
+        d.snapshot().bytes().unwrap(),
+        setup().0.snapshot().bytes().unwrap()
+    );
+}
+
+#[test]
+fn shore_transitions_preserve_ice_and_protect_neighbor_objects_and_missing_art() {
+    let (mut d, mut s) = setup();
+    shore_ground(&mut s);
+    let at = [58, 66];
+    let old = TerrainValue {
+        ice: 7,
+        ..value(&d, &s, at)
+    };
+    d.set(Target::Terrain(at), Some(Value::Terrain(old)))
+        .unwrap();
+    d.commit("ice");
+    let selection = cliff_tools::rectangle([60, 60], [72, 72]);
+    let p = shore_tools::plan(&d, &s, selection.clone(), Some(true)).unwrap();
+    assert_eq!(p.edits[&at].ice, 7);
+    // All these obstructions lie outside the selected water rectangle.
+    for object in [false, true] {
+        if object {
+            d.add_record("Structures", at, "Neutral", "B").unwrap();
+        } else {
+            d.set(Target::Overlay(at), Some(Value::Overlay(0, 0)))
+                .unwrap();
+        }
+        let before = d.snapshot().bytes().unwrap();
+        assert!(shore_tools::plan(&d, &s, selection.clone(), Some(true)).is_err());
+        assert_eq!(d.snapshot().bytes().unwrap(), before);
+        d.cancel();
+    }
+    Arc::get_mut(&mut s.palette)
+        .unwrap()
+        .images
+        .remove(&vera20k_core::map::theater::TileKey {
+            tile_id: 1009,
+            sub_tile: 0,
+            variant: 0,
+        });
+    let before = d.snapshot().bytes().unwrap();
+    assert!(shore_tools::plan(&d, &s, selection, Some(true)).is_err());
+    assert_eq!(d.snapshot().bytes().unwrap(), before);
+}
 #[test]
 fn shores_merge_cut_form_islands_and_remove_obsolete_templates_atomically() {
     let (mut d, s) = setup();

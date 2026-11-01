@@ -156,6 +156,25 @@ fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json:
     ] {
         let p = shore_tools::plan(&doc, &scene, cliff_tools::rectangle(a, b), paint)
             .with_context(|| name)?;
+        if name == "lake" && ids.green >= 0 && ids.green_lat >= 0 {
+            for at in [
+                [58, 66],
+                [74, 66],
+                [66, 58],
+                [66, 74],
+                [58, 58],
+                [74, 58],
+                [74, 74],
+                [58, 74],
+            ] {
+                let v = p.edits.get(&at).context("missing outer shore transition")?;
+                let tile = i32::from(scene.palette.raw_ids[&v.tile]);
+                ensure!(
+                    (ids.green_lat..ids.green_lat + 16).contains(&tile),
+                    "{theater}: missing ground LAT at {at:?}"
+                );
+            }
+        }
         if p.edits.is_empty() {
             cases.push(serde_json::json!({"case":name,"idempotent":true}));
             continue;

@@ -4,10 +4,10 @@ use crate::{
     cliff_authoring,
     cliff_tools::{CliffStamp, PlateauPlan},
     map::MapScene,
-    terrain_tools::value,
+    terrain_tools::{self, value},
 };
 use anyhow::{Context, Result, ensure};
-use ra2_map_document::document::{Cell, MapDocument, TerrainValue};
+use ra2_map_document::document::{Cell, MapDocument, Target, TerrainValue, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
@@ -52,11 +52,20 @@ pub(crate) fn ground(scene: &MapScene, v: TerrainValue) -> bool {
                     .first()
                     .and_then(|s| *s)
                     .is_some_and(|s| s.height == 0 && s.slope == 0)
-        }) && (scene
-            .palette
-            .tile_ids
-            .is_some_and(|ids| i32::from(tile) == ids.clear)
-            || scene.palette.morphable.contains(&tile))
+        }) && (scene.palette.tile_ids.is_some_and(|ids| {
+            let tile = i32::from(tile);
+            tile == ids.clear
+                || [
+                    (ids.rough, ids.rough_lat),
+                    (ids.sand, ids.sand_lat),
+                    (ids.green, ids.green_lat),
+                    (ids.pave, ids.pave_lat),
+                ]
+                .into_iter()
+                .any(|(base, lat)| {
+                    base >= 0 && tile == base || lat >= 0 && (lat..lat + 16).contains(&tile)
+                })
+        }) || scene.palette.morphable.contains(&tile))
     })
 }
 pub(crate) fn protect(
@@ -188,6 +197,102 @@ fn solve(candidates: &[Candidate], by_edge: &[Vec<usize>]) -> Result<Vec<usize>>
             stack.pop();
         }
     }
+}
+
+/// ShorePieces end in GreenTile art, not ClearTile. Surround their dry cells
+/// with that ground family, then let LAT blend its outer edge back to clear.
+/// The engine's Green LAT group explicitly connects to ShorePieces.
+fn ground_transitions(
+    doc: &MapDocument,
+    scene: &MapScene,
+    zone: &BTreeSet<Cell>,
+    plan: &mut PlateauPlan,
+) -> Result<()> {
+    let ids = scene.palette.tile_ids.context("缺少地形配置")?;
+    let mut scratch = doc.fork();
+    plan.apply(&mut scratch)?;
+    let mut touched: BTreeSet<_> = plan.edits.keys().copied().collect();
+    let shores: Vec<_> = zone
+        .iter()
+        .copied()
+        .filter(|&at| id(scene, value(&scratch, scene, at)).is_some_and(|t| shore(scene, t)))
+        .collect();
+    touched.extend(&shores);
+    if ids.green >= 0 && ids.green_lat >= 0 {
+        let mut green = None;
+        for at in shores {
+            let v = value(&scratch, scene, at);
+            if wet(scene, v) {
+                continue;
+            }
+            // Diagonal neighbours also need a transition at convex corners.
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    let Some(n) = offset(at, dx, dy).filter(|&n| doc.check_cell(n).is_ok()) else {
+                        continue;
+                    };
+                    let old = value(&scratch, scene, n);
+                    if id(scene, old).is_some_and(|t| i32::from(t) == ids.clear)
+                        && ground(scene, old)
+                        && old.level == v.level
+                    {
+                        let tile = if let Some(tile) = green {
+                            tile
+                        } else {
+                            // recalculate skips unavailable art for manual brushes;
+                            // automatic shores need a complete transition family.
+                            for tile in std::iter::once(ids.green)
+                                .chain(ids.green_lat + 1..ids.green_lat + 16)
+                            {
+                                let tile = u16::try_from(tile).context("岸边地表编号无效")?;
+                                ensure!(
+                                    scene.palette.images.contains_key(
+                                        &vera20k_core::map::theater::TileKey {
+                                            tile_id: tile,
+                                            sub_tile: 0,
+                                            variant: 0
+                                        }
+                                    ) && scene.palette.templates.get(&(tile, 0)).is_some_and(|t| {
+                                        t.width == 1
+                                            && t.height == 1
+                                            && t.cells
+                                                .first()
+                                                .and_then(|s| *s)
+                                                .is_some_and(|s| s.height == 0 && s.slope == 0)
+                                    }) && scene.catalog.raw_tiles.contains_key(&tile),
+                                    "岸边地表过渡资源不完整，未修改地图"
+                                );
+                            }
+                            let tile = scene.catalog.raw_tiles[&(ids.green as u16)];
+                            green = Some(tile);
+                            tile
+                        };
+                        scratch.set(
+                            Target::Terrain(n),
+                            Some(Value::Terrain(TerrainValue {
+                                tile,
+                                sub: 0,
+                                ..old
+                            })),
+                        )?;
+                        touched.insert(n);
+                    }
+                }
+            }
+        }
+    }
+    if !touched.is_empty() {
+        let changed = terrain_tools::recalculate(&mut scratch, scene, &touched)?;
+        touched.extend(changed);
+        for at in touched {
+            let v = value(&scratch, scene, at);
+            // Keep complete shore/cliff templates, including their subtiles.
+            if ground(scene, v) && v != value(doc, scene, at) {
+                plan.edits.insert(at, v);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `paint`: Some(true) adds water, Some(false) fills land, None repairs only.
@@ -492,6 +597,7 @@ pub fn plan(
     {
         crate::coastal_cliffs::adapt(doc, scene, &mut result)?;
     }
+    ground_transitions(doc, scene, &zone, &mut result)?;
     result.edits.retain(|&at, v| *v != value(doc, scene, at));
     protect(doc, scene, &result.edits)?;
     Ok(result)
