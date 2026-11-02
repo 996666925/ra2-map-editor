@@ -7,6 +7,26 @@ use anyhow::{Context, Result, ensure};
 use std::collections::BTreeSet;
 use vera20k_core::map::playfield::PlayfieldBounds;
 
+/// TeamType House selector for a VERA player start (A..Z, AA..AD).
+pub fn house_token(slot: u32) -> Option<String> {
+    (slot < u32::from(MAX_PLAYERS))
+        .then(|| {
+            vera20k_core::rules::native_processing::house_type_player_at_text(4475 + slot as i32)
+        })
+        .flatten()
+}
+
+/// Case-sensitive selector reader matching VERA's TeamType House syntax.
+pub fn house_slot(value: &str) -> Option<u8> {
+    let letters = value.strip_prefix("<Player @ ")?.strip_suffix('>')?;
+    let slot = match letters.as_bytes() {
+        [letter @ b'A'..=b'Z'] => letter - b'A',
+        [b'A', letter @ b'A'..=b'Z'] => 26 + letter - b'A',
+        _ => return None,
+    };
+    (slot < MAX_PLAYERS).then_some(slot)
+}
+
 /// Ordinary maps use the native first eight slots. Extended declarations may
 /// be sparse; older extended maps require a contiguous roster.
 pub fn indices(declared: Option<u8>, starts: impl IntoIterator<Item = u8>) -> Vec<u8> {
@@ -142,6 +162,38 @@ mod tests {
         .unwrap();
         let map = vera20k_core::map::map_file::load_from_bytes(bytes.clone()).unwrap();
         MapDocument::new(Baseline::parse(Arc::from(bytes), &map).unwrap())
+    }
+
+    #[test]
+    fn house_selectors_match_vera_and_reject_noncanonical_tokens() {
+        for slot in 0..30 {
+            let text = house_token(slot).unwrap();
+            assert_eq!(house_slot(&text), Some(slot as u8));
+        }
+        for (slot, text) in [
+            (0, "<Player @ A>"),
+            (7, "<Player @ H>"),
+            (8, "<Player @ I>"),
+            (25, "<Player @ Z>"),
+            (26, "<Player @ AA>"),
+            (29, "<Player @ AD>"),
+        ] {
+            assert_eq!(house_token(slot).as_deref(), Some(text));
+        }
+        for slot in [30, u32::MAX] {
+            assert!(house_token(slot).is_none());
+        }
+        for text in [
+            "<Player @ AE>",
+            "<Player @ BA>",
+            "<Player @ a>",
+            "<player @ A>",
+            "<Player @ AAA>",
+            "<Player @ A>extra",
+            "<Player @ >",
+        ] {
+            assert!(house_slot(text).is_none(), "{text}");
+        }
     }
 
     #[test]

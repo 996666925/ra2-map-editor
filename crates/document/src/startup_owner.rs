@@ -2,6 +2,7 @@
 use crate::{
     document::{MapDocument, Record, Target, Value},
     mission::{self, Kind},
+    new_map::MAX_PLAYERS,
 };
 use anyhow::{Context, Result, ensure};
 
@@ -18,7 +19,7 @@ fn header(slot: u8) -> String {
     format!("Neutral,<none>,Editor startup owner {slot},0,1,1,1,0")
 }
 fn action(slot: u8) -> String {
-    // House510F60 selects the actual occupant of start A..H, including AI.
+    // House510F60 selects the actual start occupant, extended by VERA to 30 slots.
     format!("1,14,0,{},0,0,0,0,A", 4475 + u16::from(slot))
 }
 fn tag_value(id: &str, slot: u8) -> String {
@@ -28,7 +29,7 @@ fn managed_slot(doc: &MapDocument, tag: &str) -> Option<u8> {
     if !tag.starts_with("EDSTART") {
         return None;
     }
-    (0..8).find(|&slot| {
+    (0..MAX_PLAYERS).find(|&slot| {
         doc.ini_text("Tags", tag) == tag_value(tag, slot)
             && doc.ini_text("Triggers", tag) == header(slot)
             && doc.ini_text("Events", tag) == "1,13,0,0"
@@ -54,8 +55,8 @@ pub fn available(doc: &MapDocument, record: &Record) -> bool {
 /// Custom tags are never replaced. Only exact generated graphs are managed.
 pub fn set(doc: &mut MapDocument, record_id: u64, slot: Option<u8>) -> Result<()> {
     ensure!(
-        slot.is_none_or(|slot| slot < 8),
-        "开局归属仅支持玩家起点 0～7"
+        slot.is_none_or(|slot| slot < MAX_PLAYERS),
+        "开局归属仅支持玩家起点 0～29"
     );
     let record = doc.records().remove(&record_id).context("对象不存在")?;
     let column = tag_column(&record.section).context("该对象不支持所属方")?;

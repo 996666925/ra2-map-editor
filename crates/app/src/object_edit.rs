@@ -307,7 +307,7 @@ impl Editor {
                                     None,
                                     "保持所属方",
                                 );
-                                for slot in 0..8 {
+                                for slot in 0..ra2_map_document::new_map::MAX_PLAYERS {
                                     if self.records.values().any(|r| {
                                         r.section == "Waypoints" && r.key == slot.to_string()
                                     }) {
@@ -323,7 +323,7 @@ impl Editor {
                             .accessible_name("开局交给");
                     });
                     if startup_owner::available(doc, &r) {
-                        ui.small("开局由中立方转交给该起点的玩家或电脑；无人使用时保持中立。支持航点 0～7。");
+                        ui.small("开局由中立方转交给该起点的玩家或电脑；无人使用时保持中立。支持航点 0～29；扩展起点需配置地图出生点数量。");
                     } else {
                         ui.small("对象已有关联标签，请通过任务触发器设置开局归属。");
                     }

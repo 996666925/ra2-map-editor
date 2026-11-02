@@ -15,7 +15,14 @@ fn native_team_start_owners_are_distinct_from_fixed_house_references() {
     let mut doc = crate::test_support::document();
     doc.set_ini("TeamTypes", "GIFT", Some(b"GIFT".to_vec()))
         .unwrap();
-    for owner in ["<Player @ A>", "<Player @ H>"] {
+    for owner in [
+        "<Player @ A>",
+        "<Player @ H>",
+        "<Player @ I>",
+        "<Player @ Z>",
+        "<Player @ AA>",
+        "<Player @ AD>",
+    ] {
         doc.set_ini("GIFT", "House", Some(owner.as_bytes().to_vec()))
             .unwrap();
         assert!(
@@ -26,7 +33,11 @@ fn native_team_start_owners_are_distinct_from_fixed_house_references() {
     }
     for owner in [
         "Russians",
-        "<Player @ I>",
+        "<Player @ AE>",
+        "<Player @ BA>",
+        "<Player @ a>",
+        "<Player @ AAA>",
+        "<Player @ >",
         "<player @ A>",
         "<Player @ A>extra",
     ] {

@@ -229,7 +229,7 @@ fn gift_plan(slot: u32) -> Mission {
 #[test]
 fn multiplayer_gifts_encode_all_native_start_selectors_and_preserve_history() {
     let (mut doc, _) = fixture();
-    for slot in 0..8 {
+    for slot in 0..30 {
         doc.waypoint(slot, [2, 2]).unwrap();
     }
     doc.waypoint(20, [2, 2]).unwrap();
@@ -237,7 +237,7 @@ fn multiplayer_gifts_encode_all_native_start_selectors_and_preserve_history() {
         .unwrap();
     doc.commit("start positions");
     let catalog = Catalog::from_document(&doc, vec!["E1".into()], vec![]);
-    for slot in 0..8 {
+    for slot in 0..30 {
         let before = doc.snapshot().bytes().unwrap();
         let plan = gift_plan(slot);
         prepare(&doc, &plan, &catalog)
@@ -248,7 +248,10 @@ fn multiplayer_gifts_encode_all_native_start_selectors_and_preserve_history() {
         let team = &mission::ids(&doc, Kind::Team)[0];
         assert_eq!(
             doc.ini_text(team, "House"),
-            format!("<Player @ {}>", char::from(b'A' + slot as u8))
+            format!(
+                "<Player @ {}>",
+                mission::schema::waypoint_token(slot).unwrap()
+            )
         );
         assert_eq!(doc.ini_text(team, "Waypoint"), "A");
         assert_eq!(doc.ini_text("Basic", "Player"), "Special");
@@ -298,8 +301,11 @@ fn multiplayer_gifts_encode_all_native_start_selectors_and_preserve_history() {
 #[test]
 fn start_player_validation_cannot_be_bypassed_by_forged_ir() {
     let (doc, mut catalog) = fixture();
-    catalog.waypoints.extend([8, 20]);
-    for slot in [1, 7, 8, 20, u32::MAX] {
+    catalog.waypoints.extend([8, 20, 29, 30]);
+    for slot in [8, 20, 29] {
+        assert!(prepare(&doc, &gift_plan(slot), &catalog).is_ok());
+    }
+    for slot in [1, 7, 28, 30, u32::MAX] {
         assert!(
             prepare(&doc, &gift_plan(slot), &catalog).is_err(),
             "invalid/missing start {slot}"
@@ -577,7 +583,7 @@ fn transpilation_skips_types_but_keeps_sdk_and_native_validation() {
                 .unwrap_err().to_string();
             assert!(error.contains(expected), "{body}: {error}");
         }
-        catalog.waypoints.extend([7, 8, 20]);
+        catalog.waypoints.extend([7, 8, 20, 25, 26, 29, 30]);
         files.insert("/map.generated.ts".into(), catalog.typescript().unwrap());
         let multiplayer = base.replace("player:House.Neutral", "mode:MissionMode.Multiplayer");
         files.insert("/mission.ts".into(), multiplayer.replace("BODY", "const gift = m.team('gift', {house:m.playerAt(Waypoint.WP7), waypoint:m.waypoint(Waypoint.WP20), units:[{type:m.unit(Unit.E1), count:3}], orders:[order.guard(60)]}); m.rule('give', {when:event.sinceScenarioStart(10), once:true, actions:[action.reinforce(gift, m.waypoint(Waypoint.WP20))]});"));
@@ -585,9 +591,15 @@ fn transpilation_skips_types_but_keeps_sdk_and_native_validation() {
         assert_eq!(built.mode, MissionMode::Multiplayer);
         assert!(built.player.is_empty());
         assert!(matches!(built.teams[0].house, TeamOwner::StartPlayer { id: 7 }));
+        for slot in [8, 20, 25, 26, 29] {
+            files.insert("/mission.ts".into(), multiplayer.replace("BODY", &format!("const gift = m.team('gift', {{house:m.playerAt(Waypoint.WP{slot}), waypoint:m.waypoint(Waypoint.WP0), units:[{{type:m.unit(Unit.E1), count:3}}], orders:[order.guard(60)]}});")));
+            let built = compiler.build(files.clone()).unwrap();
+            assert!(matches!(built.teams[0].house, TeamOwner::StartPlayer { id } if id == slot));
+            assert!(prepare(&doc, &built, &catalog).is_ok());
+        }
         for (source, expected) in [
-            (multiplayer.replace("BODY", "m.playerAt(Waypoint.WP8);"), "仅支持 0～7"),
-            (multiplayer.replace("BODY", "m.playerAt(Waypoint.WP20);"), "仅支持 0～7"),
+            (multiplayer.replace("BODY", "m.playerAt(Waypoint.WP30);"), "仅支持 0～29"),
+            (multiplayer.replace("BODY", "m.playerAt(1.5);"), "Unknown player start"),
             (multiplayer.replace("BODY", "m.playerAt(m.waypoint(Waypoint.WP0));"), "Unknown player start"),
             (multiplayer.replace("BODY", "m.playerAt(House.Neutral);"), "Unknown player start"),
             (multiplayer.replace("BODY", "m.playerAt(6);"), "Unknown player start"),

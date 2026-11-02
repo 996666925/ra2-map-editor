@@ -2,7 +2,8 @@ use anyhow::{Context, Result, ensure};
 use ra2_map_document::{
     document::{MapDocument, Record, Target, Value},
     mission::{self, Kind},
-    startup_owner,
+    new_map::MAX_PLAYERS,
+    player_starts, startup_owner,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -613,11 +614,11 @@ pub fn prepare(doc: &MapDocument, plan: &Mission, catalog: &Catalog) -> Result<B
                     "按起点选择玩家仅支持多人任务"
                 );
                 ensure!(
-                    *id < 8 && catalog.waypoints.contains(id),
-                    "小队 {} 的玩家起点必须是地图已有的 0～7 号航点",
+                    *id < u32::from(MAX_PLAYERS) && catalog.waypoints.contains(id),
+                    "小队 {} 的玩家起点必须是地图已有的 0～29 号航点",
                     team.id
                 );
-                format!("<Player @ {}>", char::from(b'A' + *id as u8))
+                player_starts::house_token(*id).context("玩家起点选择器无效")?
             }
         };
         ensure!(

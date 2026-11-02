@@ -57,6 +57,39 @@ fn startup_owners_share_graph_roundtrip_change_clear_and_undo() {
 }
 
 #[test]
+fn extended_startup_owners_roundtrip_and_reject_out_of_range_slots() {
+    let mut doc = document();
+    let id = doc.add_record("Units", [2, 2], "Neutral", "HTNK").unwrap();
+    for slot in [8, 25, 26, 29] {
+        doc.waypoint(u32::from(slot), [2, 2]).unwrap();
+        set(&mut doc, id, Some(slot)).unwrap();
+        doc.commit("extended startup owner");
+        let tag = doc.records()[&id].fields()[7].clone();
+        assert_eq!(
+            doc.ini_text("Actions", &tag),
+            format!("1,14,0,{},0,0,0,0,A", 4475 + u16::from(slot))
+        );
+        assert_eq!(mission::ids(&doc, Kind::Trigger).len(), 1);
+        let bytes = doc.snapshot().bytes().unwrap();
+        let map = map_file::load_from_bytes(bytes.clone()).unwrap();
+        let reopened = MapDocument::new(Baseline::parse(Arc::from(bytes.clone()), &map).unwrap());
+        let record = reopened
+            .records()
+            .values()
+            .find(|r| r.section == "Units")
+            .unwrap()
+            .clone();
+        assert_eq!(get(&reopened, &record), Some(slot));
+        for invalid in [30, u8::MAX] {
+            assert!(set(&mut doc, id, Some(invalid)).is_err());
+            assert_eq!(doc.snapshot().bytes().unwrap(), bytes);
+        }
+    }
+    set(&mut doc, id, None).unwrap();
+    assert!(mission::ids(&doc, Kind::Trigger).is_empty());
+}
+
+#[test]
 fn startup_owners_reject_missing_starts_custom_tags_and_modified_graphs_atomically() {
     let mut doc = document();
     let id = doc.add_record("Units", [2, 2], "Neutral", "HTNK").unwrap();

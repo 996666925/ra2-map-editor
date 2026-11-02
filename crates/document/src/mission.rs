@@ -636,14 +636,8 @@ pub fn references(doc: &MapDocument) -> Vec<Reference> {
             ("Tag", Kind::Tag),
         ] {
             let value = doc.ini_text(&id, k);
-            // TeamType House has native start-player selectors, not House IDs.
-            let bytes = value.as_bytes();
-            if k == "House"
-                && bytes.len() == 12
-                && bytes.starts_with(b"<Player @ ")
-                && (b'A'..=b'H').contains(&bytes[10])
-                && bytes[11] == b'>'
-            {
+            // TeamType House accepts VERA's thirty start-player selectors.
+            if k == "House" && crate::player_starts::house_slot(&value).is_some() {
                 continue;
             }
             add((Kind::Team, id.clone()), k, (kind, value), None);

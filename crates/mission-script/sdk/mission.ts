@@ -49,6 +49,10 @@ export interface Ref<K extends string, I extends string | number = string> {
 export type House = Ref<"house">;
 /** 占用指定玩家起点的人类或 AI，由多人任务中的 m.playerAt() 取得。 */
 export type StartPlayer = Ref<"startPlayer", number>;
+/** VERA 支持的玩家起点编号；还须在当前地图中定义。 */
+export type PlayerStartId = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+  | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19
+  | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29;
 /** 地图运行模式，决定是否固定单人玩家及是否允许按起点选择玩家。 */
 export enum MissionMode {
   /** 单人任务；必须指定 player，并写入 Basic/Player。默认模式，兼容已有脚本。 */
@@ -183,19 +187,19 @@ export class MissionBuilder<S extends MapSchema, M extends MissionMode = Mission
   }
   /**
    * 取得开局占用指定玩家起点的实际所属方，包含人类和 AI，不绑定国家或玩家颜色。
-   * @param id 当前地图 Waypoint 枚举中的 WP0～WP7，仅接受地图已有的这些起点。
-   * @returns 可传入 TeamOptions.house 的 StartPlayer；生成原生 House=<Player @ A>～<Player @ H>。
-   * @throws 单人模式、起点不存在或超出 0～7 时构建失败；Rust 会再次验证。
+   * @param id 当前地图 Waypoint 枚举中的 WP0～WP29，仅接受地图已有的这些起点。
+   * @returns 可传入 TeamOptions.house 的 StartPlayer；生成 House=<Player @ A>～<Player @ Z>、<Player @ AA>～<Player @ AD>。
+   * @throws 单人模式、起点不存在或超出 0～29 时构建失败；Rust 会再次验证。
    * @remarks 仅在 MissionMode.Multiplayer 中可用。玩家随机起点时按实际占位解析；
    * 该起点无人占用时游戏无法创建此小队，不会自动送给中立方。
    * 这里只选择归属，不决定出兵位置；位置仍由小队 waypoint 和 action.reinforce() 指定。
-   * 原生小队归属只识别 A～H，普通任务航点及扩展起点 8 以上不能用于此方法。
+   * 8～29 为 VERA 扩展起点；需在地图设置中配置相应出生点数量，普通任务航点不会因此成为玩家起点。
    * @example house: m.playerAt(Waypoint.WP0)
    */
-  playerAt(this: MissionBuilder<S, MissionMode.Multiplayer>, id: Extract<S["waypoints"][number], 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7>): StartPlayer {
+  playerAt(this: MissionBuilder<S, MissionMode.Multiplayer>, id: Extract<S["waypoints"][number], PlayerStartId>): StartPlayer {
     if (this.mode !== MissionMode.Multiplayer) throw new Error("按起点选择玩家仅支持多人任务");
     this.member(this.schema.waypoints, id, "player start");
-    if (!Number.isInteger(id) || id < 0 || id > 7) throw new Error("玩家起点仅支持 0～7");
+    if (!Number.isInteger(id) || id < 0 || id > 29) throw new Error("玩家起点仅支持 0～29");
     return ref("startPlayer", id);
   }
   /**
