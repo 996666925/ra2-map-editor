@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mission {
+    #[serde(default, rename = "rewardUnits")]
+    pub reward_units: Vec<reward_units::RewardUnitDefinition>,
     #[serde(default, rename = "crateLottery")]
     pub crate_lottery: Option<crate_lottery::CrateLotteryRules>,
     pub version: u32,
@@ -1125,6 +1127,8 @@ mod definitions;
 mod extra_actions;
 #[path = "references.rs"]
 mod references;
+#[path = "reward_units.rs"]
+mod reward_units;
 #[path = "rules.rs"]
 mod rules;
 #[path = "scenario.rs"]
@@ -1426,6 +1430,7 @@ fn read_manifest(doc: &MapDocument) -> Result<Manifest> {
             "Houses" => field.key.parse::<u32>().is_ok() && field.value.starts_with("TSHS"),
             "VariableNames" => field.key.parse::<u8>().is_ok_and(|n| n < 100),
             "CellTags" => field.key.parse::<u32>().is_ok(),
+            "VehicleTypes" => reward_units::generated_id(&field.key) && field.value == field.key,
             s if mission::ids(doc, Kind::House).iter().any(|id| id == s) => {
                 matches!(
                     field.key.as_str(),
@@ -1785,6 +1790,8 @@ pub fn prepare_with_context(
         "任务构建依赖超过 256 个路径"
     );
     let authored_rule_count = plan.rules.len();
+    let lottery_plan = crate_lottery::with_flags(plan)?;
+    let plan = lottery_plan.as_ref().unwrap_or(plan);
     let lowered = conditions::lower(plan)?;
     let plan = lowered.as_ref().unwrap_or(plan);
     ensure!(matches!(plan.version, 1 | 2), "不支持的任务 SDK 版本");
@@ -1851,17 +1858,40 @@ pub fn prepare_with_context(
     }
     if !catalog.type_projection.is_empty() {
         let current = registry_fingerprints(&scratch.snapshot().bytes()?)?;
+        let before_restore = registry_fingerprints(&doc.snapshot().bytes()?)?;
+        let has_managed_vehicles = old
+            .fields
+            .iter()
+            .any(|field| field.section == "VehicleTypes" && reward_units::generated_id(&field.key));
         ensure!(
-            catalog
-                .type_projection
-                .iter()
-                .all(|(section, hash)| current.get(section) == Some(hash)),
+            catalog.type_projection.iter().all(|(section, hash)| {
+                if section == "VehicleTypes" && has_managed_vehicles {
+                    current.get(section) == Some(hash) || before_restore.get(section) == Some(hash)
+                } else {
+                    current.get(section) == Some(hash)
+                }
+            }),
             "地图类型注册表已变化，请保存并重新加载场景资源后刷新 SDK 类型"
         );
     }
     let aliases = references::aliases(&scratch, plan, &old.aliases)?;
     let old_waypoint_ids: BTreeSet<_> = old.waypoints.iter().map(|waypoint| waypoint.id).collect();
     let mut effective_catalog = catalog.clone();
+    let old_reward_ids: BTreeSet<_> = old
+        .fields
+        .iter()
+        .filter(|field| field.section == "VehicleTypes" && reward_units::generated_id(&field.key))
+        .map(|field| field.value.as_str())
+        .collect();
+    effective_catalog
+        .units
+        .retain(|id| !old_reward_ids.contains(id.as_str()));
+    effective_catalog
+        .technos
+        .retain(|id| !old_reward_ids.contains(id.as_str()));
+    if let Some(vehicles) = effective_catalog.registry_order.get_mut("vehicles") {
+        vehicles.retain(|id| !old_reward_ids.contains(id.as_str()));
+    }
     let mut declared_texts = BTreeMap::new();
     ensure!(plan.texts.len() <= 1024, "任务文本超过 1024 项");
     for text in &plan.texts {
@@ -2140,20 +2170,15 @@ pub fn prepare_with_context(
     if let Some(basic) = &plan.basic {
         scenario::write_basic(basic, catalog, &mut put)?;
     }
+    let mut reward_ids = BTreeMap::new();
     if let Some(lottery) = &plan.crate_lottery {
+        reward_ids = reward_units::write(plan, &scratch, catalog, &mut put)?;
+        crate_lottery::write(lottery, catalog, &reward_ids, &mut put)?;
+    } else {
         ensure!(
-            plan.basic.as_ref().and_then(|basic| basic.truck_crate) != Some(false),
-            "crateLottery 需要 TruckCrate，不能配置 truckCrate:false"
+            plan.reward_units.is_empty(),
+            "rewardUnit 须由 crateLottery.rewards 使用"
         );
-        if plan
-            .basic
-            .as_ref()
-            .and_then(|basic| basic.truck_crate)
-            .is_none()
-        {
-            put("Basic", "TruckCrate", "yes".into())?;
-        }
-        crate_lottery::write(lottery, &scratch, catalog, &mut put)?;
     }
     if let Some(flags) = &plan.special_flags {
         scenario::write_special_flags(flags, plan.mode, &mut put)?;
@@ -2239,6 +2264,15 @@ pub fn prepare_with_context(
             format!("{}_{},{}", plan.id, flag.id, u8::from(flag.initial)),
         )?;
     }
+    crate_lottery::write_runtime(
+        plan,
+        &scratch,
+        &projected_houses,
+        catalog,
+        &flags,
+        &reward_ids,
+        &mut put,
+    )?;
     let mut task_forces = references::existing(&scratch, plan, catalog, "taskForce")?;
     for definition in &plan.task_forces {
         identifier(&definition.id)?;

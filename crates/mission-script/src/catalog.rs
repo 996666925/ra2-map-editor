@@ -76,6 +76,9 @@ impl ResourceKind {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Catalog {
+    /// Host-owned rule snapshots; never sent to the TypeScript evaluator.
+    #[serde(skip)]
+    pub vehicle_templates: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(skip)]
     pub profile: String,
     #[serde(skip)]

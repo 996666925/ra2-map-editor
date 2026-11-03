@@ -668,16 +668,16 @@ git -C vendor/vera20k diff --check
 
 包级格式脚本只选择编辑器workspace成员，避免 `cargo fmt --all` 扫描引擎。能力矩阵回归会对照固定引擎的真实动作分发器及小队命令默认/Ares准入；升级引擎后必须审计增删与模式，不能仅修改预期数量来通过。库测试及静态检查不能代替客户端呈现、真实联网和存档浏览器验收，具体剩余入口与关闭条件见[SDK计划](mission-sdk-plan.zh-CN.md#s40-剩余项的当前入口与关闭条件)。
 
-## 抽奖车 SDK 验证
+## 补给箱建筑 SDK 验证
 
-抽奖车 SDK 的端到端复跑：
+实现只生成原生地图规则、触发器和奖励小队：`CrateBeneath=no`，`BuildLimit=1`，玩家的建筑存在→不存在触发一次待发奖标记；重置各奖励分支随机计时器，首个到期分支清标记并超时空增援到 `rewardAt`。普通 `Powerups`、`CrateRules` 和车辆 `CrateGoodie` 不变，奖励副本设为 `CrateGoodie=no`。无引擎扩展。仅单人，ticket 专用且禁止预放，玩家 Country 不能共用；不能获得动态放置坐标，随机同秒平局按 Tag 顺序，不保证等概率。
 
 ```powershell
 cargo test --locked --offline -p ra2-map-mission-script --lib crate_lottery -- --test-threads=1
 cargo run --locked --offline -p ra2-map-io --example mission_sdk_crate_lottery_audit -- GAME_DIRECTORY NEW_OUTPUT_DIRECTORY
 ```
 
-审计使用真实规则和 TS 构建，经过付费生产、生产栏宿主边界自动发布移动单位 PLACE、小队招募／销毁、货物掉箱及正常移动拾取。覆盖连续两次同类购买、取消生产、空闲和付费生产中的 headless 快照恢复。不会注入生产进度、资金、伤害、位置或奖励；报告不代表 GUI 侧栏、GUI 存档或真实联网已验收。接口及全局箱子配置的影响见[抽奖车示例](../examples/missions/README.md#侧栏抽奖车与随机单位箱)。
+审计关闭随机箱子，使用真实资源、TS 构建和同步生产／PLACE／ForceAttackCell 命令，验证付款、阻挡重试、未拆不发奖、拆毁直接到航点、连续购买、取消／未购买不发奖，以及就绪商品／完整建筑／已发奖 headless 快照恢复。场上特意没有矿车。对比构建前后普通箱子全局字段和原车型 CrateGoodie，确认保持原样。没有注入进度、伤害、生命、资金或奖励。无窗口验证不代表 GUI 或真实联网验收。详见[用法](../examples/missions/README.md#购买补给箱建筑攻击拆开领取车辆)。
 
 ## 引擎版本管理
 
@@ -688,3 +688,8 @@ git submodule update --init --recursive
 ```
 
 引擎是独立 workspace；子模块提交与 `Cargo.lock` 共同构成可复现构建输入。初始化、恢复和升级的完整流程见 [引擎依赖说明](../vendor/README.md)。
+
+
+奖励车辆隔离：`m.rewardUnit` 将宿主加载得到的基础车辆规则快照与当前地图覆盖合并，写入托管的 `VehicleTypes` / `TSRU…` section。规则快照不发送到 TS evaluator。`Image` 复用基础 ART；副本设置隐藏生产与禁止随机开局，`CrateGoodie=no` 禁止普通箱子抽到副本。已有武器引用按目录验证。托管清单负责重复构建、重新加载目录后的构建、删除恢复与手工冲突检测；不改 `vendor/vera20k`。
+
+上面的 `mission_sdk_crate_lottery_audit` 同时构建 `examples/missions/reward-unit/mission.ts` 并加载其真实规则，验证奖励类型生命与武器继承、普通车辆属性保持、隐藏生产、保存重新加载后的字节稳定性，以及购买→放置→拆毁→任务发奖和检查点恢复流程。示例中的可选注释不代表所有特殊能力都完成运行验收；Mod 的路径相关默认值与扩展规则仍须按实际资源验证。

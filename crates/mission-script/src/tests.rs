@@ -19,29 +19,271 @@ fn plan() -> Mission {
 }
 
 #[test]
-fn crate_lottery_builds_recruitment_and_restores_rule_overrides() {
+fn crate_lottery_uses_isolated_triggers_and_restores_legacy_crate_fields() {
     let (mut doc, _) = fixture();
-    doc.set_ini("TSTICKET", "Cost", Some(b"777".to_vec()))
+    doc.set_ini("TSBOX", "Strength", Some(b"900".to_vec()))
         .unwrap();
     doc.set_ini("Powerups", "Money", Some(b"50,MONEYANIM,yes,2000".to_vec()))
         .unwrap();
-    doc.set_ini("FV", "CrateGoodie", Some(b"no".to_vec()))
+    mission::create(&mut doc, Kind::House, "Neutral", "Neutral", None).unwrap();
+    doc.set_ini("Neutral", "Country", Some(b"Neutral".to_vec()))
         .unwrap();
-    doc.commit("manual lottery settings");
+    doc.commit("manual settings");
+    let mut catalog = Catalog::from_document(&doc, vec!["FV".into(), "HTK".into()], vec![]);
+    catalog
+        .registry_order
+        .insert("vehicles".into(), vec!["FV".into(), "HTK".into()]);
+    catalog.register(crate::catalog::ResourceKind::Building, vec!["TSBOX".into()]);
+    catalog
+        .registry_order
+        .insert("buildings".into(), vec!["TSBOX".into()]);
+    catalog.register(
+        crate::catalog::ResourceKind::Country,
+        vec!["Neutral".into()],
+    );
+    let source = r#"import {defineMission} from './sdk';import {map,House,Unit,Building,Waypoint} from './map.generated';
+export default defineMission(map,{id:'draw',player:House.Neutral},m=>{
+ m.crateLottery('draw',{ticket:m.building(Building.TSBOX),rewards:[m.unit(Unit.FV)],rewardAt:m.waypoint(Waypoint.WP0),cost:200,prerequisites:[]});
+});"#;
+    let plan = Compiler::new()
+        .unwrap()
+        .build(BTreeMap::from([
+            ("/mission.ts".into(), source.into()),
+            ("/map.generated.ts".into(), catalog.typescript().unwrap()),
+        ]))
+        .unwrap();
+    assert!(plan.teams.is_empty() && plan.rules.is_empty());
+    prepare(&doc, &plan, &catalog)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    for (key, value) in [
+        ("CrateBeneath", "no"),
+        ("BuildLimit", "1"),
+        ("CrateBeneathIsMoney", "no"),
+        ("LeaveRubble", "no"),
+        ("Unsellable", "yes"),
+        ("Strength", "20"),
+    ] {
+        assert_eq!(doc.ini_text("TSBOX", key), value);
+    }
+    assert!(doc.ini_value("TSBOX", "PlaceAsCrate").is_none());
+    assert!(doc.ini_value("Basic", "TruckCrate").is_none());
+    assert_eq!(doc.ini_text("Powerups", "Money"), "50,MONEYANIM,yes,2000");
+    assert!(doc.ini_value("Powerups", "Unit").is_none());
+    assert!(doc.ini_value("FV", "CrateGoodie").is_none());
+    assert!(doc.ini_value("HTK", "CrateGoodie").is_none());
+    // Emulate the previous SDK's managed global crate edits, then rebuild.
+    let meta = "EditorMissionScript";
+    let chunks: usize = doc.ini_text(meta, "Chunks").parse().unwrap();
+    let hex: String = (0..chunks)
+        .map(|i| doc.ini_text(meta, &format!("Data{i}")))
+        .collect();
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect();
+    let mut manifest: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    for (section, key, value, before) in [
+        (
+            "Powerups",
+            "Money",
+            "0,MONEYANIM,yes,2000",
+            Some("50,MONEYANIM,yes,2000"),
+        ),
+        ("Powerups", "Unit", "1", None),
+        ("CrateRules", "UnitCrateType", "<none>", None),
+        ("FV", "CrateGoodie", "yes", None),
+    ] {
+        doc.set_ini(section, key, Some(value.as_bytes().to_vec()))
+            .unwrap();
+        manifest["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"section":section,"key":key,"value":value,"before":before}));
+    }
+    let hex: String = serde_json::to_vec(&manifest)
+        .unwrap()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let chunks: Vec<_> = hex.as_bytes().chunks(400).collect();
+    doc.set_ini(meta, "Chunks", Some(chunks.len().to_string().into_bytes()))
+        .unwrap();
+    for (i, chunk) in chunks.iter().enumerate() {
+        doc.set_ini(meta, &format!("Data{i}"), Some(chunk.to_vec()))
+            .unwrap();
+    }
+    doc.commit("legacy global pool");
+    prepare(&doc, &plan, &catalog)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    assert_eq!(doc.ini_text("Powerups", "Money"), "50,MONEYANIM,yes,2000");
+    assert!(doc.ini_value("Powerups", "Unit").is_none());
+    assert!(doc.ini_value("CrateRules", "UnitCrateType").is_none());
+    assert!(doc.ini_value("FV", "CrateGoodie").is_none());
+    let built = doc.snapshot().bytes().unwrap();
+    prepare(&doc, &plan, &catalog)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    assert_eq!(doc.snapshot().bytes().unwrap(), built);
+    let mut conflict = doc.fork();
+    conflict
+        .set_ini("TSBOX", "Strength", Some(b"99".to_vec()))
+        .unwrap();
+    assert!(prepare(&conflict, &plan, &catalog).is_err());
+    let empty:Mission=serde_json::from_value(serde_json::json!({"version":2,"id":"draw","player":"Neutral","teams":[],"flags":[],"rules":[]})).unwrap();
+    prepare(&doc, &empty, &catalog)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    assert_eq!(doc.ini_text("TSBOX", "Strength"), "900");
+    assert_eq!(doc.ini_text("Powerups", "Money"), "50,MONEYANIM,yes,2000");
+    assert!(doc.ini_value("TSBOX", "CrateBeneath").is_none());
+    assert!(mission::ids(&doc, Kind::Trigger).is_empty());
+    assert!(mission::ids(&doc, Kind::Team).is_empty());
+}
+
+#[test]
+fn crate_lottery_rejects_invalid_rewards_and_health() {
+    let (mut doc, _) = fixture();
+    mission::create(&mut doc, Kind::House, "Neutral", "Neutral", None).unwrap();
+    doc.set_ini("Neutral", "Country", Some(b"Neutral".to_vec()))
+        .unwrap();
+    doc.commit("player");
+    let before = doc.snapshot().bytes().unwrap();
     let mut catalog = Catalog::from_document(
         &doc,
-        vec!["TSTICKET".into(), "FV".into(), "HTK".into(), "E1".into()],
-        vec![],
+        vec!["FV".into(), "E1".into()],
+        vec!["MISSION:TEXT".into()],
     );
-    catalog.registry_order.insert(
-        "vehicles".into(),
-        vec!["TSTICKET".into(), "HTK".into(), "FV".into()],
+    catalog
+        .registry_order
+        .insert("vehicles".into(), vec!["FV".into()]);
+    catalog.register(crate::catalog::ResourceKind::Building, vec!["BOX".into()]);
+    catalog
+        .registry_order
+        .insert("buildings".into(), vec!["BOX".into()]);
+    catalog.register(
+        crate::catalog::ResourceKind::Country,
+        vec!["Neutral".into()],
     );
-    let source = r#"import {defineMission} from './sdk';
-import {map,House,Unit} from './map.generated';
-export default defineMission(map,{id:'draw',player:House.Neutral},m=>{
- m.crateLottery('lottery',{ticket:m.unit(Unit.TSTICKET),rewards:[m.unit(Unit.FV),m.unit(Unit.HTK)],cost:200,
- buyers:[{house:m.house(House.Neutral),waypoint:m.createWaypoint(30,2,2)}]});
+    let mut base = serde_json::to_value(plan()).unwrap();
+    base["crateLottery"] = serde_json::json!({"ticket":{"kind":"building","id":"BOX"},"rewards":[{"kind":"unit","id":"FV"}],"uiName":{"kind":"text","id":"MISSION:TEXT"},"rewardAt":{"kind":"waypoint","id":0}});
+    prepare(
+        &doc,
+        &serde_json::from_value(base.clone()).unwrap(),
+        &catalog,
+    )
+    .unwrap();
+    for (field, value) in [
+        ("rewards", serde_json::json!([])),
+        ("rewards", serde_json::json!([{"kind":"unit","id":"E1"}])),
+        (
+            "rewards",
+            serde_json::json!([{"kind":"unit","id":"FV"},{"kind":"unit","id":"FV"}]),
+        ),
+        ("cost", serde_json::json!(0)),
+        ("strength", serde_json::json!(0)),
+    ] {
+        let mut invalid = base.clone();
+        invalid["crateLottery"][field] = value;
+        assert!(prepare(&doc, &serde_json::from_value(invalid).unwrap(), &catalog).is_err());
+        assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn crate_lottery_rejects_unsupported_ownership_and_preplaced_tickets() {
+    let (doc, catalog, mission) = reward_unit_fixture();
+    let value = serde_json::to_value(&mission).unwrap();
+    let mut multi = value.clone();
+    multi["mode"] = serde_json::json!("multiplayer");
+    multi["player"] = serde_json::json!("");
+    assert!(
+        prepare(&doc, &serde_json::from_value(multi).unwrap(), &catalog)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("单人")
+    );
+    let mut shared = doc.fork();
+    mission::create(&mut shared, Kind::House, "Other", "Other", None).unwrap();
+    shared
+        .set_ini("Other", "Country", Some(b"Neutral".to_vec()))
+        .unwrap();
+    shared.commit("shared country");
+    assert!(
+        prepare(&shared, &mission, &catalog)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("共享 Country")
+    );
+    let mut placed = doc.fork();
+    placed
+        .add_record("Structures", [2, 2], "Neutral", "BOX")
+        .unwrap();
+    placed.commit("preplaced ticket");
+    assert!(
+        prepare(&placed, &mission, &catalog)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("预放")
+    );
+    let mut invalid = value;
+    invalid["crateLottery"]["rewardAt"]["id"] = serde_json::json!(99);
+    assert!(prepare(&doc, &serde_json::from_value(invalid).unwrap(), &catalog).is_err());
+}
+
+fn reward_unit_fixture() -> (MapDocument, Catalog, Mission) {
+    let (mut doc, _) = fixture();
+    doc.set_ini("FV", "Speed", Some(b"6".to_vec())).unwrap();
+    doc.set_ini("VehicleTypes", "0", Some(b"FV".to_vec()))
+        .unwrap();
+    mission::create(&mut doc, Kind::House, "Neutral", "Neutral", None).unwrap();
+    doc.set_ini("Neutral", "Country", Some(b"Neutral".to_vec()))
+        .unwrap();
+    doc.commit("base vehicle");
+    let mut catalog = Catalog::from_document(&doc, vec!["FV".into()], vec![]);
+    catalog
+        .registry_order
+        .insert("vehicles".into(), vec!["FV".into()]);
+    catalog.register(crate::catalog::ResourceKind::Building, vec!["BOX".into()]);
+    catalog
+        .registry_order
+        .insert("buildings".into(), vec!["BOX".into()]);
+    catalog.register(
+        crate::catalog::ResourceKind::Country,
+        vec!["Neutral".into()],
+    );
+    catalog.register(
+        crate::catalog::ResourceKind::Weapon,
+        vec!["HoverMissile".into()],
+    );
+    catalog.vehicle_templates.insert(
+        "FV".into(),
+        BTreeMap::from([
+            ("Strength".into(), "200".into()),
+            ("Speed".into(), "10".into()),
+            ("Image".into(), "FV".into()),
+            ("Primary".into(), "HoverMissile".into()),
+            (
+                "Locomotor".into(),
+                "{4A582741-9839-11d1-B709-00A024DDAFD1}".into(),
+            ),
+        ]),
+    );
+    catalog.fixed_scripts = Some(vec![]);
+    let source = r#"import {defineMission,order} from './sdk';import {map,House,Unit,Building,Waypoint} from './map.generated';
+export default defineMission(map,{id:'prizes',player:House.Neutral},m=>{
+ m.script('start',[order.changeScript(m.scriptRef('next'))]);
+ m.script('next',[order.waitForever()]);
+ const prize=m.rewardUnit('super_fv',{base:m.unit(Unit.FV),name:'奖励车',rules:{Strength:1500,SelfHealing:true}});
+ m.crateLottery('draw',{ticket:m.building(Building.BOX),rewards:[prize],rewardAt:m.waypoint(Waypoint.WP0),prerequisites:[]});
 });"#;
     let mission = Compiler::new()
         .unwrap()
@@ -50,109 +292,186 @@ export default defineMission(map,{id:'draw',player:House.Neutral},m=>{
             ("/map.generated.ts".into(), catalog.typescript().unwrap()),
         ]))
         .unwrap();
-    assert_eq!(mission.teams.len(), 1);
-    assert!(matches!(
-        mission.teams[0].orders.as_ref().unwrap()[0],
-        Order::KillMembers
-    ));
-    assert!(matches!(
-        mission.rules[0].actions[0],
-        Action::Recruit { .. }
-    ));
-    assert!(!mission.rules[0].once);
+    (doc, catalog, mission)
+}
+
+#[test]
+fn reward_unit_isolated_cloning_rebuild_reload_cleanup_and_conflicts() {
+    let (mut doc, catalog, mission) = reward_unit_fixture();
+    let before = doc.snapshot().bytes().unwrap();
     prepare(&doc, &mission, &catalog)
         .unwrap()
         .apply(&mut doc)
         .unwrap();
-    assert_eq!(doc.ini_text("Basic", "TruckCrate"), "yes");
-    assert_eq!(doc.ini_text("TSTICKET", "Cost"), "200");
-    assert_eq!(doc.ini_text("TSTICKET", "CarriesCrate"), "yes");
-    assert_eq!(doc.ini_text("TSTICKET", "CrateGoodie"), "no");
-    assert_eq!(doc.ini_text("FV", "CrateGoodie"), "yes");
-    assert_eq!(doc.ini_text("Powerups", "Money"), "0,MONEYANIM,yes,2000");
-    assert_eq!(doc.ini_text("Powerups", "Unit"), "1");
+    let id = doc
+        .ini_entries("VehicleTypes")
+        .into_iter()
+        .find(|(_, key, _)| key.starts_with("TSRU"))
+        .unwrap()
+        .1;
+    assert_eq!(doc.ini_text(&id, "Strength"), "1500");
+    assert_eq!(
+        doc.ini_text(&id, "Speed"),
+        "6",
+        "current map overrides inherited snapshot"
+    );
+    assert_eq!(doc.ini_text(&id, "Image"), "FV");
+    assert_eq!(doc.ini_text(&id, "Primary"), "HoverMissile");
+    assert_eq!(doc.ini_text(&id, "SelfHealing"), "yes");
+    assert_eq!(doc.ini_text(&id, "TechLevel"), "-1");
+    assert_eq!(doc.ini_text(&id, "AllowedToStartInMultiplayer"), "no");
+    assert_eq!(doc.ini_text(&id, "CrateGoodie"), "no");
+    assert!(doc.ini_text(&id, "UIName").starts_with("TS"));
+    let ini =
+        vera20k_core::rules::ini_parser::IniFile::from_bytes(&doc.snapshot().bytes().unwrap())
+            .unwrap();
+    let registry = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
+        &vera20k_core::rules::ini_parser::IniFile::empty(),
+        &ini,
+        false,
+    );
+    let mut order = Vec::<&str>::new();
+    for id in registry
+        .team_types
+        .iter()
+        .filter_map(|team| team.section().read_name("Script", 0x80))
+        .chain(registry.scripts.iter().map(|script| script.id.as_str()))
+    {
+        if !order.iter().any(|known| known.eq_ignore_ascii_case(id)) {
+            order.push(id);
+        }
+    }
+    let next = order
+        .iter()
+        .position(|id| doc.ini_text(id, "Name") == "next")
+        .unwrap();
+    let start = registry
+        .scripts
+        .iter()
+        .find(|script| doc.ini_text(&script.id, "Name") == "start")
+        .unwrap();
+    assert_eq!(
+        start.actions[0].argument, next as i32,
+        "lottery script allocation must not shift Script17 targets"
+    );
+    assert!(doc.ini_value("FV", "Strength").is_none());
+    assert_eq!(doc.ini_text("FV", "Speed"), "6");
     let built = doc.snapshot().bytes().unwrap();
     prepare(&doc, &mission, &catalog)
         .unwrap()
         .apply(&mut doc)
         .unwrap();
-    assert_eq!(
-        doc.snapshot().bytes().unwrap(),
-        built,
-        "rebuild must be byte stable"
-    );
-    let mut conflicting = doc.fork();
-    conflicting
-        .set_ini("FV", "CrateGoodie", Some(b"no".to_vec()))
-        .unwrap();
-    assert!(
-        prepare(&conflicting, &mission, &catalog)
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("手工修改")
-    );
-    let empty:Mission=serde_json::from_value(serde_json::json!({"version":2,"id":"draw","player":"Neutral","teams":[],"flags":[],"rules":[]})).unwrap();
-    prepare(&doc, &empty, &catalog)
+    assert_eq!(doc.snapshot().bytes().unwrap(), built);
+    let mut reloaded = catalog.clone();
+    reloaded.units.push(id.clone());
+    reloaded.technos.push(id.clone());
+    reloaded
+        .registry_order
+        .get_mut("vehicles")
+        .unwrap()
+        .push(id.clone());
+    reloaded.type_projection = registry_fingerprints(&built).unwrap();
+    reloaded
+        .type_projection
+        .retain(|section, _| !matches!(section.as_str(), "ScriptTypes" | "Houses" | "Waypoints"));
+    prepare(&doc, &mission, &reloaded)
         .unwrap()
         .apply(&mut doc)
         .unwrap();
-    assert_eq!(doc.ini_text("TSTICKET", "Cost"), "777");
-    assert_eq!(doc.ini_text("FV", "CrateGoodie"), "no");
-    assert_eq!(doc.ini_text("Powerups", "Money"), "50,MONEYANIM,yes,2000");
-    assert!(doc.ini_value("Basic", "TruckCrate").is_none());
-    assert!(doc.ini_value("TSTICKET", "CarriesCrate").is_none());
+    assert_eq!(doc.snapshot().bytes().unwrap(), built);
+    let mut conflict = doc.fork();
+    conflict
+        .set_ini(&id, "Strength", Some(b"999".to_vec()))
+        .unwrap();
+    assert!(prepare(&conflict, &mission, &reloaded).is_err());
+    let empty:Mission=serde_json::from_value(serde_json::json!({"version":2,"id":"prizes","player":"Neutral","teams":[],"flags":[],"rules":[]})).unwrap();
+    prepare(&doc, &empty, &reloaded)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    assert!(doc.ini_entries(&id).is_empty());
+    assert_eq!(doc.ini_entries("VehicleTypes").len(), 1);
+    assert!(doc.ini_value("FV", "CrateGoodie").is_none());
+    assert_eq!(doc.ini_text("FV", "Speed"), "6");
+    assert_ne!(before, built);
 }
 
 #[test]
-fn crate_lottery_rejects_invalid_pools_and_conflicting_scenario_flags() {
-    let (doc, _) = fixture();
-    let mut catalog =
-        Catalog::from_document(&doc, vec!["MTNK".into(), "FV".into(), "E1".into()], vec![]);
-    catalog
-        .registry_order
-        .insert("vehicles".into(), vec!["MTNK".into(), "FV".into()]);
-    let base = serde_json::json!({"version":2,"id":"draw","player":"Neutral","teams":[],"flags":[],"rules":[],
-        "crateLottery":{"ticket":{"kind":"unit","id":"MTNK"},"rewards":[{"kind":"unit","id":"FV"}],"cost":200}});
-    for (field, value, error) in [
-        ("rewards", serde_json::json!([]), "1～256"),
-        (
-            "rewards",
-            serde_json::json!([{"kind":"unit","id":"E1"}]),
-            "车辆类型",
-        ),
-        (
-            "rewards",
-            serde_json::json!([{"kind":"unit","id":"MTNK"}]),
-            "不能放进",
-        ),
-        (
-            "rewards",
-            serde_json::json!([{"kind":"unit","id":"FV"},{"kind":"unit","id":"FV"}]),
-            "重复",
-        ),
-        ("cost", serde_json::json!(0), "cost"),
-    ] {
-        let mut value_plan = base.clone();
-        value_plan["crateLottery"][field] = value;
-        let plan = serde_json::from_value(value_plan).unwrap();
-        assert!(
-            prepare(&doc, &plan, &catalog)
-                .err()
-                .unwrap()
-                .to_string()
-                .contains(error)
-        );
-    }
-    let mut value = base;
-    value["basic"] = serde_json::json!({"truckCrate":false});
-    assert!(
-        prepare(&doc, &serde_json::from_value(value).unwrap(), &catalog)
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("truckCrate:false")
+fn reward_unit_respects_cleared_base_fields_and_separate_variants() {
+    let (mut doc, catalog, mission) = reward_unit_fixture();
+    doc.set_ini("FV", "Primary", Some(Vec::new())).unwrap();
+    doc.commit("clear base weapon");
+    let mut value = serde_json::to_value(mission).unwrap();
+    let mut second = value["rewardUnits"][0].clone();
+    second["id"] = serde_json::json!("second_fv");
+    second["uiName"] = serde_json::Value::Null;
+    second["rules"] = serde_json::json!({"Strength": 600});
+    value["rewardUnits"].as_array_mut().unwrap().push(second);
+    value["crateLottery"]["rewards"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"kind":"rewardUnit","id":"second_fv"}));
+    prepare(&doc, &serde_json::from_value(value).unwrap(), &catalog)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    let variants: Vec<_> = doc
+        .ini_entries("VehicleTypes")
+        .into_iter()
+        .filter(|(_, key, _)| key.starts_with("TSRU"))
+        .map(|(_, key, _)| key)
+        .collect();
+    assert_eq!(variants.len(), 2);
+    let strengths: std::collections::BTreeSet<_> = variants
+        .iter()
+        .map(|id| doc.ini_text(id, "Strength"))
+        .collect();
+    assert_eq!(
+        strengths,
+        std::collections::BTreeSet::from(["600".into(), "1500".into()])
     );
+    assert!(
+        variants
+            .iter()
+            .all(|id| doc.ini_value(id, "Primary").is_none())
+    );
+    assert!(doc.ini_value("FV", "Strength").is_none());
+}
+
+#[test]
+fn reward_unit_rejects_invalid_rules_without_map_mutation() {
+    let (doc, catalog, mission) = reward_unit_fixture();
+    let before = doc.snapshot().bytes().unwrap();
+    let base = serde_json::to_value(mission).unwrap();
+    for rules in [
+        serde_json::json!({"TechLevel":1}),
+        serde_json::json!({"UIName":"unmanaged"}),
+        serde_json::json!({"CrateGoodie":false}),
+        serde_json::json!({"AllowedToStartInMultiplayer":true}),
+        serde_json::json!({"Speed":[8]}),
+        serde_json::json!({"Speed":null}),
+        serde_json::json!({"Primary":"MissingWeapon"}),
+        serde_json::json!({"EliteWeapon1":"MissingWeapon"}),
+        serde_json::json!({"Name":"break\n[General]"}),
+        serde_json::json!({"Speed=":8}),
+        serde_json::json!({"speed":8}),
+    ] {
+        let mut invalid = base.clone();
+        invalid["rewardUnits"][0]["rules"] = rules;
+        assert!(
+            prepare(
+                &doc,
+                &serde_json::from_value(invalid.clone()).unwrap(),
+                &catalog
+            )
+            .is_err(),
+            "{invalid}"
+        );
+        assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    }
+    let mut invalid = base;
+    invalid["rewardUnits"][0]["base"]["kind"] = serde_json::json!("building");
+    assert!(prepare(&doc, &serde_json::from_value(invalid).unwrap(), &catalog).is_err());
 }
 
 #[test]

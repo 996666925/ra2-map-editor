@@ -49,6 +49,7 @@ pub(super) fn script_indices(
         projected.set_ini("TeamTypes", &id, Some(id.as_bytes().to_vec()))?;
         projected.set_ini(&id, "Script", Some(script.into_bytes()))?;
     }
+    crate_lottery::project_scripts(plan, &mut projected)?;
     let ini = vera20k_core::rules::ini_parser::IniFile::from_bytes(&projected.snapshot().bytes()?)?;
     let local = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),

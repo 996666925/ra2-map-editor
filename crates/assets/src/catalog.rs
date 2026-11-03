@@ -56,6 +56,7 @@ pub struct Catalog {
     pub mission_country_names: BTreeMap<String, String>,
     /// Fixed process Type arrays, including implicit allocations; display order is separate.
     pub mission_type_orders: BTreeMap<String, Vec<String>>,
+    pub mission_vehicle_templates: BTreeMap<String, BTreeMap<String, String>>,
     pub overlays: Vec<String>,
     pub raw_tiles: BTreeMap<u16, i32>,
     pub defaults: Vec<TileKey>,
@@ -76,6 +77,7 @@ impl Default for Catalog {
             mission_country_indices: BTreeMap::new(),
             mission_country_names: BTreeMap::new(),
             mission_type_orders: BTreeMap::new(),
+            mission_vehicle_templates: BTreeMap::new(),
             overlays: vec![],
             raw_tiles: BTreeMap::new(),
             defaults: vec![],
@@ -274,6 +276,7 @@ impl Catalog {
             catalog.mission_country_indices = registries.countries;
             catalog.mission_country_names = registries.country_names;
             catalog.mission_type_orders = registries.type_orders;
+            catalog.mission_vehicle_templates = registries.vehicle_templates;
         }
         // Save authored disk IDs, never the already-translated render ID.
         for raw in -1..theater.lookup.len() as i32 {

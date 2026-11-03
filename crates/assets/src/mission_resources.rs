@@ -70,6 +70,7 @@ pub(crate) fn load(manager: &AssetManager) -> MissionResources {
 /// loading, including LANG and implicit identities. Raw registry row ordinals
 /// are not an index projection. Scenario-added identities are not inferred.
 pub struct NativeRegistries {
+    pub vehicle_templates: BTreeMap<String, BTreeMap<String, String>>,
     pub countries: BTreeMap<String, i32>,
     /// Exact production alias-before-ID lookup, folded only for matching.
     pub country_names: BTreeMap<String, String>,
@@ -102,7 +103,7 @@ pub fn scenario_registries(
     let eva = EvaRegistry::from_ini(&audio(manager.ini_roots().eva())?);
     let mut owner =
         RetailRulesSources::select(manager)?.into_owner(Arc::new(sounds), Arc::new(eva))?;
-    let (rules, _, _, _) = owner
+    let (rules, processed_ini, _, _) = owner
         .load_scenario(
             if multiplayer {
                 NativeScenarioRulesPrefix::NonCampaign(mode)
@@ -147,6 +148,23 @@ pub fn scenario_registries(
         .map(|id| rules.particle_system_type(id).name.clone())
         .collect();
     Ok(NativeRegistries {
+        vehicle_templates: rules
+            .vehicle_ids
+            .iter()
+            .filter_map(|id| {
+                let section = processed_ini.section(id)?;
+                let mut fields: BTreeMap<_, _> = section
+                    .raw_entries()
+                    .map(|(key, value)| (key.to_owned(), value.to_owned()))
+                    .collect();
+                if let Some(object) = rules.object(id) {
+                    fields
+                        .entry("Image".into())
+                        .or_insert_with(|| object.image.clone());
+                }
+                Some((id.clone(), fields))
+            })
+            .collect(),
         countries,
         country_names,
         type_orders: BTreeMap::from([

@@ -59,6 +59,7 @@ pub fn catalog(doc: &MapDocument, scene: &ra2_map_scene::map::MapScene) -> Catal
         );
     }
     populate_resource_catalog(&mut catalog, &scene.catalog, &scene.mission_resources);
+    catalog.vehicle_templates = scene.catalog.mission_vehicle_templates.clone();
     let mut unit_names = BTreeMap::new();
     for (section, category) in [
         ("Infantry", "步兵"),

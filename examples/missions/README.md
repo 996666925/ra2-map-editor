@@ -1187,30 +1187,40 @@ action.loseCountry(m.country(Country.Russians));
 
 战役迷雾可以使用 `m.configureSpecialFlags({ fogOfWar: true })`。它使已经探索、当前没有己方视野的区域变暗；未探索区域仍为黑色。`action.revealAt(waypoint)` 是局部探索，不提供持续单位视野，因此可与迷雾配合。编辑器侧四份TS对照任务已经通过真实ALL1战役GPU验收（35项），复跑见[开发文档](../../docs/development.md)。该证据覆盖列明平地样本；多人须使用开局选项，不接受这个单人SpecialFlags配置。
 
-## 侧栏抽奖车与随机单位箱
+## 购买补给箱建筑，攻击拆开领取车辆
 
-`m.crateLottery()` 将一个已有、可生产的普通地面车辆类型作为抽奖券：侧栏正常扣款生产，出厂并可被招募后，小队将其销毁并在附近掉箱；其他单位走过去拾取，领取随机车辆。无需增加引擎接口。
+`m.crateLottery()` 用原生任务触发器实现“建筑栏购买 → 选点放置 → Ctrl 强制攻击拆毁 → 在指定航点随机获得车辆”。**不再产生可拾取箱子，也不修改普通箱子的奖励表。**不修改引擎，不依赖随机箱子开关，目前仅支持单人任务。
 
 ```ts
 import { defineMission } from './sdk';
-import { map, House, Unit, Waypoint } from './map.generated';
+import { map, House, Building, Unit } from './map.generated';
 
 export default defineMission(map, { id: 'lottery', player: House.Americans }, m => {
-  m.crateLottery('tank_draw', {
-    // 示例将 MTNK 整个类型改作抽奖车；正式地图建议使用专用车辆类型。
-    ticket: m.unit(Unit.MTNK),
+  m.crateLottery('supply', {
+    ticket: m.building(Building.GAPILL),
+    name: '补给箱（攻击拆开）',
     rewards: [m.unit(Unit.HTK), m.unit(Unit.FV)],
+    rewardAt: m.createWaypoint(30, 48, 60), // 改为本地图上可通行的奖励到达格
     cost: 500,
-    buyers: [{ house: m.house(House.Americans), waypoint: m.waypoint(Waypoint.WP20) }],
-    pollSeconds: 1,
+    strength: 20,
+    prerequisites: [],
   });
 });
 ```
 
-地图须已有对应 House、航点、工厂和可生产车辆，刷新类型后使用当前目录中的枚举。`ticket` 不会克隆出新单位；图标、国家、科技等级和前置条件沿用当前规则。`cost` 可省略，省略时保留原价；它是原始 credits，最终生产价格仍受游戏倍率影响。
+放置后，选中有武器的己方单位，按住 **Ctrl** 点击建筑所在格强制攻击。建筑消失后短暂延迟发奖；奖励通过原生超时空小队增援到达 `rewardAt` 附近，固定归任务 `player`。该位置与建筑放置位置独立，也可传入 `m.waypoint(Waypoint.WP20)`。请设置空旷且适合奖励车辆的地面；原生增援无法放置时不保证发奖成功，不会自动退款或转金钱。
 
-`buyers` 可指定 1～30 个不同的参与者，每项提供招募归属和集结定位航点，建议设在工厂附近。多人任务用 `m.playerAt(Waypoint.WP20)` 等起点归属；固定 House 仍须满足原生小队只能选择同国家第一个 House 的限制。返回值的 `rule` 可传给 `disableRule()` / `enableRule()` 控制后续小队创建；已经存在的空小队仍会招募，已有成员继续兑换。`pollSeconds` 默认为 1 个游戏秒，转换还需等待正常出厂、解除工厂联系及小队招募／集结调度。
+同时最多一座补给箱建筑，存在及结算期间暂时隐藏该建筑生产，发奖后恢复购买；就绪未放置、取消生产或一直不拆毁都不发奖。`ticket` 的整个类型改作专用补给箱，不能在地图上预放，也不要用其他触发器创建它；建造国家限定为玩家 Country，不能与其他 House 共用该 Country。原生没有新建建筑的逐实例销毁通知绑定，实际检测为玩家该类型建筑“存在 → 不存在”，脚本移除等失去建筑的情况也会触发。不是逐座并发抽奖。
 
-此封装会托管 `TruckCrate=yes`、抽奖车的 `CarriesCrate=yes / IsTrain=no / Crewed=no / Explodes=no`、可选 `Cost`、全部车辆的 `CrateGoodie`、`UnitCrateType=<none>`，以及 `[Powerups]` 的奖励权重（仅 Unit 为 1，其余为 0）。**每张地图只能声明一个共享奖励池，会影响全地图所有随机奖励箱；不会改变已明确指定的其他奖励箱。**删除声明并重新构建会恢复被覆盖的地图字段；手工改动托管字段时会报告冲突。
+示例沿用 GAPILL，**外观和侧栏图标仍是机枪碉堡**。木箱建筑外观需活动 Mod 提供建筑 ART、SHP 与 Cameo；SDK 不生成美术或克隆新建筑。建议选普通小型建筑，避开围墙、工厂、升级组件。`strength` 默认 20；`cost` 是原始 credits，最终价格受游戏倍率影响；`prerequisites` 省略保留前置，空数组清除；`name` 默认“补给箱（攻击拆开）”。卖出、修理、武器、死亡爆炸、残骸与掉箱均禁用。
 
-必须开启游戏木箱选项。抽奖车应使用普通地面车辆，避免矿车、运输车、部署车、火车和特殊自杀武器；该类型所有可招募车辆（包括预放或增援的同类）都会被兑换，销毁计入损失。箱子是公共物品，奖励归拾取者，不保证归购买者。箱子可能因地形、覆盖物或容量而无法掉落；原生补矿车／基地车、多人车辆超过 50 辆或水岸位置的资格检查、奖励放置失败转金钱等机制仍有效。奖励池只支持车辆，不能作为自定义权重或步兵／飞机混合池。
+每任务一个抽奖配置，奖池 1～64 种车辆。原生随机计时器竞争选出一项，同秒到期按 Tag 遍历顺序决胜，**不保证等概率**，不提供独立权重。奖励副本设置 `CrateGoodie=no`，普通车型的资格、`Powerups` 和 `CrateRules` 保持原样；这套发奖不走原生箱子补矿车分支。旧版使用者补上 `rewardAt` 后重新构建，托管清单会恢复之前改过的全局箱子字段。删除声明可恢复建筑与移除辅助触发器，手改托管字段会报告冲突。
+
+
+### 只修改抽中的车辆属性
+
+用 `m.rewardUnit(id, { base, name, rules })` 创建独立的奖励车辆，再把返回值放入 `crateLottery.rewards`。普通生产的原车辆保持原有属性；同一基础车型可生成多个奖励版本。`rules` 使用原生 RULES 字段名，值为字符串、数字或 boolean，boolean 转换成 `yes` / `no`；未写的字段继承基础车辆的当前规则。
+
+完整可构建的[奖励单位属性 demo](reward-unit/mission.ts)包含生命、装甲、移动、武器、升级、免疫、隐身、探测、运输、弹药、采矿、展开、子机、外观和声音等分组，适用条件与使用步骤见[说明](reward-unit/README.md)。主配置直接启用，特殊机制以注释形式供按需选用。
+
+奖励副本以稳定 ID 注册为地图自己的 VehicleTypes，沿用基础单位的 Image；SDK 管理其 `TechLevel=-1`、`AllowedToStartInMultiplayer=no` 和 `CrateGoodie=no`，不进入普通生产栏、开局随机兵种或普通箱子奖池。返回值只用于奖励池，不能作为普通小队单位引用。首次使用或资源切换后，先重新加载场景并刷新 SDK 类型。删除声明并构建会移除托管副本。

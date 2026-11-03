@@ -31,6 +31,46 @@ pub fn load_stage(
     incoming: Option<CampaignCarryOver>,
     locals: Option<vera20k_core::sim::trigger_runtime::RetainedLocalVariables>,
 ) -> Result<SimRuntime> {
+    load_stage_with_options(
+        install,
+        bytes,
+        difficulty,
+        filename,
+        mission_counter,
+        incoming,
+        locals,
+        None,
+    )
+}
+#[allow(dead_code)]
+pub fn load_with_options(
+    install: &Install,
+    bytes: &[u8],
+    difficulty: i32,
+    options: &vera20k_core::sim::game_options::GameOptions,
+) -> Result<SimRuntime> {
+    load_stage_with_options(
+        install,
+        bytes,
+        difficulty,
+        "ai-campaign",
+        1,
+        None,
+        None,
+        Some(options),
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn load_stage_with_options(
+    install: &Install,
+    bytes: &[u8],
+    difficulty: i32,
+    filename: &str,
+    mission_counter: i32,
+    incoming: Option<CampaignCarryOver>,
+    locals: Option<vera20k_core::sim::trigger_runtime::RetainedLocalVariables>,
+    options: Option<&vera20k_core::sim::game_options::GameOptions>,
+) -> Result<SimRuntime> {
     let mut map = map_file::load_from_bytes(bytes.to_vec())?;
     let audio = AudioDefinitions::select(&install.manager);
     let mut owner = RetailRulesSources::select(&install.manager)
@@ -86,7 +126,7 @@ pub fn load_stage(
             house_roster: &roster,
             difficulty,
             mission_counter,
-            game_options: None,
+            game_options: options,
             campaign_index: 0,
             restart_carry_over: incoming.unwrap_or(CampaignCarryOver::CLEARED),
         },

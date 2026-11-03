@@ -299,12 +299,14 @@ pub fn load_scene_bytes_controlled(
             catalog.mission_country_indices = registries.countries;
             catalog.mission_country_names = registries.country_names;
             catalog.mission_type_orders = registries.type_orders;
+            catalog.mission_vehicle_templates = registries.vehicle_templates;
         }
         Err(error) => {
             let catalog = Arc::make_mut(&mut catalog);
             catalog.mission_country_indices.clear();
             catalog.mission_country_names.clear();
             catalog.mission_type_orders.clear();
+            catalog.mission_vehicle_templates.clear();
             diagnostics.push(Diagnostic {
                 code: "MISSION_REGISTRY",
                 message: format!("任务原生资源序号无法投影：{error}"),

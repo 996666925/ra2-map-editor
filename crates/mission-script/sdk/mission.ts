@@ -358,28 +358,35 @@ export type TeamOptions = {
   readonly script: Script;
   readonly orders?: never;
 });
-/** 一名抽奖参与者；waypoint 只用于小队招募定位，不是箱子掉落点。 */
-export interface CrateLotteryBuyer {
-  readonly house: House | StartPlayer;
-  readonly waypoint: Waypoint;
-}
-/** 将已有可生产车辆用作抽奖券。每张地图只允许一个共享奖励池。 */
+/** 单人建筑抽奖：购买、放置、拆毁后，在 rewardAt 发放随机车辆；不改普通箱子。 */
 export interface CrateLotteryOptions {
-  /** 使用专用、可生产的普通地面车辆；不会克隆类型或改变建造前置条件。该类型的已有车辆也会被兑换。 */
-  readonly ticket: UnitType;
-  /** 全地图随机单位箱的车辆池，不能包含 ticket；原生补矿车/基地车等特殊规则仍生效。 */
-  readonly rewards: readonly UnitType[];
-  readonly buyers: readonly CrateLotteryBuyer[];
-  /** 可选的原始 credits 价格；最终生产价格仍受国家、难度和工厂倍率影响。 */
+  /** 使用普通可生产建筑（如 GAPILL），其整个类型改作补给箱；外观与图标沿用现有 ART。 */
+  readonly ticket: BuildingType;
+  readonly rewards: readonly (UnitType | RewardUnit)[];
+  /** 奖励到达航点，与建筑放置位置独立；归任务 player。 */
+  readonly rewardAt: Waypoint;
+  /** 侧栏显示名称，默认“抽奖箱”。 */
+  readonly name?: string;
+  /** 原始 credits 价格；省略时沿用建筑原价，最终价格受游戏倍率影响。 */
   readonly cost?: number;
-  /** 招募检查间隔，正整数游戏秒，默认 1；转换须等待正常出厂并可被招募。 */
-  readonly pollSeconds?: number;
+  /** 可选建造前置；省略时保留建筑原有前置条件。 */
+  readonly prerequisites?: readonly BuildingType[];
+  /** 补给箱建筑生命值，默认 20，须为正整数。 */
+  readonly strength?: number;
 }
-export interface CrateLottery {
-  readonly teams: readonly Team[];
-  /** 用 enableRule/disableRule 控制新小队创建；已存在的空小队仍会招募，已有成员继续兑换。 */
-  readonly rule: Rule;
+/** 本任务专用的奖励车辆类型，只能放入抽奖池。不会替换普通车辆。 */
+export type RewardUnit = Ref<"rewardUnit">;
+/** 原生 RULES 单位字段；键名区分大小写。图片／模型等 ART 字段须由活动资源提供。 */
+export type UnitRuleValue = string | number | boolean;
+export interface RewardUnitOptions {
+  readonly base: UnitType;
+  readonly name?: string;
+  /** 修改独立副本的原生单位属性。TechLevel/CrateGoodie/AllowedToStartInMultiplayer/UIName 由 SDK 管理。 */
+  readonly rules: Readonly<Record<string, UnitRuleValue>>;
 }
+export type RewardUnitDefinition = Omit<RewardUnitOptions, "name"> & { readonly id: string; readonly uiName?: Text };
+export type CrateLottery = BuildingType;
+export type CrateLotteryDefinition = Omit<CrateLotteryOptions, "name"> & { readonly uiName: Text };
 /** 共享成员清单，不会立刻生成游戏单位。 */
 export interface TaskForceOptions {
   /** 1～6 种不同单位；数量为 1～2147483647 的整数。 */
@@ -623,7 +630,8 @@ export interface StartOwnerOptions { readonly object: MapObject; readonly player
 export type NewHouseOptions<C extends string = string> = HouseSettings<C> & { readonly country: Country };
 /** defineMission() 返回的可序列化任务描述，应作为 mission.ts 的默认导出。 */
 export interface Mission {
-  readonly crateLottery?: { readonly ticket: UnitType; readonly rewards: readonly UnitType[]; readonly cost?: number };
+  readonly rewardUnits?: readonly RewardUnitDefinition[];
+  readonly crateLottery?: CrateLotteryDefinition;
   /** 新 SDK 输出版本 2；Rust 同时接受旧 v1 数据。 */
   readonly version: 1 | 2;
   /** 任务逻辑名称，参与生成稳定的原生记录 ID。 */
@@ -680,7 +688,8 @@ function ref<K extends string, I extends string | number>(kind: K, id: I): Ref<K
  * 小队、标记、规则各自在本任务内不得重名；更名会影响生成项的身份。
  */
 export class MissionBuilder<S extends MapSchema, M extends MissionMode = MissionMode.SinglePlayer> {
-  private crateLotteryRules?: { readonly ticket: UnitType; readonly rewards: readonly UnitType[]; readonly cost?: number };
+  private crateLotteryRules?: CrateLotteryDefinition;
+  private readonly rewardUnits: RewardUnitDefinition[] = [];
   private readonly nativeDefinitions: NonNullable<Mission["nativeDefinitions"]>[number][] = [];
   private readonly aliases: NonNullable<Mission["aliases"]>[number][] = [];
   private readonly origins: NonNullable<Mission["origins"]>[number][] = [];
@@ -1126,35 +1135,36 @@ export class MissionBuilder<S extends MapSchema, M extends MissionMode = Mission
     return this.rule(id, { ...rule, enabled: rule.enabled ?? false, once: true,
       actions: next ? [...rule.actions, action.enableRule(next)] : rule.actions });
   }
+  /** 从现有车辆复制一个抽奖专用类型，普通生产单位保持原规则。
+   * rules 接受原生单位规则名；只能引用当前资源已有的武器和美术资源，不创建武器／ART。
+   * 返回值仅供 crateLottery.rewards 使用。删除定义并重建会移除生成类型。
+   */
+  rewardUnit(id: string, options: RewardUnitOptions): RewardUnit {
+    if (!/^[A-Za-z0-9_]{1,52}$/.test(id) || this.rewardUnits.some(unit => unit.id === id))
+      throw new Error("rewardUnit 名称须唯一且为 1～52 位 ASCII 字母、数字或下划线");
+    const { name, ...definition } = options;
+    this.rewardUnits.push({
+      ...definition, id,
+      ...(name === undefined ? {} : { uiName: this.defineText(`${id}_name`, name) }),
+    });
+    return ref("rewardUnit", id);
+  }
   /**
-   * 侧栏生产抽奖车 → 小队招募并销毁 → 附近掉箱 → 拾取者获得原生随机车辆奖励。
-   * 自动启用 TruckCrate，关闭抽奖车的乘员逃生/死亡爆炸，将随机箱奖励统一为 Unit，
-   * 并用 rewards 覆盖全地图 CrateGoodie 车辆池。配置随任务管理，删除声明后恢复原值。
-   * 必须开启游戏的木箱选项；原生地形、箱子容量、车辆数量、补矿车/基地车和放置失败回退仍有效。
-   * 不是逐笔生产通知；所有可招募的同类型车辆都会被兑换，销毁计入损失。
-   * ticket 的侧栏可见性、所属国家、图标和前置条件须由当前规则提供。
+   * 单人建筑栏购买并放置补给箱，Ctrl+攻击拆毁后，随机车辆在 rewardAt 航点到达。
+   * 限制同时一座，存在期间及结算期间暂时隐藏生产；奖励固定归任务 player。
+   * 通过原生建筑存在/不存在条件检测拆毁，失去建筑（如脚本移除）同样触发。
+   * ticket 须专用且不能预放；外观与图标沿用现有 ART。其他箱子的奖励保持原样。
+   * 原生随机计时竞争选奖有短暂延迟，同秒到期按 Tag 顺序决胜，不保证等概率。
    */
   crateLottery(id: string, options: CrateLotteryOptions): CrateLottery {
-    if (this.crateLotteryRules) throw new Error("每个任务只能声明一个 crateLottery，共享全地图奖励池");
+    if (this.mode !== MissionMode.SinglePlayer) throw new Error("crateLottery 拆毁发奖目前仅支持单人任务");
+    if (this.crateLotteryRules) throw new Error("每个任务只能声明一个 crateLottery");
     if (!/^[A-Za-z0-9_]{1,52}$/.test(id)) throw new Error("crateLottery 名称须为 1～52 位 ASCII 字母、数字或下划线");
-    if (!options.buyers.length || options.buyers.length > 30) throw new Error("crateLottery 须指定 1～30 名参与者");
-    const poll = options.pollSeconds ?? 1;
-    if (!Number.isInteger(poll) || poll < 1 || poll > 143165576) throw new Error("pollSeconds 须为有效的正整数游戏秒");
-    const owners = new Set<string>();
-    for (const buyer of options.buyers) {
-      const owner = `${buyer.house.kind}/${buyer.house.id}`;
-      if (owners.has(owner)) throw new Error("crateLottery 参与者重复");
-      owners.add(owner);
-    }
-    this.crateLotteryRules = {ticket: options.ticket, rewards: options.rewards, ...(options.cost === undefined ? {} : {cost: options.cost})};
-    const teams = options.buyers.map((buyer, index) => this.team(`${id}_buyer_${index}`, {
-      house: buyer.house, waypoint: buyer.waypoint, max: 1, group: -2, recruiter: true,
-      full: false, reinforce: false, areTeamMembersRecruitable: false,
-      units: [{type: options.ticket, count: 1}], orders: [order.killMembers()],
-    }));
-    const rule = this.rule(`${id}_poll`, {when: event.sinceEnabled(poll), once: false,
-      actions: teams.map(team => action.recruit(team))});
-    return {teams, rule};
+    if (options.ticket.kind !== "building" || !options.rewardAt || "buyers" in options || "pollSeconds" in options)
+      throw new Error("crateLottery 须使用建筑 ticket 并指定 rewardAt；移除 buyers、waypoint 和 pollSeconds");
+    const {name,...rules} = options;
+    this.crateLotteryRules = {...rules, uiName:this.defineText(`${id}_name`,name ?? "补给箱（攻击拆开）")};
+    return options.ticket;
   }
   /**
    * 汇总当前定义并返回任务描述，通常由 defineMission() 自动调用。
@@ -1168,6 +1178,7 @@ export class MissionBuilder<S extends MapSchema, M extends MissionMode = Mission
       ...(this.specialFlags === undefined ? {} : {specialFlags: this.specialFlags}),
       ...(this.lighting === undefined ? {} : {lighting: this.lighting}),
       ...(this.crateLotteryRules === undefined ? {} : {crateLottery: this.crateLotteryRules}),
+      rewardUnits: this.rewardUnits,
       taskForces: this.taskForces,
       scripts: this.scripts, tags: this.tags, bindings: this.bindings, flags: this.flags, rules: this.rules };
   }
