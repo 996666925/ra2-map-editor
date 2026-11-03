@@ -58,7 +58,7 @@ pub(super) fn run(
         },
     );
     observe(GenerationPoint::After(Stage::Water));
-    water_finalize::run(grid, input.ids, input.blocks, rng);
+    water_finalize::run(grid, scratch, input.ids, input.blocks, rng);
     observe(GenerationPoint::After(Stage::WaterFinalize));
     let mut regions = regions::run(&mut regions::RegionCtx {
         grid,

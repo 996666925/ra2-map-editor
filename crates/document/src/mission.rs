@@ -425,6 +425,9 @@ pub fn bind_cell(doc: &mut MapDocument, at: Cell, tag: &str) -> Result<()> {
 pub struct ExternalDefinitions {
     pub teams: BTreeSet<String>,
     pub scripts: BTreeSet<String>,
+    /// Explicit fixed AIMD ScriptTypes list; TeamType references register first.
+    pub script_order: Vec<String>,
+    pub team_script_references: Vec<String>,
     pub task_forces: BTreeSet<String>,
     pub ai_triggers: BTreeSet<String>,
     pub ai_trigger_rows: std::collections::BTreeMap<String, String>,

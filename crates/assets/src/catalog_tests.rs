@@ -1,6 +1,41 @@
 use super::*;
 use crate::test_support::Fixture;
 
+#[test]
+fn mission_registries_keep_existing_positions_and_detect_registry_only_map_overrides() {
+    let mut catalog = Catalog {
+        rules: IniFile::from_str(
+            "[Countries]\n0=ZCountry\n1=ACountry\n[SuperWeaponTypes]\n0=ZSuper\n[Warheads]\n0=ZWarhead\n",
+        ),
+        ..Default::default()
+    };
+    catalog.read_registries();
+    let catalog = Arc::new(catalog);
+    let local = catalog.with_map(
+        b"[Countries]\n0=NewCountry\n[SuperWeaponTypes]\n0=NewSuper\n[Warheads]\n0=NewWarhead\n",
+    );
+    assert_eq!(
+        local.mission_registries["Countries"],
+        ["ZCountry", "ACountry", "NewCountry"]
+    );
+    assert_eq!(
+        local.mission_registries["SuperWeaponTypes"],
+        ["ZSuper", "NewSuper"]
+    );
+    assert_eq!(
+        local.mission_registries["Warheads"],
+        ["ZWarhead", "NewWarhead"]
+    );
+    assert_eq!(
+        catalog.mission_registries["Countries"],
+        ["ZCountry", "ACountry"]
+    );
+    assert!(Arc::ptr_eq(
+        &local,
+        &local.with_map(b"[Basic]\nName=unrelated\n")
+    ));
+}
+
 fn csf(entries: &[(&str, &str)]) -> Vec<u8> {
     let mut bytes = b" FSC".to_vec();
     for word in [3, entries.len() as u32, entries.len() as u32, 0, 9] {

@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
     sync::mpsc,
 };
+type FreshnessResult = (u64, u64, Result<(), String>);
 
 #[derive(Default)]
 pub(crate) struct ScriptUi {
@@ -17,6 +18,9 @@ pub(crate) struct ScriptUi {
     worker: Option<Worker>,
     waiting: Option<mpsc::Receiver<Result<Built, String>>>,
     pending: Option<Built>,
+    freshness: Option<mpsc::Receiver<FreshnessResult>>,
+    freshness_at: Option<std::time::Instant>,
+    freshness_message: String,
 }
 
 impl ScriptUi {
@@ -74,7 +78,7 @@ impl ScriptUi {
     fn refresh_types(&mut self, editor: &Editor, scene: &MapScene) -> Result<()> {
         let path = self.script_path()?;
         let doc = editor.doc.as_ref().context("缺少地图")?;
-        mission_script::refresh_types(&path, &mission_script::catalog(doc, scene))?;
+        mission_script::refresh_document_types(doc, &path, &mission_script::catalog(doc, scene))?;
         self.message = "已刷新 sdk.ts 和 map.generated.ts，外部编辑器可使用最新类型提示。".into();
         Ok(())
     }
@@ -83,8 +87,8 @@ impl ScriptUi {
         let path = self.script_path()?;
         let doc = editor.doc.as_ref().context("缺少地图")?;
         let catalog = mission_script::catalog(doc, scene);
-        mission_script::refresh_types(&path, &catalog)?;
-        let sources = Sources::read(&path)?;
+        mission_script::refresh_document_types(doc, &path, &catalog)?;
+        let sources = Sources::read_for_document(doc, &path)?;
         if self.worker.is_none() {
             self.worker = Some(Worker::new()?);
         }
@@ -123,7 +127,12 @@ impl ScriptUi {
         if self.document != doc.id {
             self.document = doc.id;
             self.path.clear();
+            if let Ok(Some(path)) = mission_script::saved_entry(doc) {
+                self.path = path;
+            }
             self.message.clear();
+            self.freshness_message.clear();
+            self.freshness_at = None;
             self.pending = None;
             self.waiting = None;
         }
@@ -157,6 +166,46 @@ impl ScriptUi {
         if !self.open {
             return;
         }
+        let Some(doc) = editor.doc.as_ref() else {
+            return;
+        };
+        if let Some(receiver) = &self.freshness {
+            match receiver.try_recv() {
+                Ok((id, state, result)) => {
+                    if (id, state) == (doc.id, doc.state_id) {
+                        self.freshness_message = result.err().map_or_else(
+                            || "已应用脚本与当前源码一致。".into(),
+                            |e| format!("待重新构建：{e}"),
+                        );
+                    }
+                    self.freshness = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.freshness = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if self.freshness.is_none() && self.freshness_at.is_none_or(|t| t.elapsed().as_secs() >= 3)
+        {
+            self.freshness_at = Some(std::time::Instant::now());
+            let snapshot = doc.snapshot();
+            let id = doc.id;
+            let state = doc.state_id;
+            let profile = scene.revision.id();
+            let (send, receive) = mpsc::channel();
+            if std::thread::Builder::new()
+                .name("mission-freshness".into())
+                .spawn(move || {
+                    let result = (|| -> Result<()> {
+                        mission_script::resource_payload(&snapshot.bytes()?, &profile)?;
+                        Ok(())
+                    })();
+                    let _ = send.send((id, state, result.map_err(|e| format!("{e:#}"))));
+                })
+                .is_ok()
+            {
+                self.freshness = Some(receive);
+            }
+        }
         if self.worker.is_none() {
             match Worker::new() {
                 Ok(worker) => self.worker = Some(worker),
@@ -176,6 +225,9 @@ impl ScriptUi {
         .resizable(true)
         .show(ctx, |ui| {
             ui.label("在外部编辑器中编写、检查类型并保存脚本，然后应用到地图。");
+            if !self.freshness_message.is_empty() {
+                ui.label(&self.freshness_message);
+            }
             ui.horizontal(|ui| {
                 ui.label("脚本路径");
                 ui.add_enabled(

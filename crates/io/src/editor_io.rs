@@ -446,6 +446,8 @@ pub fn launch(
     let spawn = options.spawn_ini(&map)?;
     let exe = fs::canonicalize(exe).context("VERA20k 可执行文件不存在")?;
     let directory = fs::canonicalize(directory).context("游戏资源目录不存在")?;
+    let revision = ra2_map_assets::profile::Revision::scan(&directory)?;
+    let resources = crate::mission_script::playtest_payload(bytes, &directory, &revision.id())?;
     let folder = root.join("playtest").join(unique());
     fs::create_dir_all(&folder)?;
     let folder = fs::canonicalize(folder)?;
@@ -462,7 +464,9 @@ pub fn launch(
     options.write_settings(&folder.join("settings"))?;
     fs::write(folder.join("spawnmap.ini"), bytes)?;
     fs::write(folder.join("spawn.ini"), spawn)?;
-    let revision = ra2_map_assets::profile::Revision::scan(&directory)?;
+    for (name, value) in resources {
+        fs::write(folder.join(name), value)?;
+    }
     crate::provenance::write(
         &folder.join("editor-session.json"),
         bytes,

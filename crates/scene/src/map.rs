@@ -285,7 +285,33 @@ pub fn load_scene_bytes_controlled(
         });
     }
     crate::work::checkpoint(cancelled)?;
-    let catalog = install.catalog.with_map(source.bytes());
+    let mut catalog = install.catalog.with_map(source.bytes());
+    match ra2_map_assets::mission_resources::scenario_registries(
+        &install.manager,
+        &map.ini,
+        map.ini
+            .section_or_empty("Basic")
+            .read_bool("MultiplayerOnly", false),
+        None,
+    ) {
+        Ok(registries) => {
+            let catalog = Arc::make_mut(&mut catalog);
+            catalog.mission_country_indices = registries.countries;
+            catalog.mission_country_names = registries.country_names;
+            catalog.mission_type_orders = registries.type_orders;
+        }
+        Err(error) => {
+            let catalog = Arc::make_mut(&mut catalog);
+            catalog.mission_country_indices.clear();
+            catalog.mission_country_names.clear();
+            catalog.mission_type_orders.clear();
+            diagnostics.push(Diagnostic {
+                code: "MISSION_REGISTRY",
+                message: format!("任务原生资源序号无法投影：{error}"),
+                cell: None,
+            });
+        }
+    }
     let sprites = install.sprite_palette(&catalog);
     for cell in &map.cells {
         if !playfield::size_diamond_contains(

@@ -33,7 +33,7 @@ pub struct Mission {
     pub background_800: String,
     pub background_palette: String,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Asset {
     pub source: String,

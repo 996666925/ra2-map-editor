@@ -1,6 +1,6 @@
 // CommonJS loader for SWC output. All modules are Rust-owned virtual files.
 // No process, filesystem, network or other host APIs are installed in Boa.
-function __yrExecute(outputs) {
+function __yrExecute(outputs, entry) {
   const cache = Object.create(null);
   function load(name) {
     if (Object.prototype.hasOwnProperty.call(cache, name)) return cache[name].exports;
@@ -27,5 +27,5 @@ function __yrExecute(outputs) {
     new Function("exports", "require", "module", outputs[name])(module.exports, require, module);
     return module.exports;
   }
-  return JSON.stringify(load("/mission.js").default);
+  return JSON.stringify(load(entry).default);
 }

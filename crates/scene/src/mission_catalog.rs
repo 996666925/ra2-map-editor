@@ -9,6 +9,12 @@ pub(crate) fn load(install: &Install) -> ExternalDefinitions {
             source,
             teams: registry.team_types.iter().map(|r| r.id.clone()).collect(),
             scripts: registry.scripts.iter().map(|r| r.id.clone()).collect(),
+            script_order: registry.scripts.iter().map(|r| r.id.clone()).collect(),
+            team_script_references: registry
+                .team_types
+                .iter()
+                .filter_map(|r| r.section().read_name("Script", 0x80).map(str::to_owned))
+                .collect(),
             task_forces: registry.task_forces.iter().map(|r| r.id.clone()).collect(),
             ai_triggers: registry.ai_triggers.iter().map(|r| r.id.clone()).collect(),
             ai_trigger_rows: registry

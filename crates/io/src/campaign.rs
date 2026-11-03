@@ -88,7 +88,13 @@ pub fn patch_ini(bytes: &[u8], values: &[(String, String, String)]) -> Result<Ve
 }
 /// Preserve every base CSF record including WRTS extra data; append overrides.
 pub fn merge_csf(base: &[u8], strings: &BTreeMap<String, String>) -> Result<Vec<u8>> {
-    CsfFile::from_bytes(base)?;
+    let empty: Vec<u8> = [0x43534620u32, 3, 0, 0, 0, 9]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    if base != empty {
+        CsfFile::from_bytes(base)?;
+    }
     let mut cursor = 24usize;
     fn word(bytes: &[u8], at: &mut usize) -> Result<u32> {
         let v = u32::from_le_bytes(bytes.get(*at..*at + 4).context("CSF 截断")?.try_into()?);
@@ -179,6 +185,19 @@ pub fn prepare(
     directory: &Path,
     current: Option<(&str, &[u8])>,
 ) -> Result<Prepared> {
+    let overrides = current
+        .into_iter()
+        .map(|(name, bytes)| (name.to_ascii_lowercase(), bytes.to_vec()))
+        .collect();
+    prepare_with_maps(project, root, directory, &overrides)
+}
+
+pub(crate) fn prepare_with_maps(
+    project: &Project,
+    root: &Path,
+    directory: &Path,
+    overrides: &BTreeMap<String, Vec<u8>>,
+) -> Result<Prepared> {
     project.validate()?;
     // A new campaign starts at MAPSEL stage zero, regardless of UI list order.
     let mut ordered = project.clone();
@@ -191,6 +210,7 @@ pub fn prepare(
     ordered.missions.insert(0, first);
     let project = &ordered;
     let install = Install::open(directory)?;
+    let profile = ra2_map_assets::profile::Revision::scan(directory)?.id();
     let mut payload = BTreeMap::new();
     for a in &project.assets {
         payload.insert(
@@ -199,24 +219,33 @@ pub fn prepare(
         );
     }
     let stock = |name: &str| install.manager.get_ref(name).unwrap_or_default();
-    if !project.strings.is_empty() {
-        payload.insert(
-            "ra2md.csf".into(),
-            merge_csf(stock("ra2md.csf"), &project.strings)?,
-        );
-    }
     let mut mission_values = Vec::new();
+    let mut declared_strings = project.strings.clone();
     let mut maps = Vec::new();
     for m in &project.missions {
-        let bytes = if let Some((name, bytes)) =
-            current.filter(|(name, _)| name.eq_ignore_ascii_case(&m.file))
-        {
-            let _ = name;
+        let bytes = if let Some(bytes) = overrides.get(&m.file.to_ascii_lowercase()) {
             bytes.to_vec()
         } else {
             read_bounded(&root.join(&m.source))?
         };
         let map = crate::editor_io::validate(&bytes)?;
+        for (name, value) in crate::mission_script::resource_payload(&bytes, &profile)? {
+            ensure!(
+                payload.get(&name).is_none_or(|old| old == &value),
+                "关卡资源输出冲突：{name}"
+            );
+            payload.insert(name, value);
+        }
+        for (label, value) in crate::mission_script::declared_texts(&bytes)? {
+            let existing = declared_strings
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(&label));
+            ensure!(
+                existing.is_none_or(|(_, old)| old == &value),
+                "任务文本 {label} 与战役文本或其他关卡冲突"
+            );
+            declared_strings.insert(label, value);
+        }
         ensure!(
             !map.ini
                 .section_or_empty("Basic")
@@ -248,6 +277,19 @@ pub fn prepare(
         }
         payload.insert(m.file.to_ascii_lowercase(), bytes);
         maps.push(map);
+    }
+    if !declared_strings.is_empty() {
+        let empty: Vec<u8> = [0x43534620u32, 3, 0, 0, 0, 9]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        payload.insert(
+            "ra2md.csf".into(),
+            merge_csf(
+                install.manager.get_ref("ra2md.csf").unwrap_or(&empty),
+                &declared_strings,
+            )?,
+        );
     }
     let shell_campaign = if project
         .missions
@@ -443,6 +485,27 @@ pub fn audit_resources(
         {
             refs.push(("Theme".into(), s.clone()));
         }
+        for house in vera20k_core::map::houses::parse_house_roster(&map.ini, &[], None).houses {
+            if let Some(label) = house.ui_name {
+                refs.push(("Csf".into(), label));
+            }
+        }
+        for key in [
+            "UnderParTitle",
+            "UnderParMessage",
+            "OverParTitle",
+            "OverParMessage",
+        ] {
+            // Match the engine's 0x1f-byte reader; audit explicit map fields
+            // without making the native fallback labels new dependencies.
+            let value = map
+                .ini
+                .section_or_empty("Ranking")
+                .read_string(key, "", 0x1f);
+            if !value.is_empty() {
+                refs.push(("Csf".into(), value));
+            }
+        }
         for key in [&m.ui_name, &m.briefing, &m.load_message, &m.load_briefing] {
             if !key.is_empty() {
                 refs.push(("Csf".into(), key.clone()));
@@ -454,7 +517,11 @@ pub fn audit_resources(
             }
         }
         let doc = MapDocument::new(Baseline::parse(
-            payload[&m.file.to_ascii_lowercase()].clone().into(),
+            payload
+                .get(&m.file.to_ascii_lowercase())
+                .with_context(|| format!("依赖检查缺少地图快照：{}", m.file))?
+                .clone()
+                .into(),
             map,
         )?);
         for id in mission::ids(&doc, Kind::Trigger) {
@@ -716,6 +783,7 @@ pub fn install_clean(package: &Path, base: &Path, output: &Path) -> Result<()> {
             "thememd.ini",
             "theme.ini",
             "ra2md.csf",
+            "game.fnt",
             "audio.idx",
             "audio.bag",
             "temperatmd.ini",

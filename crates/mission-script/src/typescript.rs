@@ -25,6 +25,7 @@ struct Transpiled {
 pub struct Compiler {
     modules: BTreeMap<String, Transpiled>,
     inputs: BTreeMap<String, String>,
+    input_entry: String,
     cached_mission: Option<String>,
 }
 
@@ -33,14 +34,49 @@ impl Compiler {
         Ok(Self {
             modules: BTreeMap::from([("/sdk.ts".into(), transpile("/sdk.ts", super::SDK)?)]),
             inputs: BTreeMap::new(),
+            input_entry: String::new(),
             cached_mission: None,
         })
     }
 
     /// Only syntax is checked here. SDK data and native map constraints are
     /// validated separately; type annotations are checked by the author's IDE.
-    pub fn build(&mut self, mut files: BTreeMap<String, String>) -> Result<super::native::Mission> {
-        ensure!(files.contains_key("/mission.ts"), "缺少 mission.ts");
+    pub fn build(&mut self, files: BTreeMap<String, String>) -> Result<super::native::Mission> {
+        self.build_at(files, "/mission.ts")
+    }
+    pub fn build_at(
+        &mut self,
+        files: BTreeMap<String, String>,
+        entry: &str,
+    ) -> Result<super::native::Mission> {
+        self.decode(files, entry)
+    }
+
+    pub fn build_campaign(
+        &mut self,
+        files: BTreeMap<String, String>,
+    ) -> Result<super::campaign::Campaign> {
+        self.build_campaign_at(files, "/mission.ts")
+    }
+    pub fn build_campaign_at(
+        &mut self,
+        files: BTreeMap<String, String>,
+        entry: &str,
+    ) -> Result<super::campaign::Campaign> {
+        let campaign: super::campaign::Campaign = self.decode(files, entry)?;
+        campaign.validate()?;
+        Ok(campaign)
+    }
+
+    fn decode<T: serde::de::DeserializeOwned>(
+        &mut self,
+        mut files: BTreeMap<String, String>,
+        entry: &str,
+    ) -> Result<T> {
+        ensure!(
+            files.contains_key(entry) && entry != "/sdk.ts" && !entry.ends_with(".d.ts"),
+            "缺少可执行任务入口：{entry}"
+        );
         ensure!(files.len() <= 128, "任务模块不能超过 128 个");
         ensure!(
             files.values().map(String::len).sum::<usize>() <= 4 * 1024 * 1024,
@@ -60,6 +96,7 @@ impl Compiler {
         // The SDK is immutable, even if a caller supplies its on-disk copy.
         files.remove("/sdk.ts");
         if files == self.inputs
+            && entry == self.input_entry
             && let Some(text) = &self.cached_mission
         {
             return Ok(serde_json::from_str(text)?);
@@ -70,7 +107,7 @@ impl Compiler {
 
         // Traverse runtime imports after type stripping. Declaration files,
         // type-only imports and unrelated scripts do not need transpilation.
-        let mut pending = vec!["/mission.ts".to_owned()];
+        let mut pending = vec![entry.to_owned()];
         let mut visited = BTreeSet::new();
         let mut outputs = BTreeMap::new();
         while let Some(name) = pending.pop() {
@@ -109,10 +146,14 @@ impl Compiler {
             );
         }
 
-        let text = execute(&outputs)?;
+        let text = execute(
+            &outputs,
+            &format!("{}.js", entry.strip_suffix(".ts").unwrap()),
+        )?;
         let mission =
             serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("任务结构无效：{e}"))?;
         self.inputs = files;
+        self.input_entry = entry.into();
         self.cached_mission = Some(text);
         Ok(mission)
     }
@@ -235,7 +276,7 @@ fn transpile(name: &str, source: &str) -> Result<Transpiled> {
     })
 }
 
-fn execute(outputs: &BTreeMap<String, String>) -> Result<String> {
+fn execute(outputs: &BTreeMap<String, String>, entry: &str) -> Result<String> {
     let mut execution = Context::default();
     execution
         .runtime_limits_mut()
@@ -248,8 +289,9 @@ fn execute(outputs: &BTreeMap<String, String>) -> Result<String> {
         .map_err(|e| anyhow::anyhow!("任务执行器：{e}"))?;
     let value = execution
         .eval(Source::from_bytes(&format!(
-            "__yrExecute({})",
-            serde_json::to_string(outputs)?
+            "__yrExecute({}, {})",
+            serde_json::to_string(outputs)?,
+            serde_json::to_string(entry)?
         )))
         .map_err(|e| anyhow::anyhow!("任务执行失败：{e}"))?;
     let text = value

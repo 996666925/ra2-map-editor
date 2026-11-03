@@ -3751,6 +3751,7 @@ dependencies = [
  "swc_ecma_transforms_base",
  "swc_ecma_transforms_module",
  "swc_ecma_transforms_typescript",
+ "vera20k-core",
 ]
 
 [[package]]

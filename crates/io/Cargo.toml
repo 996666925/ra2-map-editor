@@ -19,3 +19,4 @@ vera20k-core.workspace = true
 
 [dev-dependencies]
 ra2-map-document = { workspace = true, features = ["test-support"] }
+ra2-map-assets = { workspace = true, features = ["test-support"] }

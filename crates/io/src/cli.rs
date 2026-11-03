@@ -422,6 +422,9 @@ fn run_map(args: &Args, install: &mut Install, name: &str) -> Result<MapReport> 
 /// None means normal GUI arguments. A headless invocation never initializes UI.
 pub fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<Option<i32>> {
     let raw: Vec<_> = arguments.into_iter().collect();
+    if raw.first().is_some_and(|a| a == "campaign-build") {
+        return crate::mission_script::run_campaign_cli(&raw).map(Some);
+    }
     if raw
         .first()
         .is_some_and(|a| a == "mission-init" || a == "mission-build")

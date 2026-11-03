@@ -130,6 +130,17 @@ impl CampaignUi {
             ui.label("战役目录和资源单独保存为项目 JSON；地图内分支/继承选项在“任务设置”编辑。项目与地图分别保存。");
             ui.add_enabled_ui(self.worker.is_none(),|ui| {
                 ui.horizontal_wrapped(|ui| {
+                    if ui.button("构建并发布 TS 战役…").clicked()
+                        && let Some(entry)=rfd::FileDialog::new().add_filter("TypeScript 战役", &["ts"]).pick_file()
+                        && let Some(output)=rfd::FileDialog::new().set_file_name("mission-package").save_file() {
+                        let directory=directory.to_owned();
+                        self.start(ctx,move || {
+                            let prepared=ra2_map_io::mission_script::prepare_campaign(&entry,&directory)?;
+                            if !prepared.report.passed {return Ok(Done::Report(prepared.report));}
+                            let report=campaign::export(prepared,&output)?;
+                            Ok(Done::Exported(report,output))
+                        });
+                    }
                     if ui.add_enabled(!self.dirty(),egui::Button::new("从当前地图新建项目")).clicked() {
                         if let Some(path)=editor.target.as_ref() {
                             let name=path.file_name().unwrap_or_default().to_string_lossy().to_ascii_uppercase();

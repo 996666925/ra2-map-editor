@@ -1,5 +1,5 @@
 //! Shared production campaign loader for AI authoring audits.
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use ra2_map_assets::assets::Install;
 use std::sync::Arc;
 use vera20k_core::{
@@ -48,13 +48,31 @@ pub fn load_stage(
         .map_err(anyhow::Error::msg)?;
     let roster =
         vera20k_core::map::houses::parse_house_roster(&map.ini, &rules.color_schemes, Some(&rules));
+    // The production loaders use the Resize cell-array extent, SizeW+SizeH,
+    // for both session axes. Logical map Size here truncates CellTag line
+    // scans and changes map-edge consumers in otherwise valid audit maps.
+    let native_bounds =
+        vera20k_core::sim::scenario_bootstrap::NativeStartBounds::from_map_header(&map.header)
+            .context("native map cell-array bounds")?;
+    let scenario_cell_extent = native_bounds.min_rx + native_bounds.width;
     let descriptor = ScenarioDescriptor {
         seed: 12345,
         map_name: filename.into(),
         theater: map.header.theater.clone(),
-        map_width: map.header.width.try_into()?,
-        map_height: map.header.height.try_into()?,
+        map_width: scenario_cell_extent,
+        map_height: scenario_cell_extent,
         timer_inherit: map.basic.timer_inherit.unwrap_or(false),
+        train_crate: map.basic.train_crate.unwrap_or(false),
+        truck_crate: map.basic.truck_crate.unwrap_or(false),
+        lighting: vera20k_core::sim::scenario_session::ScenarioLightingState::from_map(
+            &vera20k_core::map::lighting::parse_lighting_profiles(&map.ini),
+        ),
+        // The ordinary client resolves these map-owned campaign flags into
+        // ScenarioDescriptor before construction (app/loading/init.rs).
+        no_damage: map.special_flags.inert.unwrap_or(false),
+        harvester_immune: map.special_flags.harvester_immune.unwrap_or(false),
+        tiberium_grows_flag: map.special_flags.tiberium_grows.unwrap_or(false),
+        tiberium_spreads_flag: map.special_flags.tiberium_spreads.unwrap_or(true),
         carry_over_money: map.basic.carry_over_money,
         carry_over_cap: map.basic.carry_over_cap,
         ..Default::default()
@@ -125,12 +143,29 @@ pub fn load_stage(
         install.theater.extension,
         &map.header.theater,
     );
+    // Match the production map loader: authored trigger and team-script
+    // animations extend the tolerant effect roots before constructors run.
+    let mut authored_roots =
+        vera20k_core::map::actions::trigger_anim_class_roots(&rules, &map.actions);
+    authored_roots.extend(teams.script_anim_class_roots(&rules));
+    rules.bind_anim_class_assets(
+        &authored_roots,
+        &install.manager,
+        install.theater.extension,
+        &map.header.theater,
+    );
     rules.populate_anim_frame_dims(
         &install.manager,
         install.theater.extension,
         &map.header.theater,
     );
     rules.bind_effect_assets(
+        &install.manager,
+        install.theater.extension,
+        &map.header.theater,
+    );
+    rules.bind_building_buildup_assets(&install.manager, &map.header.theater);
+    rules.bind_building_rubble_assets(
         &install.manager,
         install.theater.extension,
         &map.header.theater,

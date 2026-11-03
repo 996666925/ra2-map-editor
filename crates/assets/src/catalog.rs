@@ -48,6 +48,14 @@ pub struct Catalog {
     object_names: BTreeMap<String, String>,
     pub art: Arc<vera20k_core::rules::art_data::ArtRegistry>,
     pub object_types: BTreeMap<String, Vec<String>>,
+    /// Mission reference families in registration order, separate from display labels.
+    pub mission_registries: BTreeMap<String, Vec<String>>,
+    /// Fixed root/LANG Countries projected by the engine process owner. Later
+    /// map/mode countries append; their indices need a scenario projection.
+    pub mission_country_indices: BTreeMap<String, i32>,
+    pub mission_country_names: BTreeMap<String, String>,
+    /// Fixed process Type arrays, including implicit allocations; display order is separate.
+    pub mission_type_orders: BTreeMap<String, Vec<String>>,
     pub overlays: Vec<String>,
     pub raw_tiles: BTreeMap<u16, i32>,
     pub defaults: Vec<TileKey>,
@@ -64,6 +72,10 @@ impl Default for Catalog {
                 &IniFile::empty(),
             )),
             object_types: BTreeMap::new(),
+            mission_registries: BTreeMap::new(),
+            mission_country_indices: BTreeMap::new(),
+            mission_country_names: BTreeMap::new(),
+            mission_type_orders: BTreeMap::new(),
             overlays: vec![],
             raw_tiles: BTreeMap::new(),
             defaults: vec![],
@@ -242,11 +254,11 @@ impl Catalog {
     }
     pub fn load(manager: &AssetManager, theater: &TheaterData) -> Arc<Self> {
         let rules = manager
-            .get_ref("rulesmd.ini")
+            .get_ref(manager.ini_roots().rules())
             .and_then(|b| IniFile::from_bytes(b).ok())
             .unwrap_or_else(IniFile::empty);
         let art = manager
-            .get_ref("artmd.ini")
+            .get_ref(manager.ini_roots().art())
             .and_then(|b| IniFile::from_bytes(b).ok())
             .unwrap_or_else(IniFile::empty);
         let mut catalog = Self {
@@ -258,6 +270,11 @@ impl Catalog {
             ..Self::default()
         };
         catalog.read_registries();
+        if let Ok(registries) = crate::mission_resources::native_registries(manager) {
+            catalog.mission_country_indices = registries.countries;
+            catalog.mission_country_names = registries.country_names;
+            catalog.mission_type_orders = registries.type_orders;
+        }
         // Save authored disk IDs, never the already-translated render ID.
         for raw in -1..theater.lookup.len() as i32 {
             let translated = theater.lookup.translate_legacy_map_tile_index(raw);
@@ -289,6 +306,17 @@ impl Catalog {
         Arc::new(catalog)
     }
     fn read_registries(&mut self) {
+        for registry in ["Countries", "SuperWeaponTypes", "Warheads"] {
+            self.mission_registries.insert(
+                registry.into(),
+                self.rules
+                    .section_or_empty(registry)
+                    .registry_ids()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            );
+        }
         for (section, registry) in [
             ("Structures", "BuildingTypes"),
             ("Units", "VehicleTypes"),
@@ -356,6 +384,9 @@ impl Catalog {
             "SmudgeTypes",
             "OverlayTypes",
             "Animations",
+            "Countries",
+            "SuperWeaponTypes",
+            "Warheads",
         ];
         let custom = map.section_names().iter().any(|s| {
             registries.iter().any(|r| r.eq_ignore_ascii_case(s))
@@ -363,6 +394,7 @@ impl Catalog {
                     .object_types
                     .values()
                     .flatten()
+                    .chain(self.mission_registries.values().flatten())
                     .chain(self.overlays.iter())
                     .any(|id| id.eq_ignore_ascii_case(s))
         });
@@ -383,6 +415,19 @@ impl Catalog {
                 }
             }
             catalog.object_types.insert(section.clone(), merged);
+        }
+        for (section, ids) in &self.mission_registries {
+            let extras = catalog
+                .mission_registries
+                .remove(section)
+                .unwrap_or_default();
+            let mut merged = ids.clone();
+            for id in extras {
+                if !merged.iter().any(|old| old.eq_ignore_ascii_case(&id)) {
+                    merged.push(id);
+                }
+            }
+            catalog.mission_registries.insert(section.clone(), merged);
         }
         let extras = std::mem::take(&mut catalog.overlays);
         catalog.overlays = self.overlays.clone();

@@ -68,6 +68,41 @@ fn schema_matches_production_operand_decoders_and_reinforcement_waypoint_source(
     }
 }
 #[test]
+fn effect_and_camera_ranges_are_checked_in_actions_and_team_scripts() {
+    let mut doc = fixture();
+    let trigger = ids(&doc, Kind::Trigger)[0].clone();
+    let script = ids(&doc, Kind::Script)[0].clone();
+    for (opcode, max) in [(58, 3), (48, 4)] {
+        for value in [-1, 0, max, max + 1, i32::MAX] {
+            let mut row = schema::row(false, opcode).unwrap();
+            row[2] = value.to_string();
+            put(&mut doc, "Actions", &trigger, encode_list(&[row])).unwrap();
+            let reopened = parse(doc.snapshot().bytes().unwrap());
+            assert_eq!(
+                diagnostics(&reopened, None)
+                    .iter()
+                    .any(|d| { d.field == "Actions" && d.severity == Severity::Error }),
+                !(0..=max).contains(&value),
+                "action {opcode}, value {value}"
+            );
+        }
+    }
+    for value in [-1, 0, 4, 5, i32::MAX] {
+        put(&mut doc, &script, "0", format!("34,{value}")).unwrap();
+        let reopened = parse(doc.snapshot().bytes().unwrap());
+        assert_eq!(reopened.ini_text(&script, "0"), format!("34,{value}"));
+        assert_eq!(
+            diagnostics(&reopened, None).iter().any(|d| {
+                d.issue.kind == Kind::Script
+                    && d.issue.id == script
+                    && d.severity == Severity::Error
+            }),
+            !(0..=4).contains(&value),
+            "team camera value {value}"
+        );
+    }
+}
+#[test]
 fn script_slot_operations_remap_branches_and_reject_dangling_targets_atomically() {
     let mut fields = std::collections::BTreeMap::from([
         ("Name".into(), "script".into()),

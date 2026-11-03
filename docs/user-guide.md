@@ -142,6 +142,18 @@
 
 编辑器内置 Rust SWC 转译器，运行不需要 Node.js 或 Deno。**类型检查由外部代码编辑器完成**，“应用到地图”不执行 TypeScript 类型检查。带中文注释的引用枚举、API、示例与限制见 [任务脚本说明](../examples/missions/README.md)。
 
+在航点引爆武器可使用 `action.explosionAt(m.weapon(Weapon.Vulcan), at)`；先刷新类型并从 `map.generated.ts` 导入 `Weapon`。该动作读取武器伤害和弹头，直接造成范围伤害，不发射弹体。只需创建动画时使用 `playAnimationAt(m.animation(Animation.EXPLOSML), at)`。
+
+小队气泡使用 `action.talkBubble(team, 1)`，可选图形编号1～3；全局只能显示一个，`clearTalkBubble()` 清除。小队必须已有活动实例，资源安装须提供 `talkbubl.shp` 和 `palette.pal`，也可通过 `m.asset()` 发布图形。气泡按墙钟超时，不用于显示自定义文本。
+
+脚本可通过 `action.centerCamera(航点, 速度)` 平滑移动镜头；速度支持 0～4 档，默认 1，数值越大越快。`action.jumpCamera(航点)` 立即跳转，`action.homeCamera()` 返回本地基地。速度档位不是持续秒数，无效值在构建时会被拒绝。
+
+持续定时出兵可使用 `when: event.sinceEnabled(30)` 和 `once: false`，每隔 30 个游戏秒触发增援；完整代码见 [重复增援示例](../examples/missions/README.md#每隔-30-秒增援小队)。
+
+要在右下角同步显示时间，可用 `action.setCountdown(30)` 启动任务倒计时，再通过 `event.countdownElapsed()` 触发增援和下一轮倒数。也支持 CSF 标题、停止/继续及增减时间，见 [任务倒计时示例](../examples/missions/README.md#在右下角显示出兵倒计时)。
+
+SDK 也支持规则启停/强制触发、原生多条件 `all()`、一次性分支 `any()`、全局变量与已有局部变量引用，以及对象/格子/小队共享 Tag。条件组合和原生锁存的边界见 [规则启停与条件组合](../examples/missions/README.md#规则启停与条件组合)，绑定方式见 [共享 Tag 与绑定](../examples/missions/README.md#共享-tag-与绑定)。
+
 ## 保存与恢复
 
 `Ctrl+S` 后台保存当前地图，并生成内嵌 `PreviewPack`；保存后会重开校验，保留最多三份 `.yr-editor-*.bak` 备份。已有内嵌预览会在重新保存时更新。
@@ -204,3 +216,25 @@
 界面按需使用系统字体补全中文、多语言文字和 Emoji；可通过 `--font PATH` 优先使用指定字体。
 
 原生界面已启用 AccessKit，并为引用、数值和光照等表单输入补充可访问名称。
+
+## TypeScript 文本、媒体和战役
+
+`m.crateLottery()` 可封装“侧栏生产抽奖车 → 出厂后自动掉箱 → 拾取随机车辆”。它复用现有引擎，支持配置奖励车辆池、参与玩家、可选价格和检查间隔；车辆的侧栏前置条件沿用当前规则。该配置影响全地图随机箱奖励，须开启游戏木箱选项，奖励归拾取者。完整示例和原生限制见[抽奖车说明](../examples/missions/README.md#侧栏抽奖车与随机单位箱)。
+
+生成的 TS 战役可通过游戏正常的“Save Game / Load Game”浏览器保存和继续任务。已验证倒计时、活动小队脚本与重复增援规则在加载后继续；当前客户端使用 VERA 自有存档格式，真实联机不提供该存取入口，原版 SAV 兼容不在此范围内。
+
+两栖运输船可使用同一组小队装载、移动和卸载命令渡水，详见[运输脚本](../examples/missions/README.md#运输脚本的满载条件)。`waitLoaded()` 等待类型容量全满，原版 LCRF、SAPC 和 YHVR 为 12 人；水域、海岸及两岸航点需在地图上正确安排。
+
+`m.configureHouse()` 和 `m.createHouse()` 可用 `uiName: m.defineText(...)` 设置地图 House 显示名，用 `edge: HouseEdge.West` 等指定读取该字段的增援入场边缘。显式运输航点优先；当前战役保留该CSF元数据，但普通战役外交/简报/结算没有House名称列表，不能据此保证文字可见；多人参赛者仍用房间昵称或电脑名，Neutral/Special使用类型名。固定 House 的小队按有效 Country 归属，同国后续 House 无法由原生小队表达时构建会报错，详见 [House 示例](../examples/missions/README.md#house-显示名与增援方向)。
+
+小队脚本可用 `order.playSound()`、`order.playMusic()` 和 `order.playMovie()`；它们均推进下一行，播放与恢复由客户端处理，详见[小队媒体示例](../examples/missions/README.md#小队声音音乐与影片)。
+
+任务可用 `m.defineText('id', '中文内容')` 创建文本引用，传给消息或倒计时标题。媒体用 `m.asset('输出名', '相对入口目录的路径')` 声明；应用只修改地图，试玩/发布时统一校验和输出资源。影片字幕支持声明 `subtitlemd.txt`（带 BOM 的 UTF-16LE）；格式与战役雷达影片暂停用法见[任务示例](../examples/missions/README.md)。源码、SDK、资源或原生注册顺序变化后需要重新构建；任务窗口后台显示待构建状态，重开地图会恢复上次入口路径。
+
+“战役目录与任务发布”中的“构建并发布 TS 战役…”读取 `defineCampaign()` 入口，先构建各关任务，再生成中文 CSF、战役目录及媒体。任一关卡失败不会发布半套文件。无窗口命令为 `ra2-map-editor campaign-build --game-dir DIR --script campaign.ts --output NEW_DIRECTORY`，与 GUI 共用实现。
+
+战役生成的地图还保存所属关卡和战役入口。重开后重建当前任务，会沿用战役根目录以解析共享模块和关内媒体，并从战役声明恢复跳转字段；若已更换或移除该关脚本关联，需要重新构建整个战役。
+
+单人开局可用 `m.configureSpecialFlags()` 设置伤害冻结、战争迷雾、矿车自动选敌保护、桥梁可破坏性和矿石增长／扩散；多人只开放地图控制的起始部队精英配置。两种模式均可用 `m.configureLighting()` 声明普通、闪电风暴和心灵控制器的开局光照及淡变间隔；光照分量使用地图比例值（1 表示 100%），配置本身不会启动超武。
+
+胜利结算页可用 `m.configureRanking()` 设置三难度的基准秒数，以及达标/超时的标题和评语；中文文案用 `m.defineText()` 声明。用时等于基准时按达标处理，省略字段保留地图现值。完整接口、单位/模式限制和可复制示例见 [TS 任务说明](../examples/missions/README.md)；逐项实现与验收边界见 [扩展计划](mission-sdk-plan.zh-CN.md)。
