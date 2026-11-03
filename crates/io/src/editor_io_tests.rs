@@ -15,6 +15,108 @@ fn root() -> PathBuf {
 }
 
 #[test]
+fn playtest_config_loads_mission_overrides_and_base_assets_without_changing_install() {
+    use std::collections::BTreeMap;
+    use vera20k_core::{
+        assets::{asset_manager::AssetManager, csf_file::CsfFile},
+        util::config::GameConfig,
+    };
+
+    let fixture = ra2_map_assets::test_support::Fixture::new();
+    let empty: Vec<u8> = [0x43534620u32, 3, 0, 0, 0, 9]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    let base = crate::campaign::merge_csf(
+        &empty,
+        &BTreeMap::from([("BASE:TEXT".into(), "原版文本".into())]),
+    )
+    .unwrap();
+    fs::write(fixture.0.join("RA2MD.CSF"), &base).unwrap();
+    fs::write(fixture.0.join("ARTMD.INI"), b"[Movies]\nBASE=base\n").unwrap();
+    fs::write(fixture.0.join("expandmd01.mix"), b"archive bytes").unwrap();
+    fs::write(fixture.0.join("VERA.INI"), b"[VERA]\nFullScreen=Yes\n").unwrap();
+    let csf = crate::campaign::merge_csf(
+        &base,
+        &BTreeMap::from([("TSTX12345678".into(), "苏军正在逼近！".into())]),
+    )
+    .unwrap();
+    let root = root();
+    let game_dir = prepare_playtest_files(
+        &root,
+        &fixture.0,
+        BTreeMap::from([
+            ("ra2md.csf".into(), csf),
+            ("artmd.ini".into(), b"[Movies]\nINTRO=intro\n".to_vec()),
+            ("intro.bik".into(), b"mission movie".to_vec()),
+            ("subtitlemd.txt".into(), b"mission subtitles".to_vec()),
+        ]),
+        &crate::playtest::PlayOptions::default(),
+    )
+    .unwrap();
+    let config = GameConfig::load_from(&root, &root.join("vera20k.exe")).unwrap();
+    assert_eq!(config.paths.ra2_dir, game_dir);
+    let manager = AssetManager::from_ini_probe_root(&config.paths.ra2_dir).unwrap();
+    let (loaded, _) = CsfFile::load_active(|name| manager.get_ref(name)).unwrap();
+    assert_eq!(loaded.get("TSTX12345678"), Some("苏军正在逼近！"));
+    assert_eq!(loaded.get("BASE:TEXT"), Some("原版文本"));
+    assert_eq!(
+        manager.get_ref("artmd.ini"),
+        Some(b"[Movies]\nINTRO=intro\n".as_slice())
+    );
+    assert_eq!(
+        manager.get_ref("intro.bik"),
+        Some(b"mission movie".as_slice())
+    );
+    assert_eq!(
+        manager.get_ref("subtitlemd.txt"),
+        Some(b"mission subtitles".as_slice())
+    );
+    assert_eq!(
+        manager.get_ref("gi.shp"),
+        Some(fs::read(fixture.0.join("gi.shp")).unwrap().as_slice())
+    );
+    assert_eq!(
+        fs::read(game_dir.join("expandmd01.mix")).unwrap(),
+        b"archive bytes"
+    );
+    assert!(!game_dir.join("vera.ini").exists());
+    // Writing a session's loose resource must never mutate the source install.
+    fs::write(game_dir.join("temperatmd.ini"), b"session change").unwrap();
+    assert_ne!(
+        fs::read(fixture.0.join("temperatmd.ini")).unwrap(),
+        b"session change"
+    );
+    assert_eq!(fs::read(fixture.0.join("RA2MD.CSF")).unwrap(), base);
+    assert_eq!(
+        fs::read(fixture.0.join("ARTMD.INI")).unwrap(),
+        b"[Movies]\nBASE=base\n"
+    );
+    assert!(!fixture.0.join("intro.bik").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn playtest_without_mission_resources_keeps_the_original_asset_directory() {
+    let fixture = ra2_map_assets::test_support::Fixture::new();
+    let root = root();
+    let game_dir = prepare_playtest_files(
+        &root,
+        &fixture.0,
+        Default::default(),
+        &crate::playtest::PlayOptions::default(),
+    )
+    .unwrap();
+    let config =
+        vera20k_core::util::config::GameConfig::load_from(&root, &root.join("vera20k.exe"))
+            .unwrap();
+    assert_eq!(game_dir, fixture.0);
+    assert_eq!(config.paths.ra2_dir, fixture.0);
+    assert!(!root.join("assets").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn playtest_window_options_are_written_to_the_isolated_vera_profile() {
     let root = root();
     let settings = root.join("settings");

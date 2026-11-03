@@ -451,22 +451,9 @@ pub fn launch(
     let folder = root.join("playtest").join(unique());
     fs::create_dir_all(&folder)?;
     let folder = fs::canonicalize(folder)?;
-    // Interactive VERA reads cwd/config.toml; RA2_DIR is chiefly a tool/test
-    // convention. Keep both assets and user settings explicit for this process.
-    let config =
-        vera20k_core::util::config::set_paths_key("", "ra2_dir", &directory.to_string_lossy());
-    let config = vera20k_core::util::config::set_paths_key(
-        &config,
-        "settings_dir",
-        &folder.join("settings").to_string_lossy(),
-    );
-    fs::write(folder.join("config.toml"), config)?;
-    options.write_settings(&folder.join("settings"))?;
+    let game_dir = prepare_playtest_files(&folder, &directory, resources, options)?;
     fs::write(folder.join("spawnmap.ini"), bytes)?;
     fs::write(folder.join("spawn.ini"), spawn)?;
-    for (name, value) in resources {
-        fs::write(folder.join(name), value)?;
-    }
     crate::provenance::write(
         &folder.join("editor-session.json"),
         bytes,
@@ -479,7 +466,7 @@ pub fn launch(
     command
         .arg("-SPAWN")
         .current_dir(&folder)
-        .env("RA2_DIR", directory)
+        .env("RA2_DIR", game_dir)
         .stdin(Stdio::null())
         .stdout(out)
         .stderr(err);
@@ -490,4 +477,92 @@ pub fn launch(
     }
     let child = command.spawn().context("启动 VERA20k 试玩失败")?;
     Ok(PlayProcess { child, folder })
+}
+
+pub(crate) fn prepare_playtest_files(
+    folder: &Path,
+    directory: &Path,
+    resources: std::collections::BTreeMap<String, Vec<u8>>,
+    options: &crate::playtest::PlayOptions,
+) -> Result<PathBuf> {
+    let game_dir = if resources.is_empty() {
+        directory.to_path_buf()
+    } else {
+        let assets = folder.join("assets");
+        fs::create_dir(&assets)?;
+        // AssetManager reads loose files only under ra2_dir, not cwd. Keep the
+        // original resources alongside mission overrides in this session's root.
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            let extension = path
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_ascii_lowercase();
+            if !matches!(
+                extension.as_str(),
+                "mix"
+                    | "ini"
+                    | "pal"
+                    | "shp"
+                    | "tmp"
+                    | "tem"
+                    | "sno"
+                    | "urb"
+                    | "ubn"
+                    | "des"
+                    | "lun"
+                    | "vxl"
+                    | "hva"
+                    | "vpl"
+                    | "csf"
+                    | "wav"
+                    | "aud"
+                    | "bik"
+                    | "vqa"
+                    | "bag"
+                    | "idx"
+                    | "pcx"
+                    | "fnt"
+                    | "pkt"
+                    | "wma"
+                    | "ogg"
+            ) || matches!(
+                name.as_str(),
+                "spawn.ini" | "spawnmap.ini" | "ra2.ini" | "ra2md.ini" | "ddraw.ini" | "vera.ini"
+            ) || resources.contains_key(&name)
+            {
+                continue;
+            }
+            let target = assets.join(&name);
+            // Only immutable bulk data shares storage. Loose files are copied,
+            // and overridden names are skipped before linking or writing.
+            if matches!(extension.as_str(), "mix" | "bag") {
+                fs::hard_link(&path, &target).or_else(|_| fs::copy(&path, &target).map(|_| ()))?;
+            } else {
+                fs::copy(&path, &target)?;
+            }
+        }
+        for (name, value) in resources {
+            fs::write(assets.join(name), value)?;
+        }
+        assets
+    };
+    // Interactive VERA reads cwd/config.toml; RA2_DIR is chiefly a tool/test
+    // convention. Keep both assets and user settings explicit for this process.
+    let config =
+        vera20k_core::util::config::set_paths_key("", "ra2_dir", &game_dir.to_string_lossy());
+    let config = vera20k_core::util::config::set_paths_key(
+        &config,
+        "settings_dir",
+        &folder.join("settings").to_string_lossy(),
+    );
+    fs::write(folder.join("config.toml"), config)?;
+    options.write_settings(&folder.join("settings"))?;
+    Ok(game_dir)
 }
