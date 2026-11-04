@@ -528,7 +528,7 @@ impl Editor {
             self.template_level = fixed.then_some(0);
         }
         if let Some(level) = self.template_level.as_mut() {
-            ui.add(egui::Slider::new(level, 0..=10).text("低地高度"));
+            ui.add(egui::Slider::new(level, 0..=cliff_tools::MAX_CLIFF_BASE).text("低地高度"));
         } else {
             ui.small("自动识别所选高台的低地高度；悬崖高差为 4 层。");
         }

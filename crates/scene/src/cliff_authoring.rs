@@ -360,7 +360,11 @@ pub fn reshape(
     base: u8,
     cut: bool,
 ) -> Result<PlateauPlan> {
-    ensure!(base <= 10, "标准悬崖高差为 4 层，低地高度须在 0～10 层");
+    ensure!(
+        base <= cliff_tools::MAX_CLIFF_BASE,
+        "低地高度须在 0～{} 层",
+        cliff_tools::MAX_CLIFF_BASE
+    );
     let (mut core, mut old) = existing(doc, scene, &selection, base)?;
     let protected = portals(doc, scene, &mut core, &selection, base)?;
     if cut {
@@ -410,7 +414,11 @@ pub fn line(
     base: u8,
     back: bool,
 ) -> Result<PlateauPlan> {
-    ensure!(base <= 10, "标准悬崖高差为 4 层，低地高度须在 0～10 层");
+    ensure!(
+        base <= cliff_tools::MAX_CLIFF_BASE,
+        "低地高度须在 0～{} 层",
+        cliff_tools::MAX_CLIFF_BASE
+    );
     ensure!(start != end, "拖动绘制悬崖线段");
     let dx = i32::from(end[0]) - i32::from(start[0]);
     let dy = i32::from(end[1]) - i32::from(start[1]);
@@ -485,8 +493,8 @@ pub(crate) fn stamp(
             );
             let level = base
                 .checked_add(c.height)
-                .filter(|&v| v <= 14)
-                .context("模板高度超过14层")?;
+                .filter(|&v| v <= cliff_tools::MAX_CLIFF_LEVEL)
+                .context("模板高度超出引擎正高度范围")?;
             edits.insert(
                 at,
                 TerrainValue {
@@ -565,7 +573,10 @@ pub fn ramp(
     end: Cell,
     base: u8,
 ) -> Result<PlateauPlan> {
-    ensure!(base <= 10, "坡道高度超限");
+    ensure!(
+        base <= cliff_tools::MAX_CLIFF_BASE,
+        "坡道高度超出引擎正高度范围"
+    );
     if let Some(corner) = ramp_corner(doc, scene, start, base) {
         return corner_ramp(doc, scene, start, end, base, corner);
     }

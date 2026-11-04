@@ -400,3 +400,39 @@ fn joining_an_existing_corner_and_straight_ramp_previews_and_commits_as_one_edit
     drop(e);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn tall_plateau_gesture_automatically_infers_base_above_fourteen_and_undoes_once() {
+    let (mut e, _, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    for cell in &scene.cells {
+        let at = [cell.rx, cell.ry];
+        let mut v = terrain_tools::value(e.doc.as_ref().unwrap(), &scene, at);
+        v.level = 24;
+        e.doc
+            .as_mut()
+            .unwrap()
+            .set(Target::Terrain(at), Some(Value::Terrain(v)))
+            .unwrap();
+    }
+    e.commit(&scene, "high ground");
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.tool = Tool::Terrain;
+    e.terrain_mode = TerrainMode::Plateau;
+    e.pointer(&scene, Some([30, 30]), true, true, false, None);
+    e.pointer(&scene, Some([42, 42]), false, true, false, None);
+    let p = e.plateau_preview_plan(&scene, [42, 42]).unwrap();
+    assert_eq!(p.base, 24);
+    assert_eq!(p.edits[&[35, 35]].level, 28);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.pointer(&scene, None, false, false, true, None);
+    assert_eq!(e.doc.as_ref().unwrap().terrain([35, 35]).unwrap().level, 28);
+    let after = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.history(true, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}

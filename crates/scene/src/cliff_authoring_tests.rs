@@ -836,3 +836,127 @@ fn adjacent_corner_entrances_can_connect_along_the_shared_edge() {
  p.apply(&mut doc).unwrap();
  complete(&doc,&scene,&p);
 }
+
+#[test]
+fn tall_cliffs_support_reshaping_ramps_save_reload_and_atomic_height_limits() {
+    for base in [11, 24, 100, cliff_tools::MAX_CLIFF_BASE] {
+        let (mut doc, scene) = setup();
+        for cell in &scene.cells {
+            let at = [cell.rx, cell.ry];
+            let v = clear(&scene, value(&doc, &scene, at), base).unwrap();
+            doc.set(Target::Terrain(at), Some(Value::Terrain(v)))
+                .unwrap();
+        }
+        doc.commit("elevated ground");
+        let ground = doc.snapshot().bytes().unwrap();
+        let p = cliff_tools::plan(
+            &doc,
+            &scene,
+            cliff_tools::rectangle([40, 40], [58, 58]),
+            base,
+        )
+        .unwrap();
+        p.apply(&mut doc).unwrap();
+        complete(&doc, &scene, &p);
+        doc.commit("tall plateau");
+        let plateau = doc.snapshot().bytes().unwrap();
+        assert_eq!(value(&doc, &scene, [49, 49]).level, base + 4);
+        for (start, end) in [
+            ([49, 58], [51, 58]),
+            ([58, 49], [58, 51]),
+            ([49, 40], [51, 40]),
+            ([40, 49], [40, 51]),
+            ([58, 58], [54, 58]),
+            ([40, 40], [44, 40]),
+            ([58, 40], [54, 40]),
+            ([40, 58], [44, 58]),
+        ] {
+            assert_eq!(infer_base(&doc, &scene, start), base);
+            let p = ramp(&doc, &scene, start, end, base).unwrap();
+            p.apply(&mut doc).unwrap();
+            complete(&doc, &scene, &p);
+            doc.commit("tall ramp");
+            let after = doc.snapshot().bytes().unwrap();
+            let (source, _) = ra2_map_document::source::SourceMap::parse(
+                "tall.map".into(),
+                "test".into(),
+                after.clone(),
+            )
+            .unwrap();
+            let reopened = MapDocument::new(source.edit_base.as_ref().unwrap().clone());
+            complete(&reopened, &scene, &p);
+            doc.undo();
+            assert_eq!(doc.snapshot().bytes().unwrap(), plateau);
+            doc.redo();
+            assert_eq!(doc.snapshot().bytes().unwrap(), after);
+            doc.undo();
+        }
+        for cut in [false, true] {
+            let p = reshape(
+                &doc,
+                &scene,
+                cliff_tools::rectangle([52, 40], [64, 54]),
+                base,
+                cut,
+            )
+            .unwrap();
+            p.apply(&mut doc).unwrap();
+            complete(&doc, &scene, &p);
+            doc.commit("tall reshape");
+            doc.undo();
+            assert_eq!(doc.snapshot().bytes().unwrap(), plateau);
+        }
+        doc.undo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), ground);
+        let p = line(&doc, &scene, [43, 50], [59, 50], base, false).unwrap();
+        p.apply(&mut doc).unwrap();
+        complete(&doc, &scene, &p);
+        doc.commit("tall line");
+        doc.undo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), ground);
+        for invalid in [cliff_tools::MAX_CLIFF_BASE + 1, u8::MAX] {
+            assert!(
+                cliff_tools::plan(
+                    &doc,
+                    &scene,
+                    cliff_tools::rectangle([40, 40], [58, 58]),
+                    invalid
+                )
+                .is_err()
+            );
+            assert!(
+                reshape(
+                    &doc,
+                    &scene,
+                    cliff_tools::rectangle([40, 40], [58, 58]),
+                    invalid,
+                    false
+                )
+                .is_err()
+            );
+            assert!(line(&doc, &scene, [43, 50], [59, 50], invalid, false).is_err());
+            assert!(ramp(&doc, &scene, [49, 58], [51, 58], invalid).is_err());
+            assert_eq!(doc.snapshot().bytes().unwrap(), ground);
+        }
+    }
+}
+
+#[test]
+fn stacking_plateaus_can_cross_the_previous_fourteen_level_limit() {
+    let (mut doc, scene) = setup();
+    for (base, low, high) in [(4, 35, 65), (8, 39, 61), (12, 43, 57), (16, 47, 53)] {
+        let p = reshape(
+            &doc,
+            &scene,
+            cliff_tools::rectangle([low, low], [high, high]),
+            base,
+            false,
+        )
+        .unwrap();
+        p.apply(&mut doc).unwrap();
+        complete(&doc, &scene, &p);
+        doc.commit("stacked cliff");
+        assert_eq!(value(&doc, &scene, [50, 50]).level, base + 4);
+    }
+    assert_eq!(infer_base(&doc, &scene, [50, 50]), 16);
+}

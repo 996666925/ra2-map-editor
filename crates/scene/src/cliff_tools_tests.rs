@@ -101,7 +101,7 @@ fn protection_and_resource_errors_leave_the_entire_document_unchanged() {
     doc.commit("unit");
     assert!(plan(&doc, &scene, region.clone(), 4).is_err());
     doc.undo();
-    assert!(plan(&doc, &scene, region.clone(), 11).is_err());
+    assert!(plan(&doc, &scene, region.clone(), MAX_CLIFF_BASE + 1).is_err());
     assert!(plan(&doc, &scene, rectangle([1, 39], [8, 46]), 4).is_err());
     let base = scene.palette.tile_ids.unwrap().cliffs.cliff_set.unwrap();
     Arc::get_mut(&mut scene.palette)

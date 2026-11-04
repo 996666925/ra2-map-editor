@@ -9,6 +9,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 use vera20k_core::map::theater::TileKey;
 
+/// Native terrain projection and world heights interpret the level byte as i8.
+pub const MAX_CLIFF_LEVEL: u8 = i8::MAX as u8;
+pub const MAX_CLIFF_BASE: u8 = MAX_CLIFF_LEVEL - 4;
+
 #[derive(Clone, Debug)]
 pub struct CliffStamp {
     pub tile: u16,
@@ -203,7 +207,10 @@ pub(crate) fn geometry(
     interior: BTreeSet<Cell>,
     base: u8,
 ) -> Result<PlateauPlan> {
-    ensure!(base <= 10, "悬崖高差为 4 层，基准高度必须在 0～10 层");
+    ensure!(
+        base <= MAX_CLIFF_BASE,
+        "悬崖高差为 4 层，低地基准高度须在 0～{MAX_CLIFF_BASE} 层"
+    );
     ensure!(!interior.is_empty(), "请先绘制高台区域");
     let ids = scene.palette.tile_ids.context("当前环境没有地形配置")?;
     let cliff_base = ids
@@ -328,8 +335,8 @@ pub(crate) fn geometry(
             );
             let level = anchor
                 .checked_add(metadata.height)
-                .filter(|v| *v <= 14)
-                .context("生成悬崖高度超过 14 层")?;
+                .filter(|v| *v <= MAX_CLIFF_LEVEL)
+                .context("生成悬崖高度超出引擎正高度范围")?;
             cells.push((
                 at,
                 TerrainValue {
@@ -401,6 +408,7 @@ pub(crate) fn validate(
     base: u8,
     existing: bool,
 ) -> Result<()> {
+    ensure!(base <= MAX_CLIFF_BASE, "低地高度超出悬崖基准范围");
     let ids = scene.palette.tile_ids.context("当前环境没有地形配置")?;
     let translated: HashMap<_, _> = scene
         .catalog
@@ -450,7 +458,7 @@ pub(crate) fn validate(
             at[0],
             at[1]
         );
-        ensure!(v.level <= 14, "高台高度超过 14 层");
+        ensure!(v.level <= MAX_CLIFF_LEVEL, "高台高度超出引擎正高度范围");
     }
     for record in doc
         .records()
