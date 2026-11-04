@@ -202,6 +202,12 @@ pub(super) fn script(
                     (((u32::from(*loops) << 16) | index as u32) as i32).to_string(),
                 )
             }
+            // The pinned TeamClass VM's action 52 (0x006E9D42..0x006E9D5B)
+            // uses the executing team's first member and advances immediately.
+            Order::TalkBubble { bubble } => {
+                ensure!(*bubble <= 3, "对话气泡须为 0～3");
+                (52, bubble.to_string())
+            }
             Order::GatherAtEnemyBase => (53, "0".into()),
             Order::RegroupAtBase => (54, "0".into()),
             Order::IronCurtain => (55, "0".into()),

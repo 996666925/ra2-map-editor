@@ -1855,6 +1855,47 @@ export default defineMission(map, {id:'expanded', player:House.Neutral}, m => {
 }
 
 #[test]
+fn talk_bubble_orders_compile_to_the_pinned_team_script_handler() {
+    let (mut doc, catalog) = fixture();
+    let source = r#"import {defineMission, order} from './sdk';
+import {map, House} from './map.generated';
+export default defineMission(map,{id:'bubbles',player:House.Neutral},m=>{
+  m.script('talk',[order.talkBubble(1),order.talkBubble(3),order.talkBubble(0)]);
+});"#;
+    let plan = Compiler::new()
+        .unwrap()
+        .build(BTreeMap::from([
+            ("/mission.ts".into(), source.into()),
+            ("/map.generated.ts".into(), catalog.typescript().unwrap()),
+        ]))
+        .unwrap();
+    prepare(&doc, &plan, &catalog)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    let ini =
+        vera20k_core::rules::ini_parser::IniFile::from_bytes(&doc.snapshot().bytes().unwrap())
+            .unwrap();
+    let registry = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
+        &vera20k_core::rules::ini_parser::IniFile::empty(),
+        &ini,
+        false,
+    );
+    let actions = &registry.scripts[0].actions;
+    assert_eq!(
+        actions
+            .iter()
+            .map(|a| (a.action_id, a.argument))
+            .collect::<Vec<_>>(),
+        [(52, 1), (52, 3), (52, 0)]
+    );
+    let mut invalid = serde_json::to_value(plan).unwrap();
+    invalid["scripts"][0]["orders"][0]["bubble"] = serde_json::json!(4);
+    let invalid: Mission = serde_json::from_value(invalid).unwrap();
+    assert!(prepare(&doc, &invalid, &catalog).is_err());
+}
+
+#[test]
 fn script_labels_media_ordinals_and_transport_commands_preserve_native_semantics() {
     use crate::catalog::ResourceKind;
     let (mut doc, mut catalog) = fixture();

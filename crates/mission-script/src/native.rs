@@ -462,6 +462,7 @@ pub enum Order {
     MoveToOwnBuilding { building: Reference, mode: u8 },
     ChronoshiftToBuilding { building: Reference, mode: u8 },
     PlayAnimation { animation: Reference, loops: u16 },
+    TalkBubble { bubble: u8 },
     GatherAtEnemyBase,
     RegroupAtBase,
     IronCurtain,

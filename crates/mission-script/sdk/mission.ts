@@ -194,6 +194,7 @@ export type Order =
   | { readonly kind: "centerCamera"; readonly velocity: CameraVelocity }
   | { readonly kind: "attackEnemyBuilding" | "moveToEnemyBuilding" | "moveToOwnBuilding" | "chronoshiftToBuilding"; readonly building: BuildingType; readonly mode: BuildingSelection }
   | { readonly kind: "playAnimation"; readonly animation: AnimationType; readonly loops: number }
+  | { readonly kind: "talkBubble"; readonly bubble: number }
   | { readonly kind: "chronoshiftToQuarry"; readonly quarry: Quarry }
   | { readonly kind: "attackWaypointBuilding"; readonly waypoint: Waypoint }
   | { readonly kind: "attack"; readonly quarry: Quarry }
@@ -1481,6 +1482,9 @@ export const order = {
    * loops 打包为16位构造参数，实际与 ART.LoopCount 作字节运算；0/1 同处理，0 不表示无限，256 等值可能回绕。
    */
   playAnimation: (animation: AnimationType, loops = 1): Order => ({ kind: "playAnimation", animation, loops }),
+  /** 在执行脚本的当前小队首成员处显示气泡 1～3，0 清除；立即推进，不等待墙钟超时。
+   * 全局只有一个气泡；需要 talkbubl.shp 和 palette.pal，不承载自定义文字。 */
+  talkBubble: (bubble: 0|1|2|3): Order => ({ kind: "talkBubble", bubble }),
   /** 在领队所属 House 指定敌人的基地外 AISafeDistance 处集结；己方无基地时以领队位置决定方向，无指定敌人或敌方基地则推进。 */
   gatherAtEnemyBase: (): Order => ({ kind: "gatherAtEnemyBase" }),
   /** 在己方基地外 AISafeDistance 处集合：朝向指定敌人的基地，无指定敌人则随机方向。需要有效己方基地；找不到可通行3×3区域时保留原生(0,0)目标。 */

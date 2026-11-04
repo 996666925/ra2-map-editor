@@ -315,6 +315,8 @@ impl MapView {
                     self.editor.type_id = type_id.clone();
                     self.editor
                         .pointer(scene, Some(cell), true, true, false, None);
+                    self.editor
+                        .pointer(scene, Some(cell), false, false, true, None);
                     ensure!(
                         self.editor
                             .doc

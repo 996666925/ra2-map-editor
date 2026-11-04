@@ -598,6 +598,7 @@ m.script('behavior', [order.guard(5), order.hunt()]);
 
 `m.text` 引用已加载的 CSF 标签；`m.defineText` 直接声明中文，`m.asset` 声明媒体依赖，试玩和战役发布由宿主统一输出。
 `action.talkBubble(team, 1)` 可在该类型首个活动小队的首成员处显示气泡，编号为1～3。
+行为脚本可用 `order.talkBubble(1)` 在执行脚本的当前小队首成员处显示气泡；`order.talkBubble(0)` 清除，脚本不等待气泡消失。
 全局同时只有一个气泡；`talkBubble(team, 0)` 或 `clearTalkBubble()` 清除它。
 没有该类型的活动小队时保留原气泡，定义了小队模板不等于已招募或增援出活动小队。
 气泡需要安装资源中的 `talkbubl.shp` 和 `palette.pal`，也可用 `m.asset()` 声明相应图形。

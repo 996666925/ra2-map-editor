@@ -122,8 +122,8 @@ const ACTION_HANDLERS: &[i32] = &[
 ];
 const ORDER_HANDLERS: &[i32] = &[
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 25, 26,
-    27, 30, 31, 34, 37, 38, 39, 40, 41, 42, 43, 46, 47, 49, 50, 51, 53, 54, 55, 56, 57, 58, 59, 60,
-    61, 62, 63, 64,
+    27, 30, 31, 34, 37, 38, 39, 40, 41, 42, 43, 46, 47, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+    60, 61, 62, 63, 64,
 ];
 
 fn named(family: Family, id: i32) -> Option<&'static Opcode> {
@@ -191,7 +191,7 @@ pub fn capability(family: Family, id: i32) -> Capability {
         )
         | (Family::Action, 137 | 138)
         | (Family::Action, 52)
-        | (Family::Order, 10 | 13 | 22 | 30 | 34 | 46 | 47 | 51 | 53..=64)
+        | (Family::Order, 10 | 13 | 22 | 30 | 34 | 46 | 47 | 51..=64)
         | (Family::Action, 41 | 42 | 88)
         | (
             Family::Action,

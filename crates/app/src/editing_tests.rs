@@ -511,6 +511,17 @@ pub(crate) fn editor() -> (Editor, egui::Context, PathBuf) {
     std::fs::create_dir_all(&root).unwrap();
     let ctx = egui::Context::default();
     let mut editor = Editor::new(ctx.clone(), root.clone()).unwrap();
+    // The startup scan creates recovery/. Finish it before a short-lived
+    // fixture can drop the editor and remove the root on another thread.
+    match editor
+        .io
+        .results
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+    {
+        Done::Scan(result) => assert!(result.unwrap().is_empty()),
+        _ => panic!("expected initial recovery scan"),
+    }
     editor.doc = Some(document());
     editor.recovery = Some(root.join("recovery/current.yrrec"));
     (editor, ctx, root)
