@@ -235,3 +235,168 @@ fn joining_gestures_cache_previews_freeze_the_mode_and_cancel_invalid_strokes() 
     drop(e);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn ramp_gesture_widens_and_shrinks_preview_then_commits_once() {
+    let (mut e, _, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    cliff_tools::plan(
+        e.doc.as_ref().unwrap(),
+        &scene,
+        cliff_tools::rectangle([25, 25], [45, 45]),
+        4,
+    )
+    .unwrap()
+    .apply(e.doc.as_mut().unwrap())
+    .unwrap();
+    e.commit(&scene, "plateau");
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.tool = Tool::Terrain;
+    e.terrain_mode = TerrainMode::RampEntrance;
+    for (start, axis) in [([35, 45], 0), ([45, 35], 1), ([35, 25], 0), ([25, 35], 1)] {
+        for sign in [-1, 1] {
+            e.pointer(&scene, Some(start), true, true, false, None);
+            let narrow = e.plateau_preview_plan(&scene, start).unwrap();
+            let mut end = start;
+            end[axis] = (i32::from(end[axis]) + sign * 4) as u16;
+            e.pointer(&scene, Some(end), false, true, false, None);
+            let wide = e.plateau_preview_plan(&scene, end).unwrap();
+            assert_eq!(wide.edits.len(), narrow.edits.len() + 16);
+            assert!(Arc::ptr_eq(
+                &wide,
+                &e.plateau_preview_plan(&scene, end).unwrap()
+            ));
+            end[axis] = (i32::from(start[axis]) + sign * 2) as u16;
+            e.pointer(&scene, Some(end), false, true, false, None);
+            let shrunk = e.plateau_preview_plan(&scene, end).unwrap();
+            assert_eq!(shrunk.edits.len(), narrow.edits.len() + 8);
+            assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+            e.pointer(&scene, None, false, false, true, None);
+            assert!(!e.status.starts_with("本笔未修改"), "{}", e.status);
+            for (&at, &v) in &shrunk.edits {
+                assert_eq!(e.doc.as_ref().unwrap().terrain(at), Some(v));
+            }
+            let after = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+            e.history(false, &scene);
+            assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+            e.history(true, &scene);
+            assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+            e.history(false, &scene);
+        }
+    }
+    e.pointer(&scene, Some([35, 45]), true, true, false, None);
+    e.pointer(&scene, Some([55, 45]), false, false, true, None);
+    assert!(e.status.starts_with("本笔未修改"), "{}", e.status);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn corner_ramp_gesture_converts_the_corner_and_release_matches_preview() {
+    let (mut e, _, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    cliff_tools::plan(
+        e.doc.as_ref().unwrap(),
+        &scene,
+        cliff_tools::rectangle([25, 25], [45, 45]),
+        4,
+    )
+    .unwrap()
+    .apply(e.doc.as_mut().unwrap())
+    .unwrap();
+    e.commit(&scene, "plateau");
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.tool = Tool::Terrain;
+    e.terrain_mode = TerrainMode::RampEntrance;
+    for (corner, signs) in [
+        ([25, 25], [1, 1]),
+        ([45, 25], [-1, 1]),
+        ([25, 45], [1, -1]),
+        ([45, 45], [-1, -1]),
+    ] {
+        for axis in 0..2 {
+            e.pointer(&scene, Some(corner), true, true, false, None);
+            assert!(e.plateau_preview_plan(&scene, corner).is_ok());
+            let mut end = corner;
+            end[axis] = (i32::from(end[axis]) + signs[axis] * 4) as u16;
+            e.pointer(&scene, Some(end), false, true, false, None);
+            let p = e.plateau_preview_plan(&scene, end).unwrap();
+            let id = scene.palette.raw_ids[&p.edits[&corner].tile];
+            let cell = scene.palette.templates[&(id, 0)].cells[0].unwrap();
+            assert!(
+                (5..=8).contains(&cell.slope),
+                "the clicked corner itself must slope"
+            );
+            assert_eq!(p.edits[&corner].level, 7);
+            assert!(Arc::ptr_eq(
+                &p,
+                &e.plateau_preview_plan(&scene, end).unwrap()
+            ));
+            assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+            e.pointer(&scene, None, false, false, true, None);
+            assert!(!e.status.starts_with("本笔未修改"), "{}", e.status);
+            for (&at, &v) in &p.edits {
+                assert_eq!(e.doc.as_ref().unwrap().terrain(at), Some(v));
+            }
+            let after = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+            e.history(false, &scene);
+            assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+            e.history(true, &scene);
+            assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+            e.history(false, &scene);
+        }
+    }
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn joining_an_existing_corner_and_straight_ramp_previews_and_commits_as_one_edit() {
+    let (mut e, _, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    cliff_tools::plan(
+        e.doc.as_ref().unwrap(),
+        &scene,
+        cliff_tools::rectangle([25, 25], [45, 45]),
+        4,
+    )
+    .unwrap()
+    .apply(e.doc.as_mut().unwrap())
+    .unwrap();
+    e.commit(&scene, "plateau");
+    e.tool = Tool::Terrain;
+    e.terrain_mode = TerrainMode::RampEntrance;
+    for corner_first in [true, false] {
+        let (a, b, c, d) = if corner_first {
+            ([45, 45], [45, 45], [35, 45], [41, 45])
+        } else {
+            ([35, 45], [41, 45], [45, 45], [45, 45])
+        };
+        e.pointer(&scene, Some(a), true, true, false, None);
+        e.pointer(&scene, Some(b), false, false, true, None);
+        assert!(!e.status.starts_with("本笔未修改"), "{}", e.status);
+        let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        e.pointer(&scene, Some(c), true, true, false, None);
+        e.pointer(&scene, Some(d), false, true, false, None);
+        let p = e.plateau_preview_plan(&scene, d).unwrap();
+        assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+        e.pointer(&scene, None, false, false, true, None);
+        assert!(!e.status.starts_with("本笔未修改"), "{}", e.status);
+        for (&at, &v) in &p.edits {
+            assert_eq!(e.doc.as_ref().unwrap().terrain(at), Some(v));
+        }
+        let after = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        e.history(false, &scene);
+        assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+        e.history(true, &scene);
+        assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+        e.history(false, &scene);
+        e.history(false, &scene);
+    }
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}

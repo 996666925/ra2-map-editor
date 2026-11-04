@@ -102,7 +102,7 @@ impl Fixture {
     /// Shore/road geometry and water cliff counterparts with tiny test images.
     pub fn with_joining() -> Self {
         let f = Self::with_authoring();
-        let ini=std::fs::read_to_string(f.0.join("temperatmd.ini")).unwrap().replace("ClearTile=0", "ClearTile=0\nWaterSet=5\nShorePieces=6\nPavedRoads=7\nPavedRoadEnds=8\nWaterCliffs=9");
+        let ini=std::fs::read_to_string(f.0.join("temperatmd.ini")).unwrap().replace("RampBase=5", "RampBase=10").replace("[TileSet0005]", "[TileSet0010]").replace("ClearTile=0", "ClearTile=0\nWaterSet=5\nShorePieces=6\nPavedRoads=7\nPavedRoadEnds=8\nWaterCliffs=9");
         std::fs::write(f.0.join("temperatmd.ini"),format!("{ini}\n[TileSet0005]\nFileName=water\nTilesInSet=14\n[TileSet0006]\nFileName=shore\nTilesInSet=40\n[TileSet0007]\nFileName=road\nTilesInSet=15\n[TileSet0008]\nFileName=end\nTilesInSet=4\n[TileSet0009]\nFileName=wcliff\nTilesInSet=22\n")).unwrap();
         for n in 1..=14 {
             write_surface(
@@ -175,6 +175,21 @@ impl Fixture {
     pub fn with_authoring() -> Self {
         let f = Self::with_cliffs();
         std::fs::write(f.0.join("temperatmd.ini"),b"[General]\nClearTile=0\nCliffSet=1\nCliffRamps=2\nSlopeSetPieces=2\nBridgeSet=3\nWoodBridgeSet=4\nBridgeTopLeft1=1\nBridgeTopLeft2=2\nBridgeBottomRight1=3\nBridgeBottomRight2=3\nBridgeTopRight1=4\nBridgeTopRight2=5\nBridgeBottomLeft1=6\nBridgeBottomLeft2=6\nBridgeMiddle1=7\nBridgeMiddle2=12\n[TileSet0000]\nSetName=Clear\nFileName=clear\nTilesInSet=1\nMorphable=yes\n[TileSet0001]\nSetName=Cliff Set\nFileName=cliff\nTilesInSet=40\n[TileSet0002]\nSetName=Cliff Ramps\nFileName=ramp\nTilesInSet=10\n[TileSet0003]\nSetName=Bridge\nFileName=bridge\nTilesInSet=16\n[TileSet0004]\nSetName=Wood Bridge\nFileName=wood\nTilesInSet=16\n").unwrap();
+        let ini = std::fs::read_to_string(f.0.join("temperatmd.ini"))
+            .unwrap()
+            .replace("ClearTile=0", "ClearTile=0\nRampBase=5");
+        std::fs::write(
+            f.0.join("temperatmd.ini"),
+            format!("{ini}\n[TileSet0005]\nSetName=Slopes\nFileName=slope\nTilesInSet=20\n"),
+        )
+        .unwrap();
+        for slope in 1..=20 {
+            write_tmp(
+                &f.0.join(format!("slope{slope:02}.tem")),
+                1,
+                &[Some((0, slope))],
+            );
+        }
         type RampCells<'a> = (u32, &'a [Option<(u8, u8)>]);
         let ramps: &[RampCells<'_>] = &[
             (

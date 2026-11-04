@@ -192,26 +192,140 @@ fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json:
     cliff_tools::plan(&doc, &scene, cliff_tools::rectangle([60, 60], [74, 74]), 4)?
         .apply(&mut doc)?;
     doc.commit("plateau");
+    let mut ramp_doc = document(&scene);
+    cliff_tools::plan(
+        &ramp_doc,
+        &scene,
+        cliff_tools::rectangle([50, 50], [84, 84]),
+        4,
+    )?
+    .apply(&mut ramp_doc)?;
+    ramp_doc.commit("wide ramp bank");
     for (n, (start, end)) in [
-        ([67, 74], [67, 79]),
-        ([74, 67], [79, 67]),
-        ([67, 60], [67, 55]),
-        ([60, 67], [55, 67]),
+        ([67, 84], [67, 89]),
+        ([84, 67], [89, 67]),
+        ([67, 50], [67, 45]),
+        ([50, 67], [45, 67]),
     ]
     .into_iter()
     .enumerate()
     {
-        let p = cliff_authoring::ramp(&doc, &scene, start, end, 4)?;
+        let p = cliff_authoring::ramp(&ramp_doc, &scene, start, end, 4)?;
         cases.push(verify(
             install,
             &scene,
-            &mut doc,
+            &mut ramp_doc,
             &p,
             out,
             &format!("ramp-{n}"),
             true,
         )?);
-        doc.undo();
+        ramp_doc.undo();
+        let axis = if start[0] == end[0] { 0 } else { 1 };
+        for delta in [-4, -2, 2, 4] {
+            let mut wide_end = start;
+            wide_end[axis] = (i32::from(start[axis]) + delta) as u16;
+            let wide = cliff_authoring::ramp(&ramp_doc, &scene, start, wide_end, 4)?;
+            ensure!(
+                wide.edits.len() == p.edits.len() + delta.unsigned_abs() as usize * 4,
+                "wide ramp must fill the full dragged width"
+            );
+            cases.push(verify(
+                install,
+                &scene,
+                &mut ramp_doc,
+                &wide,
+                out,
+                &format!("ramp-{n}-wide-{delta}"),
+                true,
+            )?);
+            ramp_doc.undo();
+        }
+    }
+    for (n, (corner, signs)) in [
+        ([50, 50], [1, 1]),
+        ([84, 50], [-1, 1]),
+        ([50, 84], [1, -1]),
+        ([84, 84], [-1, -1]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for axis in 0..3 {
+            let mut end = corner;
+            if axis < 2 {
+                end[axis] = (i32::from(end[axis]) + signs[axis] * 4) as u16;
+            }
+            let p = cliff_authoring::ramp(&ramp_doc, &scene, corner, end, 4)
+                .with_context(|| format!("corner {corner:?} -> {end:?}"))?;
+            let v = p
+                .edits
+                .get(&corner)
+                .context("corner itself was not converted")?;
+            let id = scene.palette.raw_ids[&v.tile];
+            let shape = scene.palette.templates[&(id, 0)].cells[usize::from(v.sub)].unwrap();
+            ensure!(
+                (5..=8).contains(&shape.slope) && v.level == 7,
+                "corner must become a descending slope"
+            );
+            cases.push(verify(
+                install,
+                &scene,
+                &mut ramp_doc,
+                &p,
+                out,
+                &format!("ramp-corner-{n}-width-{axis}"),
+                true,
+            )?);
+            ramp_doc.undo();
+        }
+    }
+    for (n, (corner, inward)) in [
+        ([50, 50], [1, 1]),
+        ([84, 50], [-1, 1]),
+        ([50, 84], [1, -1]),
+        ([84, 84], [-1, -1]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for axis in 0..2 {
+            for corner_first in [true, false] {
+                let mut start = corner;
+                start[axis] = (i32::from(start[axis]) + inward[axis] * 10) as u16;
+                let mut end = start;
+                end[axis] = (i32::from(start[axis]) - inward[axis] * 6) as u16;
+                let (a, b, c, d) = if corner_first {
+                    (corner, corner, start, end)
+                } else {
+                    (start, end, corner, corner)
+                };
+                cliff_authoring::ramp(&ramp_doc, &scene, a, b, 4)?.apply(&mut ramp_doc)?;
+                ramp_doc.commit("first ramp");
+                // Recover the second operation from a saved map, without any
+                // editor-only geometry retained from the first operation.
+                let bytes = ramp_doc.snapshot().bytes()?;
+                let (source, _) = ra2_map_document::source::SourceMap::parse(
+                    "join.map".into(),
+                    "audit".into(),
+                    bytes,
+                )?;
+                let mut reopened = MapDocument::new(source.edit_base.as_ref().unwrap().clone());
+                let p = cliff_authoring::ramp(&reopened, &scene, c, d, 4).with_context(|| {
+                    format!("join corner {corner:?}, axis {axis}, corner_first {corner_first}")
+                })?;
+                cases.push(verify(
+                    install,
+                    &scene,
+                    &mut reopened,
+                    &p,
+                    out,
+                    &format!("ramp-joined-{n}-{axis}-{corner_first}"),
+                    true,
+                )?);
+                ramp_doc.undo();
+            }
+        }
     }
     let p = cliff_authoring::reshape(
         &doc,

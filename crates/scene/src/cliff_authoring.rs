@@ -147,6 +147,9 @@ fn existing(
 }
 
 pub fn infer_base(doc: &MapDocument, scene: &MapScene, at: Cell) -> u8 {
+    if let Some(base) = ramp_join::infer_base(doc, scene, at) {
+        return base;
+    }
     if let Some((_, _, base)) = cliff(scene, value(doc, scene, at), at) {
         return base;
     }
@@ -553,8 +556,8 @@ pub(crate) fn complete_replacement(
     Ok(())
 }
 
-/// Stock straight ramp ends enclose a two-cell-wide walkable centre. North
-/// and west ends are sparse pairs completed by their separate corner TMP.
+/// Infer the outward slope from the existing cliff, then extend the entrance
+/// along its edge. Whole two-cell increments preserve the old cliff templates.
 pub fn ramp(
     doc: &MapDocument,
     scene: &MapScene,
@@ -562,83 +565,339 @@ pub fn ramp(
     end: Cell,
     base: u8,
 ) -> Result<PlateauPlan> {
-    ensure!(start != end, "从高台向低地拖动，确定坡道方向");
     ensure!(base <= 10, "坡道高度超限");
+    if let Some(corner) = ramp_corner(doc, scene, start, base) {
+        return corner_ramp(doc, scene, start, end, base, corner);
+    }
+    ramp_straight(doc, scene, start, end, base)
+}
+
+struct RampCorner {
+    center: Cell,
+    outward: [i32; 2],
+}
+
+fn ramp_corner(doc: &MapDocument, scene: &MapScene, start: Cell, base: u8) -> Option<RampCorner> {
+    let mut nearby: Vec<_> = (-1i32..=1)
+        .flat_map(|x| (-1i32..=1).map(move |y| (x, y)))
+        .collect();
+    nearby.sort_by_key(|(x, y)| x.abs() + y.abs());
+    for (x, y) in nearby {
+        let Some(at) = offset(start, x, y) else {
+            continue;
+        };
+        let Some((id, origin, level)) = cliff(scene, value(doc, scene, at), at) else {
+            continue;
+        };
+        if level != base {
+            continue;
+        }
+        let (piece, water) = crate::coastal_cliffs::piece(scene, id)?;
+        if water {
+            continue;
+        }
+        let (outward, center) = match piece + 1 {
+            1..=4 => ([-1, 1], offset(origin, 1, 0)?),
+            12..=14 => ([1, 1], offset(origin, -1, -1)?),
+            19..=22 => ([1, -1], offset(origin, 0, 1)?),
+            27..=29 => ([-1, -1], offset(origin, 1, 1)?),
+            _ => continue,
+        };
+        return Some(RampCorner { center, outward });
+    }
+    None
+}
+
+/// A quarter of a four-level slope cone: two straight approaches meet a
+/// diagonal of single-high-corner slopes. Each approach ends in its stock TMP
+/// cap, including the sparse north/west corner pieces.
+fn corner_ramp(
+    doc: &MapDocument,
+    scene: &MapScene,
+    start: Cell,
+    end: Cell,
+    base: u8,
+    corner: RampCorner,
+) -> Result<PlateauPlan> {
+    let extra = [start[0].abs_diff(end[0]), start[1].abs_diff(end[1])]
+        .map(|n| i32::from(n.div_ceil(2)) * 2);
+    ramp_join::finish(
+        doc,
+        scene,
+        ramp_join::Shape::Corner {
+            center: corner.center,
+            outward: corner.outward,
+            extra,
+        },
+        base,
+        start,
+    )
+}
+
+pub(super) fn corner_geometry(
+    doc: &MapDocument,
+    scene: &MapScene,
+    center: Cell,
+    outward: [i32; 2],
+    extra: [i32; 2],
+    base: u8,
+) -> Result<PlateauPlan> {
+    let [ex, ey] = extra;
+    let [ox, oy] = outward;
+    let (slope, caps): (u16, &[(u16, i32, i32)]) = match (ox, oy) {
+        (-1, -1) => (
+            5,
+            &[
+                (5, 1 + ex, -3),
+                (6, 2 + ex, -1),
+                (8, -3, 1 + ey),
+                (9, -1, 2 + ey),
+            ],
+        ),
+        (1, -1) => (6, &[(4, -3 - ex, -3), (2, 0, 1 + ey)]),
+        (-1, 1) => (8, &[(7, -3, -3 - ey), (1, 1 + ex, 0)]),
+        _ => (7, &[(0, -3 - ex, 0), (3, 0, -3 - ey)]),
+    };
     let ids = scene.palette.tile_ids.context("缺少地形配置")?;
     let end_base = u16::try_from(ids.slope_set_pieces)
         .ok()
         .or(ids.cliffs.cliff_ramps)
         .context("当前环境没有高台坡道端块")?;
+    let ramp_base = u16::try_from(ids.ramp_base).context("当前环境没有拐角坡面模板")?;
+    let mut edits = BTreeMap::new();
+    let mut cliffs = Vec::new();
+    let mut add = |id, p, level| -> Result<()> {
+        for (at, v) in stamp(doc, scene, id, p, level)? {
+            ensure!(edits.insert(at, v).is_none(), "拐角坡道模板重叠");
+        }
+        cliffs.push(cliff_tools::CliffStamp {
+            tile: id,
+            origin: p,
+            base: level,
+        });
+        Ok(())
+    };
+    for &(n, x, y) in caps {
+        add(
+            end_base.checked_add(n).context("坡道编号溢出")?,
+            offset(center, x, y).context("拐角坡道越界")?,
+            base,
+        )?;
+    }
+    let slope_x = if ox < 0 { 1 } else { 3 };
+    let slope_y = if oy < 0 { 2 } else { 4 };
+    for shape in [slope, slope_x, slope_y] {
+        let id = ramp_base.checked_add(shape - 1).context("坡面编号溢出")?;
+        let t = scene
+            .palette
+            .templates
+            .get(&(id, 0))
+            .context("缺少拐角坡面模板")?;
+        ensure!(
+            t.width == 1
+                && t.cells.len() == 1
+                && t.cells[0].is_some_and(|s| s.height == 0 && u16::from(s.slope) == shape),
+            "拐角坡道需要单格标准坡面模板"
+        );
+    }
+    for k in 0..4 {
+        let level = base + 3 - k as u8;
+        let (x, y) = (ox * k, oy * k);
+        add(
+            ramp_base + slope - 1,
+            offset(center, x, y).context("拐角坡道越界")?,
+            level,
+        )?;
+        for j in 1..=k + ex {
+            add(
+                ramp_base + slope_y - 1,
+                offset(center, x - ox * j, y).context("拐角坡道越界")?,
+                level,
+            )?;
+        }
+        for j in 1..=k + ey {
+            add(
+                ramp_base + slope_x - 1,
+                offset(center, x, y - oy * j).context("拐角坡道越界")?,
+                level,
+            )?;
+        }
+    }
+    Ok(PlateauPlan {
+        edits,
+        overlays: BTreeMap::new(),
+        cliffs,
+        interior: BTreeSet::new(),
+        base,
+    })
+}
+
+fn ramp_straight(
+    doc: &MapDocument,
+    scene: &MapScene,
+    start: Cell,
+    end: Cell,
+    base: u8,
+) -> Result<PlateauPlan> {
     let dx = i32::from(end[0]) - i32::from(start[0]);
     let dy = i32::from(end[1]) - i32::from(start[1]);
-    let patterns: &[(u16, i32, i32)] = if dy.abs() >= dx.abs() {
-        if dy > 0 {
-            &[(0, 0, 0), (1, 3, 0)]
-        } else {
-            &[(4, 0, 0), (5, 3, 0), (6, 4, 2)]
-        }
-    } else if dx > 0 {
-        &[(3, 0, 0), (2, 0, 3)]
+    // Prefer the drag direction when more than one edge could fit, but a drag
+    // along the cliff must still find its perpendicular, outward-facing ramp.
+    let preferred = if dy.abs() >= dx.abs() {
+        if dy >= 0 { 0 } else { 2 }
+    } else if dx >= 0 {
+        1
     } else {
-        &[(7, 0, 0), (8, 0, 3), (9, 2, 4)]
+        3
     };
-    let mut best = None;
-    for ox in -6..=1 {
-        for oy in -6..=1 {
-            let Some(origin) = offset(start, ox, oy) else {
-                continue;
-            };
-            let candidate = (|| -> Result<PlateauPlan> {
-                let mut edits = BTreeMap::new();
-                let mut cliffs = Vec::new();
-                for &(n, x, y) in patterns {
-                    let p = offset(origin, x, y).context("坡道越界")?;
-                    let id = end_base.checked_add(n).context("坡道编号溢出")?;
-                    for (at, v) in stamp(doc, scene, id, p, base)? {
-                        ensure!(edits.insert(at, v).is_none(), "坡道模板重叠");
-                    }
-                    cliffs.push(cliff_tools::CliffStamp {
-                        tile: id,
-                        origin: p,
-                        base,
-                    });
-                }
-                ensure!(edits.contains_key(&start), "请从悬崖边缘拖动");
-                let mut touched = false;
-                for (&at, &v) in &edits {
-                    let id = tile(scene, v.tile).context("坡道编号无效")?;
-                    let s = scene.palette.templates[&(id, 0)].cells[usize::from(v.sub)].unwrap();
-                    if s.slope == 0 {
-                        ensure!(value(doc, scene, at).level == v.level, "坡道两侧高度不匹配");
-                    }
-                    touched |= cliff(scene, value(doc, scene, at), at).is_some();
-                }
-                ensure!(touched, "请放置在直线悬崖边界");
-                complete_replacement(doc, scene, &edits)?;
-                cliff_tools::validate(doc, scene, &edits, base, true)?;
-                Ok(PlateauPlan {
-                    edits,
-                    overlays: BTreeMap::new(),
-                    cliffs,
-                    interior: BTreeSet::new(),
-                    base,
-                })
-            })();
-            if let Ok(p) = candidate {
+    for direction in std::iter::once(preferred).chain((0..4).filter(|&d| d != preferred)) {
+        let mut best = None;
+        for ox in -6..=1 {
+            for oy in -6..=1 {
+                let Some(origin) = offset(start, ox, oy) else {
+                    continue;
+                };
+                let Ok(p) = ramp_candidate(doc, scene, start, origin, base, direction, 0) else {
+                    continue;
+                };
                 let cx =
                     p.edits.keys().map(|p| i32::from(p[0])).sum::<i32>() / p.edits.len() as i32;
                 let cy =
                     p.edits.keys().map(|p| i32::from(p[1])).sum::<i32>() / p.edits.len() as i32;
                 let score = (cx - i32::from(start[0])).abs() + (cy - i32::from(start[1])).abs();
-                if best.as_ref().is_none_or(|(s, _)| score < *s) {
-                    best = Some((score, p));
+                if best.as_ref().is_none_or(|(s, _, _)| score < *s) {
+                    best = Some((score, origin, p));
                 }
             }
         }
+        if let Some((_, origin, p)) = best {
+            let across_x = direction.is_multiple_of(2);
+            let delta = if across_x { dx } else { dy };
+            let extra = (delta.abs() + 1) / 2 * 2;
+            if extra == 0 {
+                return Ok(p);
+            }
+            let shift = if delta < 0 { -extra } else { 0 };
+            let origin = offset(
+                origin,
+                if across_x { shift } else { 0 },
+                if across_x { 0 } else { shift },
+            )
+            .context("坡道越界")?;
+            // Once the starting edge is found, an obstructed wider entrance
+            // must fail as a whole instead of silently choosing another edge.
+            return ramp_candidate(doc, scene, start, origin, base, direction, extra)
+                .context("无法加宽坡道：请沿同一直线悬崖拖动，并避开对象、覆盖物与拐角");
+        }
     }
-    best.map(|(_, p)| p)
-        .context("此处无法衔接坡道：请从足够宽的直线悬崖向低地拖动，并避开对象、覆盖物与拐角")
+    anyhow::bail!(
+        "此处无法衔接坡道：请在足够宽的直线悬崖边缘按住，沿边缘拖动加宽，并避开对象、覆盖物与拐角"
+    )
 }
+
+fn ramp_candidate(
+    doc: &MapDocument,
+    scene: &MapScene,
+    start: Cell,
+    origin: Cell,
+    base: u8,
+    direction: u8,
+    extra: i32,
+) -> Result<PlateauPlan> {
+    ramp_join::finish(
+        doc,
+        scene,
+        ramp_join::Shape::Straight {
+            origin,
+            direction,
+            extra,
+        },
+        base,
+        start,
+    )
+}
+
+pub(super) fn straight_geometry(
+    doc: &MapDocument,
+    scene: &MapScene,
+    origin: Cell,
+    base: u8,
+    direction: u8,
+    extra: i32,
+) -> Result<PlateauPlan> {
+    let ids = scene.palette.tile_ids.context("缺少地形配置")?;
+    let end_base = u16::try_from(ids.slope_set_pieces)
+        .ok()
+        .or(ids.cliffs.cliff_ramps)
+        .context("当前环境没有高台坡道端块")?;
+    // North and west ends are sparse pairs completed by a separate corner TMP.
+    let patterns: &[(u16, i32, i32)] = match direction {
+        0 => &[(0, 0, 0), (1, 3 + extra, 0)],
+        1 => &[(3, 0, 0), (2, 0, 3 + extra)],
+        2 => &[(4, 0, 0), (5, 3 + extra, 0), (6, 4 + extra, 2)],
+        _ => &[(7, 0, 0), (8, 0, 3 + extra), (9, 2, 4 + extra)],
+    };
+    let mut edits = BTreeMap::new();
+    let mut cliffs = Vec::new();
+    let mut add = |id, p, level| -> Result<()> {
+        for (at, v) in stamp(doc, scene, id, p, level)? {
+            ensure!(edits.insert(at, v).is_none(), "坡道模板重叠");
+        }
+        cliffs.push(cliff_tools::CliffStamp {
+            tile: id,
+            origin: p,
+            base: level,
+        });
+        Ok(())
+    };
+    for &(n, x, y) in patterns {
+        let p = offset(origin, x, y).context("坡道越界")?;
+        add(end_base.checked_add(n).context("坡道编号溢出")?, p, base)?;
+    }
+    if extra > 0 {
+        let slope = [4, 3, 2, 1][usize::from(direction)];
+        let id = u16::try_from(ids.ramp_base)
+            .ok()
+            .and_then(|id| id.checked_add(slope - 1))
+            .context("当前环境没有可用于加宽的坡面模板")?;
+        let t = scene
+            .palette
+            .templates
+            .get(&(id, 0))
+            .context("缺少坡面模板")?;
+        ensure!(
+            t.width == 1
+                && t.cells.len() == 1
+                && t.cells[0].is_some_and(|s| s.height == 0 && u16::from(s.slope) == slope),
+            "加宽坡道需要单格直坡模板"
+        );
+        for across in 3..3 + extra {
+            for along in 0..4 {
+                let (x, y) = if direction.is_multiple_of(2) {
+                    (across, along)
+                } else {
+                    (along, across)
+                };
+                let height = if direction < 2 { 3 - along } else { along };
+                add(
+                    id,
+                    offset(origin, x, y).context("坡道越界")?,
+                    base + height as u8,
+                )?;
+            }
+        }
+    }
+    Ok(PlateauPlan {
+        edits,
+        overlays: BTreeMap::new(),
+        cliffs,
+        interior: BTreeSet::new(),
+        base,
+    })
+}
+
+#[path = "ramp_join.rs"]
+mod ramp_join;
 
 #[cfg(test)]
 #[path = "cliff_authoring_tests.rs"]
