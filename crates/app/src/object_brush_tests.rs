@@ -33,6 +33,124 @@ fn start(e: &mut Editor, section: &str, type_id: &str) {
 }
 
 #[test]
+fn shift_object_brush_locks_both_axes_and_preserves_undo_and_cancel() {
+    let (mut e, _, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    start(&mut e, "Units", "HTNK");
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.brush_modifiers(egui::Modifiers::SHIFT);
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    e.pointer(&scene, Some([24, 21]), false, true, false, None);
+    e.pointer(&scene, Some([21, 27]), false, true, false, None);
+    assert_eq!(e.feedback, BTreeSet::from([[20, 20], [21, 20]]));
+    assert_eq!(
+        e.records.values().filter(|r| r.section == "Units").count(),
+        2
+    );
+    e.pointer(&scene, Some([26, 25]), false, false, true, None);
+    let cells: BTreeSet<_> = e
+        .records
+        .values()
+        .filter(|r| r.section == "Units")
+        .filter_map(Record::cell)
+        .collect();
+    assert_eq!(cells, (20..=26).map(|x| [x, 20]).collect());
+    let after = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.history(true, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+
+    e.pointer(&scene, Some([20, 22]), true, true, false, None);
+    e.pointer(&scene, Some([21, 26]), false, true, false, None);
+    e.pointer(&scene, Some([26, 28]), false, true, false, None);
+    assert_eq!(e.feedback, (22..=28).map(|y| [20, y]).collect());
+    e.pointer(&scene, Some([26, 24]), false, true, false, None);
+    assert_eq!(e.feedback, (22..=24).map(|y| [20, y]).collect());
+    e.cancel_operation(&scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    // Cancellation must not retain the preceding stroke's lock.
+    e.pointer(&scene, Some([22, 22]), true, true, false, None);
+    e.pointer(&scene, Some([26, 23]), false, true, false, None);
+    e.pointer(&scene, Some([24, 23]), false, false, true, None);
+    assert_eq!(e.feedback, (22..=24).map(|x| [x, 22]).collect());
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn shift_building_line_shrinks_without_losing_prefix_or_existing_objects() {
+    let (mut e, _, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    let existing = e
+        .doc
+        .as_mut()
+        .unwrap()
+        .add_record("Units", [26, 20], "Neutral", "HTNK")
+        .unwrap();
+    e.commit(&scene, "existing occupant");
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    start(&mut e, "Structures", "BUILDING");
+    // Begin freely, then keep the prefix when the constrained part retracts.
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    e.pointer(&scene, Some([23, 20]), false, true, false, None);
+    e.brush_modifiers(egui::Modifiers::SHIFT);
+    e.pointer(&scene, Some([32, 21]), false, true, false, None);
+    e.pointer(&scene, Some([24, 22]), false, true, false, None);
+    let anchors = |e: &Editor| -> BTreeSet<_> {
+        e.records
+            .values()
+            .filter(|r| r.section == "Structures")
+            .filter_map(Record::cell)
+            .collect()
+    };
+    assert_eq!(anchors(&e), BTreeSet::from([[20, 20], [23, 20]]));
+    assert!(e.records.contains_key(&existing));
+    assert_eq!(e.object_brush.gesture.as_ref().unwrap().skipped, 0);
+    // Releasing Shift fixes this shortened segment before choosing a new one,
+    // including when there is no pointer sample between modifier changes.
+    e.brush_modifiers(egui::Modifiers::NONE);
+    e.brush_modifiers(egui::Modifiers::SHIFT);
+    e.pointer(&scene, Some([25, 26]), false, true, false, None);
+    assert_eq!(
+        anchors(&e),
+        BTreeSet::from([[20, 20], [23, 20], [24, 22], [24, 24], [24, 26]])
+    );
+    e.pointer(&scene, Some([25, 22]), false, false, true, None);
+    assert_eq!(anchors(&e), BTreeSet::from([[20, 20], [23, 20], [24, 22]]));
+    let after = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.history(true, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    start(&mut e, "Units", "HTNK");
+    let records = e.records.clone();
+    let marker_ids: BTreeSet<_> = e.marker_cache.markers.iter().map(|m| m.id).collect();
+    let state = e.doc.as_ref().unwrap().state_id;
+    e.pointer(&scene, Some([26, 20]), true, true, false, None);
+    e.pointer(&scene, Some([30, 21]), false, true, false, None);
+    assert!(e.records.len() > records.len());
+    // Retracting all the way to an occupied origin must remove every ghost
+    // even if release has no remaining edits and therefore adds no undo step.
+    e.pointer(&scene, Some([26, 21]), false, false, true, None);
+    assert_eq!(e.records, records);
+    assert_eq!(
+        e.marker_cache
+            .markers
+            .iter()
+            .map(|m| m.id)
+            .collect::<BTreeSet<_>>(),
+        marker_ids
+    );
+    assert_eq!(e.doc.as_ref().unwrap().state_id, state);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn object_drag_interpolates_deduplicates_freezes_settings_and_undoes_once() {
     let (mut e, _, root) = editor();
     let scene = scene();

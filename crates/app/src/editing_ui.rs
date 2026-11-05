@@ -489,6 +489,9 @@ impl Editor {
                 } else {
                     ui.small("拖动连续绘制，保留原有高度。");
                 }
+                if !self.terrain_mode.planned() && self.terrain_mode != TerrainMode::Fill {
+                    ui.small("按住 Shift 锁定地图轴向；松开恢复自由绘制，拖动中也可按下。");
+                }
             }
             Tool::Ore | Tool::Gems => {
                 ui.add_space(4.);
@@ -535,6 +538,7 @@ impl Editor {
                 ui.checkbox(&mut self.allow_overlap, "允许对象重叠");
                 ui.small("轮廓显示实际占地；红色表示越界、占用或高低不平。");
                 ui.small("按住左键拖动连刷，同一笔按占地去重；不可放置的位置自动跳过。");
+                ui.small("按住 Shift 锁定地图轴向；松开恢复自由连刷，拖动中也可按下。");
                 ui.small("松手提交，Esc / 右键取消整笔，Ctrl+Z 整笔撤销。");
             }
             Tool::Waypoint => {

@@ -75,6 +75,11 @@ struct Stroke {
     frame: u8,
     template_level: Option<u8>,
 }
+struct BrushSegment {
+    document: crate::document::EditCheckpoint,
+    cells: BTreeSet<Cell>,
+    feedback: BTreeSet<Cell>,
+}
 #[path = "interaction.rs"]
 pub(crate) mod interaction;
 #[path = "playtest_ui.rs"]
@@ -99,6 +104,8 @@ pub struct Editor {
     plateau: cliff_edit::PlateauEdit,
     fill: fill_edit::FillEdit,
     object_brush: object_brush::ObjectBrush,
+    brush_direction: crate::brush_direction::BrushDirection,
+    brush_segment: Option<BrushSegment>,
     pub allow_overlap: bool,
     pub infantry_subcell: u8,
     property_extra: BTreeMap<usize, String>,
@@ -181,6 +188,8 @@ impl Editor {
             plateau: Default::default(),
             fill: Default::default(),
             object_brush: Default::default(),
+            brush_direction: Default::default(),
+            brush_segment: None,
             allow_overlap: false,
             infantry_subcell: 0,
             property_extra: BTreeMap::new(),
@@ -272,6 +281,7 @@ impl Editor {
         self.stroking = false;
         self.feedback.clear();
         self.stroke = None;
+        self.brush_segment = None;
         self.stroke_cells.clear();
         self.refresh = false;
         self.status.clear();
@@ -674,6 +684,7 @@ impl Editor {
         self.last = None;
         self.feedback.clear();
         self.stroke = None;
+        self.brush_segment = None;
         self.stroke_cells.clear();
         if let Some(doc) = &mut self.doc {
             let name = if redo {
@@ -797,6 +808,31 @@ impl Editor {
             }
         }
     }
+    pub(crate) fn brush_modifiers(&mut self, modifiers: egui::Modifiers) {
+        self.brush_direction.set_shift(modifiers.shift);
+        if !modifiers.shift {
+            self.brush_segment = None;
+            self.object_brush.finish_segment();
+        }
+    }
+
+    fn uses_brush_direction(&self) -> bool {
+        if self.object_brush.active() {
+            return true;
+        }
+        let (tool, mode) = if self.stroking {
+            let Some(stroke) = self.stroke else {
+                return false;
+            };
+            (stroke.tool, stroke.mode)
+        } else {
+            (self.tool, self.terrain_mode)
+        };
+        tool == Tool::Place
+            || tool.brush()
+                && (tool != Tool::Terrain || !mode.planned() && mode != TerrainMode::Fill)
+    }
+
     pub fn pointer(
         &mut self,
         scene: &MapScene,
@@ -812,6 +848,11 @@ impl Editor {
         if press && self.tool != Tool::Select && !self.check_property_draft() {
             return;
         }
+        let at = if self.uses_brush_direction() && (press || down || release) {
+            self.brush_direction.constrain(at, press)
+        } else {
+            at
+        };
         if self.object_pointer(scene, at, press, down, release) {
             return;
         }
@@ -826,6 +867,7 @@ impl Editor {
         }
         if press {
             self.last = None;
+            self.brush_segment = None;
             self.feedback.clear();
             self.stroke_cells.clear();
             self.stroke = Some(Stroke {
@@ -918,6 +960,25 @@ impl Editor {
         // the original tool's transaction. Deduplicate cells for height strokes.
         if self.stroking && (down || press || release) {
             let stroke = self.stroke.expect("active stroke settings");
+            if let Some(origin) = self.brush_direction.line_origin() {
+                let segment = self.brush_segment.get_or_insert_with(|| BrushSegment {
+                    document: self.doc.as_ref().unwrap().edit_checkpoint(),
+                    cells: self.stroke_cells.clone(),
+                    feedback: self.feedback.clone(),
+                });
+                if at.is_some() && self.last != at {
+                    if let Err(e) = self.doc.as_mut().unwrap().restore_edit(&segment.document) {
+                        self.abort_stroke(scene, e);
+                        return;
+                    }
+                    self.stroke_cells = segment.cells.clone();
+                    self.feedback = segment.feedback.clone();
+                    self.last = Some(origin);
+                    self.cache(scene);
+                }
+            } else {
+                self.brush_segment = None;
+            }
             if let Some(at) = at {
                 let line = cell_line(self.last.unwrap_or(at), at);
                 self.last = Some(at);
@@ -1035,6 +1096,7 @@ impl Editor {
         }
         if self.stroking && (release || !down) {
             let stroke = self.stroke.take().expect("active stroke settings");
+            self.brush_segment = None;
             self.stroking = false;
             self.last = None;
             let result = (|| -> Result<()> {
@@ -1090,6 +1152,7 @@ impl Editor {
         self.stroking = false;
         self.last = None;
         self.stroke = None;
+        self.brush_segment = None;
         self.stroke_cells.clear();
         self.feedback.clear();
         self.cache(scene);
@@ -1112,6 +1175,11 @@ impl Editor {
             self.fill_preview(painter, scene, rect, camera, at);
             return;
         }
+        let at = if self.stroking && self.uses_brush_direction() {
+            self.brush_direction.preview(at)
+        } else {
+            at
+        };
         let (Some(at), Some(doc)) = (at, self.doc.as_ref()) else {
             return;
         };

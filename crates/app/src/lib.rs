@@ -7,6 +7,7 @@ use ra2_map_scene::map;
 
 pub mod app;
 mod base_nodes_ui;
+mod brush_direction;
 mod campaign_ui;
 mod completion;
 mod editing;

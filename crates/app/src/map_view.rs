@@ -688,6 +688,7 @@ impl MapView {
         }
         let painter = ui.painter().with_clip_rect(rect);
         let at = self.hover.map(|i| [scene.cells[i].rx, scene.cells[i].ry]);
+        self.editor.brush_modifiers(ui.input(|i| i.modifiers));
         self.editor
             .terrain_preview(&painter, scene, rect, &camera, at);
         let marker = self

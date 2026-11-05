@@ -5,7 +5,9 @@ use ra2_map_scene::placement;
 #[derive(Default)]
 pub(super) struct ObjectBrush {
     gesture: Option<Gesture>,
+    segment: Option<ObjectSegment>,
 }
+#[derive(Clone)]
 struct Settings {
     section: String,
     type_id: String,
@@ -14,6 +16,7 @@ struct Settings {
     overlap: bool,
     offsets: Vec<(i16, i16)>,
 }
+#[derive(Clone)]
 struct Gesture {
     settings: Settings,
     last: Option<Cell>,
@@ -24,12 +27,21 @@ struct Gesture {
     skipped: usize,
     error: Option<String>,
 }
+struct ObjectSegment {
+    document: crate::document::EditCheckpoint,
+    gesture: Gesture,
+    feedback: BTreeSet<Cell>,
+}
 impl ObjectBrush {
+    pub fn finish_segment(&mut self) {
+        self.segment = None;
+    }
     pub fn active(&self) -> bool {
         self.gesture.is_some()
     }
     pub fn cancel(&mut self) {
         self.gesture = None;
+        self.segment = None;
     }
 }
 
@@ -85,6 +97,7 @@ impl Editor {
                 return true;
             }
             self.feedback.clear();
+            self.object_brush.segment = None;
             self.stroking = true;
             self.object_brush.gesture = Some(Gesture {
                 settings: Settings {
@@ -104,10 +117,35 @@ impl Editor {
                 error: None,
             });
         }
-        let Some(g) = self.object_brush.gesture.as_mut() else {
+        if self.object_brush.gesture.is_none() {
             return true;
-        };
+        }
         let mut changed = false;
+        if down || press || release {
+            if let Some(origin) = self.brush_direction.line_origin() {
+                let segment = self.object_brush.segment.get_or_insert_with(|| {
+                    let mut gesture = self.object_brush.gesture.as_ref().unwrap().clone();
+                    gesture.last = Some(origin);
+                    ObjectSegment {
+                        document: self.doc.as_ref().unwrap().edit_checkpoint(),
+                        gesture,
+                        feedback: self.feedback.clone(),
+                    }
+                });
+                if at.is_some() && self.object_brush.gesture.as_ref().unwrap().last != at {
+                    if let Err(e) = self.doc.as_mut().unwrap().restore_edit(&segment.document) {
+                        self.abort_stroke(scene, e);
+                        return true;
+                    }
+                    self.object_brush.gesture = Some(segment.gesture.clone());
+                    self.feedback = segment.feedback.clone();
+                    changed = true;
+                }
+            } else {
+                self.object_brush.segment = None;
+            }
+        }
+        let g = self.object_brush.gesture.as_mut().unwrap();
         if down || press || release {
             if let Some(at) = at {
                 let line = cell_line(g.last.unwrap_or(at), at);
@@ -167,7 +205,13 @@ impl Editor {
         );
         if release || !down {
             let g = self.object_brush.gesture.take().unwrap();
+            self.object_brush.segment = None;
             self.stroking = false;
+            // A fully retracted line may leave no transaction to commit, so
+            // commit() would not refresh sprites removed in the release frame.
+            if changed && g.created.is_empty() {
+                self.cache(scene);
+            }
             self.commit(scene, "刷对象");
             if let Some(id) = g.selected {
                 self.select(Some(id));

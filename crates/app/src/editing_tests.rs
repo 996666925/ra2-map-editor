@@ -215,6 +215,165 @@ pub(crate) fn terrain_scene() -> MapScene {
 }
 
 #[test]
+fn shift_locks_terrain_brushes_to_one_axis_including_preview_release_and_history() {
+    for mode in [
+        TerrainMode::Subtile,
+        TerrainMode::Template,
+        TerrainMode::Raise,
+    ] {
+        let (mut e, ctx, root) = editor();
+        let mut scene = terrain_scene();
+        // Give the synthetic brush a distinct saved tile value.
+        scene.brushes[0].raw = 1;
+        e.attach(&scene);
+        e.tool = Tool::Terrain;
+        e.terrain_mode = mode;
+        e.template_level = Some(2);
+        e.smooth_heights = false;
+        e.auto_lat = false;
+        let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        e.brush_modifiers(egui::Modifiers::SHIFT);
+        e.pointer(&scene, Some([20, 20]), true, true, false, None);
+        e.pointer(&scene, Some([24, 21]), false, true, false, None);
+        assert_eq!(e.feedback, (20..=24).map(|x| [x, 20]).collect());
+
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800., 600.));
+        let camera = crate::camera::MapCamera {
+            center: scene.bounds.center(),
+            zoom: 1.,
+        };
+        let draw = |e: &mut Editor, at| {
+            crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+                e.terrain_preview(ui.painter(), &scene, rect, &camera, Some(at));
+            })
+            .shapes
+        };
+        assert_eq!(
+            draw(&mut e, [21, 27]),
+            draw(&mut e, [21, 20]),
+            "the preview must follow the locked axis even when the cursor crosses the other axis"
+        );
+        e.pointer(&scene, Some([21, 27]), false, true, false, None);
+        assert_eq!(e.feedback, BTreeSet::from([[20, 20], [21, 20]]));
+        assert_eq!(e.doc.as_ref().unwrap().terrain([24, 20]).unwrap().tile, 0);
+        e.pointer(&scene, Some([18, 27]), false, true, false, None);
+        assert_eq!(e.feedback, (18..=20).map(|x| [x, 20]).collect());
+        e.pointer(&scene, Some([20, 27]), false, true, false, None);
+        assert_eq!(e.feedback, BTreeSet::from([[20, 20]]));
+        e.pointer(&scene, Some([26, 25]), false, true, false, None);
+        // Shrink again in the release frame: commit only the final line.
+        e.pointer(&scene, Some([23, 25]), false, false, true, None);
+        assert!(!e.stroking);
+        assert_eq!(e.feedback, (20..=23).map(|x| [x, 20]).collect());
+        let doc = e.doc.as_ref().unwrap();
+        for x in 20..=23 {
+            let value = doc.terrain([x, 20]).unwrap();
+            if mode == TerrainMode::Raise {
+                assert_eq!(value.level, 1);
+            } else {
+                assert_eq!(value.tile, 1);
+            }
+        }
+        assert_eq!(doc.terrain([24, 21]).unwrap().level, 0);
+        assert_eq!(doc.terrain([24, 21]).unwrap().tile, 0);
+        assert_eq!(doc.terrain([24, 20]).unwrap().level, 0);
+        assert_eq!(doc.terrain([24, 20]).unwrap().tile, 0);
+        let after = doc.snapshot().bytes().unwrap();
+        assert_ne!(after, before);
+        e.history(false, &scene);
+        assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+        e.history(true, &scene);
+        assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+        drop(e);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn shift_can_toggle_during_a_brush_stroke_and_reentry_starts_a_new_constraint() {
+    let (mut e, _, root) = editor();
+    let mut scene = terrain_scene();
+    Arc::make_mut(&mut scene.catalog).ore = Some(102);
+    e.attach(&scene);
+    e.tool = Tool::Ore;
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    e.pointer(&scene, Some([21, 21]), false, true, false, None);
+    e.brush_modifiers(egui::Modifiers::SHIFT);
+    e.pointer(&scene, Some([22, 24]), false, true, false, None);
+    assert!(e.feedback.contains(&[21, 24]));
+    assert!(!e.feedback.contains(&[22, 24]));
+    e.brush_modifiers(egui::Modifiers::NONE);
+    e.pointer(&scene, Some([23, 24]), false, true, false, None);
+    assert!(e.feedback.contains(&[23, 24]));
+    e.brush_modifiers(egui::Modifiers::SHIFT);
+    e.pointer(&scene, Some([26, 25]), false, true, false, None);
+    assert!(e.feedback.contains(&[26, 24]));
+    assert!(!e.feedback.contains(&[26, 25]));
+    e.pointer(&scene, Some([24, 26]), false, true, false, None);
+    assert!(e.feedback.contains(&[21, 21]));
+    assert!(e.feedback.contains(&[21, 24]));
+    assert!(e.feedback.contains(&[24, 24]));
+    assert!(!e.feedback.contains(&[26, 24]));
+    assert_eq!(e.doc.as_ref().unwrap().overlay([26, 24]).0, 255);
+    assert!(!e.overlays.contains_key(&[26, 24]));
+    let painted = e.feedback.clone();
+    e.pointer(&scene, None, false, true, false, None);
+    e.pointer(&scene, Some([28, 20]), false, true, false, None);
+    e.pointer(&scene, Some([29, 23]), false, false, true, None);
+    assert_eq!(
+        e.feedback,
+        painted
+            .into_iter()
+            .chain((20..=23).map(|y| [28, y]))
+            .collect()
+    );
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().overlay([28, 23]).0, 255);
+    // A new stroke with Shift still held must choose its own origin and axis.
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    e.pointer(&scene, Some([24, 21]), false, false, true, None);
+    assert_eq!(e.feedback, (20..=24).map(|x| [x, 20]).collect());
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn shift_erase_retraction_restores_original_overlays_under_a_wide_brush() {
+    let (mut e, _, root) = editor();
+    let scene = terrain_scene();
+    e.attach(&scene);
+    for x in 19..=26 {
+        for y in 19..=20 {
+            e.doc
+                .as_mut()
+                .unwrap()
+                .set(Target::Overlay([x, y]), Some(Value::Overlay(102, 7)))
+                .unwrap();
+        }
+    }
+    e.commit(&scene, "original resources");
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.tool = Tool::Erase;
+    e.radius = 2;
+    e.brush_modifiers(egui::Modifiers::SHIFT);
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    e.pointer(&scene, Some([26, 21]), false, true, false, None);
+    assert!(!e.overlays.contains_key(&[26, 20]));
+    e.pointer(&scene, Some([22, 21]), false, false, true, None);
+    for x in 19..=26 {
+        for y in 19..=20 {
+            let expected = if x <= 22 { (255, 0) } else { (102, 7) };
+            assert_eq!(e.doc.as_ref().unwrap().overlay([x, y]), expected);
+            assert_eq!(e.overlays.contains_key(&[x, y]), x > 22);
+        }
+    }
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn height_drag_deduplicates_revisited_cells_samples_release_and_undoes_once() {
     let (mut editor, _, root) = editor();
     let scene = terrain_scene();

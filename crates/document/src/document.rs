@@ -440,6 +440,15 @@ struct DocumentState {
     changes: BTreeMap<Target, Option<Value>>,
     next_record: u64,
 }
+/// Savepoint within one pending edit; restoring it leaves undo history intact.
+pub struct EditCheckpoint {
+    document: u64,
+    state: u64,
+    next_state: u64,
+    changes: BTreeMap<Target, Option<Value>>,
+    pending: BTreeMap<Target, Change>,
+    next_record: u64,
+}
 pub struct MapDocument {
     pub resource_profile: Option<String>,
     pub id: u64,
@@ -513,6 +522,29 @@ impl MapDocument {
         fork.changes = self.changes.clone();
         fork.next_record = self.next_record;
         fork
+    }
+    /// A command-level savepoint, including an already pending brush transaction.
+    pub fn edit_checkpoint(&self) -> EditCheckpoint {
+        EditCheckpoint {
+            document: self.id,
+            state: self.state_id,
+            next_state: self.next_state,
+            changes: self.changes.clone(),
+            pending: self.pending.clone(),
+            next_record: self.next_record,
+        }
+    }
+    /// Rebuild a provisional edit from its savepoint, preserving earlier pending edits.
+    pub fn restore_edit(&mut self, checkpoint: &EditCheckpoint) -> Result<()> {
+        ensure!(
+            (self.id, self.state_id, self.next_state)
+                == (checkpoint.document, checkpoint.state, checkpoint.next_state),
+            "编辑检查点已失效"
+        );
+        self.changes = checkpoint.changes.clone();
+        self.pending = checkpoint.pending.clone();
+        self.next_record = checkpoint.next_record;
+        Ok(())
     }
     /// A command-level savepoint, including an already pending brush transaction.
     /// This does not commit: callers can include scene-dependent neighbour edits.

@@ -10,6 +10,35 @@ use vera20k_core::{
 
 use crate::test_support::{document, fixture};
 #[test]
+fn edit_checkpoint_preserves_pending_prefix_record_ids_and_history() {
+    let mut doc = document();
+    let original = doc.snapshot().bytes().unwrap();
+    doc.set(Target::Overlay([2, 2]), Some(Value::Overlay(1, 2)))
+        .unwrap();
+    let checkpoint = doc.edit_checkpoint();
+    let prefix = doc.snapshot().bytes().unwrap();
+    let id = doc.add_record("Units", [2, 2], "Neutral", "HTNK").unwrap();
+    doc.set(Target::Overlay([2, 2]), Some(Value::Overlay(3, 4)))
+        .unwrap();
+    doc.restore_edit(&checkpoint).unwrap();
+    assert_eq!(doc.snapshot().bytes().unwrap(), prefix);
+    assert!(doc.undo_name().is_none());
+    assert_eq!(
+        doc.add_record("Units", [2, 2], "Neutral", "HTNK").unwrap(),
+        id
+    );
+    let after = doc.snapshot().bytes().unwrap();
+    doc.commit("whole brush");
+    assert!(doc.restore_edit(&checkpoint).is_err());
+    doc.undo();
+    assert_eq!(doc.snapshot().bytes().unwrap(), original);
+    assert!(doc.restore_edit(&checkpoint).is_err());
+    doc.redo();
+    assert_eq!(doc.snapshot().bytes().unwrap(), after);
+    let mut other = document();
+    assert!(other.restore_edit(&checkpoint).is_err());
+}
+#[test]
 fn scratch_fork_preserves_pending_state_without_copying_history() {
     let mut doc = document();
     doc.set(Target::Overlay([2, 2]), Some(Value::Overlay(1, 2)))

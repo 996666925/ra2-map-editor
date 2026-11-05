@@ -31,13 +31,13 @@ impl Tool {
             Self::RegionMove => "单击目标位置移动整个区域；Esc 或右键取消",
             Self::Clone => "单击克隆完整对象，可连续放置；Esc 或右键退出",
             Self::Move => "单击目标位置移动所选对象；Esc 或右键取消",
-            Self::Place => "单击放置，按住左键拖动连刷；松手提交，Esc 或右键取消整笔",
+            Self::Place => "单击放置，拖动连刷；按住 Shift 锁定地图轴向，松手提交，Esc 或右键取消",
             Self::Pick => "单击吸取地形，随后回到地形画笔",
             Self::Waypoint => "单击设置当前航点；编号已存在时会移动该航点",
-            Self::Erase => "拖动擦除覆盖物与资源；Ctrl+Z 可撤销整笔",
-            Self::Terrain => "选择地形模式后绘制；松开提交，Esc 或右键取消当前一笔",
+            Self::Erase => "拖动擦除覆盖物与资源；按住 Shift 锁定地图轴向，Ctrl+Z 撤销整笔",
+            Self::Terrain => "选择地形模式后绘制；画笔按住 Shift 锁定地图轴向，松开提交，Esc 取消",
             Self::Ore | Self::Gems | Self::Overlay => {
-                "拖动绘制；[ / ] 调整笔刷，松开提交，Esc 取消"
+                "拖动绘制；按住 Shift 锁定地图轴向，[ / ] 调整笔刷，松开提交，Esc 取消"
             }
         }
     }
@@ -108,6 +108,7 @@ impl Editor {
         self.last = None;
         self.feedback.clear();
         self.stroke = None;
+        self.brush_segment = None;
         self.stroke_cells.clear();
         self.cache(scene);
         self.status = "已取消当前操作；之前完成的修改已保留。".into();
