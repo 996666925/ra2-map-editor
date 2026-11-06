@@ -854,13 +854,21 @@ impl MapDocument {
             )?;
             return Ok(id);
         }
-        let mut index = 0;
-        while records
+        // Keep exact key spellings: legacy keys such as "01" do not reserve "1".
+        // Build the set once instead of scanning every record for every number.
+        let used_keys: HashSet<_> = records
             .values()
-            .any(|r| r.section == section && r.key == index.to_string())
-        {
+            .filter(|r| r.section == section)
+            .map(|r| r.key.as_str())
+            .collect();
+        let mut index = 0;
+        let key = loop {
+            let key = index.to_string();
+            if !used_keys.contains(key.as_str()) {
+                break key;
+            }
             index += 1;
-        }
+        };
         let prefix = format!("{owner},{type_id},256,{},{}", cell[0], cell[1]);
         let value = match section {
             "Infantry" => format!("{prefix},0,Guard,0,None,0,-1,0,1,1"),
@@ -875,7 +883,7 @@ impl MapDocument {
             Target::Record(id),
             Some(Value::Record(Record {
                 section: section.into(),
-                key: index.to_string(),
+                key,
                 value: value.into_bytes(),
                 coordinate_radix: 1000,
             })),

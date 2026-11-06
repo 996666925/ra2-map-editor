@@ -35,7 +35,19 @@ python tools/check_i18n.py
 
 格式化时去掉 `-Check`。使用该脚本可只处理编辑器 workspace，避免 `cargo fmt --all` 遍历本地引擎依赖。
 
+体素适配层通过 `#[path]` 直接编译部分引擎源码，这些模块不受 Clippy 的 `--no-deps` 排除。它们在模块入口沿用上游源码的 lint 边界，由引擎工作区负责检查；编辑器自身的适配代码仍接受上述严格检查。排查本地通过而 CI 失败的问题时，可先执行 `cargo clean -p ra2-map-voxel`，再运行全目标 Clippy，避免已有构建缓存掩盖这些模块的诊断。
+
 界面本地化、消息编写和新增语言的步骤见 [语言资源说明](../crates/app/locales/README.md)。语言切换、持久化、翻译占位符与中英文布局测试包含在应用测试中。
+
+## 对象编号分配性能
+
+使用合成地图测量已有 100、1,000、3,000 条车辆记录时新增单条记录的耗时，无需游戏资源或 GPU：
+
+```powershell
+cargo run --locked -p ra2-map-document --example record_allocation_audit
+```
+
+输出 CSV，每种规模取 7 次中位数。每次从同一文档 fork，计时只包含 `add_record`，不含地图准备、fork、连刷占用检查和渲染。对比时使用相同构建配置；默认开发配置的结果不代表发布版本或完整界面性能。
 
 ## UI 交互录像
 

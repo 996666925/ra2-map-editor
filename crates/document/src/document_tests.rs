@@ -9,6 +9,126 @@ use vera20k_core::{
 };
 
 use crate::test_support::{document, fixture};
+
+fn numbered_document(section: &str, keys: &[&str]) -> MapDocument {
+    let mut bytes = fixture();
+    bytes.extend_from_slice(format!("\r\n[{section}]\r\n").as_bytes());
+    let value = if section == "Smudge" {
+        "CR1,2,2,0"
+    } else {
+        "Neutral,HTNK,256,2,2,0,Guard,None,0,-1,0,-1,1,1"
+    };
+    for key in keys {
+        bytes.extend_from_slice(format!("{key}={value}\r\n").as_bytes());
+    }
+    let map = map_file::load_from_bytes(bytes.clone()).unwrap();
+    MapDocument::new(Baseline::parse(bytes.into(), &map).unwrap())
+}
+
+#[test]
+fn added_records_use_the_smallest_section_local_key_and_preserve_legacy_spellings() {
+    for section in ["Units", "Structures", "Infantry", "Aircraft", "Smudge"] {
+        let mut doc = numbered_document(
+            section,
+            &["0", "2", "01", "+1", "3legacy", "999999999999999999999999"],
+        );
+        let before = doc.snapshot().bytes().unwrap();
+        let original_records = doc.records();
+        let other_section = if section == "Units" {
+            "Aircraft"
+        } else {
+            "Units"
+        };
+        for _ in 0..2 {
+            doc.add_record(other_section, [2, 2], "Neutral", "HTNK")
+                .unwrap();
+        }
+        let state = doc.state_id;
+        let first = doc.add_record(section, [2, 2], "Neutral", "HTNK").unwrap();
+        let second = doc.add_record(section, [3, 2], "Neutral", "HTNK").unwrap();
+        let current = doc.records();
+        assert_eq!(current[&first].key, "1", "{section}");
+        assert_eq!(current[&second].key, "3", "{section}");
+        assert_eq!(
+            doc.state_id, state,
+            "pending records must reserve their keys"
+        );
+        for (id, original) in &original_records {
+            assert_eq!(&current[id], original);
+        }
+        doc.cancel();
+        assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    }
+    let mut doc = numbered_document("Units", &["00", "+0", "legacy"]);
+    let id = doc.add_record("Units", [2, 2], "Neutral", "HTNK").unwrap();
+    assert_eq!(doc.records()[&id].key, "0");
+}
+
+#[test]
+fn record_key_allocation_tracks_deletion_cancel_undo_redo_and_reopen() {
+    let mut doc = numbered_document("Units", &["0", "1", "2", "4"]);
+    let before = doc.snapshot().bytes().unwrap();
+    let deleted = doc
+        .records()
+        .into_iter()
+        .find(|(_, r)| r.section == "Units" && r.key == "1")
+        .unwrap()
+        .0;
+    doc.set(Target::Record(deleted), None).unwrap();
+    let replacement = doc.add_record("Units", [2, 2], "Neutral", "MTNK").unwrap();
+    let next = doc.add_record("Units", [3, 2], "Neutral", "HTNK").unwrap();
+    assert_eq!(doc.records()[&replacement].key, "1");
+    assert_eq!(doc.records()[&next].key, "3");
+    assert!(doc.commit("replace and add"));
+    let after = doc.snapshot().bytes().unwrap();
+    assert!(doc.undo());
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    assert!(doc.redo());
+    assert_eq!(doc.snapshot().bytes().unwrap(), after);
+
+    let id = doc.add_record("Units", [2, 3], "Neutral", "HTNK").unwrap();
+    assert_eq!(doc.records()[&id].key, "5");
+    doc.cancel();
+    assert_eq!(doc.snapshot().bytes().unwrap(), after);
+    let map = map_file::load_from_bytes(after.clone()).unwrap();
+    let mut reopened = MapDocument::new(Baseline::parse(after.into(), &map).unwrap());
+    let id = reopened
+        .add_record("Units", [2, 3], "Neutral", "HTNK")
+        .unwrap();
+    assert_eq!(reopened.records()[&id].key, "5");
+
+    doc.set(Target::Record(replacement), None).unwrap();
+    assert!(doc.commit("delete"));
+    assert!(doc.undo());
+    let id = doc.add_record("Units", [2, 3], "Neutral", "HTNK").unwrap();
+    assert_eq!(doc.records()[&id].key, "5");
+    doc.cancel();
+    assert!(doc.redo());
+    let id = doc.add_record("Units", [2, 3], "Neutral", "HTNK").unwrap();
+    assert_eq!(doc.records()[&id].key, "1");
+}
+
+#[test]
+fn record_key_allocation_tracks_pending_checkpoints_and_failed_atomic_edits() {
+    let mut doc = numbered_document("Units", &["0", "2"]);
+    let prefix = doc.add_record("Units", [2, 2], "Neutral", "HTNK").unwrap();
+    assert_eq!(doc.records()[&prefix].key, "1");
+    let checkpoint = doc.edit_checkpoint();
+    let suffix = doc.add_record("Units", [3, 2], "Neutral", "HTNK").unwrap();
+    assert_eq!(doc.records()[&suffix].key, "3");
+    doc.restore_edit(&checkpoint).unwrap();
+    let result: anyhow::Result<()> = doc.atomic(|doc| {
+        let id = doc.add_record("Units", [3, 2], "Neutral", "HTNK")?;
+        assert_eq!(doc.records()[&id].key, "3");
+        anyhow::bail!("roll back this placement")
+    });
+    assert!(result.is_err());
+    let id = doc.add_record("Units", [3, 2], "Neutral", "HTNK").unwrap();
+    assert_eq!(id, suffix);
+    assert_eq!(doc.records()[&id].key, "3");
+    assert_eq!(doc.records()[&prefix].key, "1");
+}
+
 #[test]
 fn edit_checkpoint_preserves_pending_prefix_record_ids_and_history() {
     let mut doc = document();

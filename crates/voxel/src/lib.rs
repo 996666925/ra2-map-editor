@@ -9,6 +9,8 @@
 #![cfg(not(test))]
 pub use vera20k_core::{assets, map, rules, sim, util};
 
+// These path modules are upstream sources, linted in the engine workspace.
+// --no-deps does not exclude them; editor-owned adapter code stays linted here.
 #[rustfmt::skip]
 #[allow(clippy::all)]
 #[path = "../../../vendor/vera20k/src/render/vxl_normals.rs"]
@@ -24,9 +26,11 @@ pub mod vxl_raster;
 pub mod native_z;
 
 #[rustfmt::skip]
+#[allow(clippy::all)]
 #[path = "../../../vendor/vera20k/src/render/voxel_gpu.rs"]
 mod voxel_gpu;
 #[rustfmt::skip]
+#[allow(clippy::all)]
 #[path = "../../../vendor/vera20k/src/render/atlas_growth.rs"]
 mod atlas_growth;
 mod gpu;
