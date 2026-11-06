@@ -346,6 +346,7 @@ mod tests {
             tile_index,
             z,
             sub_tile: 0,
+            legacy_ice_byte: 0,
         };
         map.cells = vec![
             cell(20, 20, 100, 0),

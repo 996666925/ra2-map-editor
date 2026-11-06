@@ -471,6 +471,42 @@ fn pack_rewrite_replaces_nonnumeric_payload_keys_and_preserves_comments() {
     assert!(bytes.ends_with(b"weird=untouched"));
 }
 #[test]
+fn signed_pack5_alias_edits_the_same_cell_as_the_engine_decoder() {
+    let raw = RawIni::parse(Arc::from(fixture())).unwrap();
+    let mut terrain = lzo::decompress_chunks(&raw.packed("IsoMapPack5").unwrap(), 1024).unwrap();
+    // The second record aliases (2, 2) in the engine's 512-wide cell grid.
+    terrain[11..13].copy_from_slice(&1538i16.to_le_bytes());
+    terrain[13..15].copy_from_slice(&(-1i16).to_le_bytes());
+    terrain[21] = 0x80;
+    let packs = BTreeMap::from([(
+        "IsoMapPack5".into(),
+        pack_lines(&lzo::compress_chunks(&terrain, 8192), b"\r\n"),
+    )]);
+    let bytes = raw.patch(&Default::default(), &packs, &Default::default(), true);
+    let map = map_file::load_from_bytes(bytes.clone()).unwrap();
+    assert_eq!(map.cells.last().unwrap().legacy_ice_byte, 0x80);
+    let mut doc = MapDocument::new(Baseline::parse(Arc::from(bytes), &map).unwrap());
+    let old = doc.terrain([2, 2]).unwrap();
+    assert_eq!(old.tile, map.cells.last().unwrap().tile_index);
+    assert_eq!(old.ice, 0x80);
+    doc.set(
+        Target::Terrain([2, 2]),
+        Some(Value::Terrain(TerrainValue { tile: 30, ..old })),
+    )
+    .unwrap();
+    doc.commit("terrain");
+    let bytes = doc.snapshot().bytes().unwrap();
+    let reopened = map_file::load_from_bytes(bytes.clone()).unwrap();
+    assert_eq!(reopened.cells.last().unwrap().tile_index, 30);
+    assert_eq!(reopened.cells.last().unwrap().legacy_ice_byte, 0x80);
+    let saved = RawIni::parse(Arc::from(bytes)).unwrap();
+    let saved = lzo::decompress_chunks(&saved.packed("IsoMapPack5").unwrap(), 1024).unwrap();
+    assert_eq!(saved.len(), terrain.len());
+    assert_eq!(&saved[..15], &terrain[..15]);
+    assert_eq!(&saved[19..], &terrain[19..]);
+}
+
+#[test]
 fn sparse_terrain_edit_keeps_all_eleven_bytes_duplicate_and_sentinel_tail() {
     let mut doc = document();
     let original = doc.snapshot().bytes().unwrap();

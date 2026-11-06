@@ -180,16 +180,14 @@ impl Baseline {
         let mut end = 0;
         while end + 4 <= terrain.len() {
             let x = i16::from_le_bytes(terrain[end..end + 2].try_into().unwrap());
-            let y = u16::from_le_bytes(terrain[end + 2..end + 4].try_into().unwrap());
+            let y = i16::from_le_bytes(terrain[end + 2..end + 4].try_into().unwrap());
             if x == 0 && y == 0 {
                 break;
             }
             ensure!(end + 11 <= terrain.len(), "Pack5 记录截断");
-            // Pack5 sign-extends X but reads Y as unsigned, like the core decoder.
-            let stride = i32::from(grid.side());
-            let linear = i32::from(y) * stride + i32::from(x);
-            if (0..stride * stride).contains(&linear) {
-                offsets.insert([(linear % stride) as u16, (linear / stride) as u16], end);
+            // Use the core decoder's signed Pack5 lookup, including grid aliases.
+            if let Some((x, y)) = grid.canonical_coord(i32::from(x), i32::from(y)) {
+                offsets.insert([x, y], end);
             }
             end += 11;
         }

@@ -370,6 +370,7 @@ pub fn recalculate(
                 tile_index: tile_id(&translated, v),
                 sub_tile: v.sub,
                 z: v.level,
+                legacy_ice_byte: v.ice,
             }
         })
         .collect();

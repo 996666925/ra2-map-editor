@@ -156,7 +156,7 @@ impl RandomMapOptions {
             terrain.extend_from_slice(&cell.rx.to_le_bytes());
             terrain.extend_from_slice(&cell.ry.to_le_bytes());
             terrain.extend_from_slice(&raw_tile(cell.tile_index)?.to_le_bytes());
-            terrain.extend_from_slice(&[cell.sub_tile, cell.z, 0]);
+            terrain.extend_from_slice(&[cell.sub_tile, cell.z, cell.legacy_ice_byte]);
         }
         terrain.extend_from_slice(&[0; 4]);
         out.extend_from_slice(b"[IsoMapPack5]\r\n");
@@ -235,6 +235,7 @@ mod tests {
         map.cells[0].tile_index = 100;
         map.cells[0].sub_tile = 2;
         map.cells[0].z = 4;
+        map.cells[0].legacy_ice_byte = 0x80;
         map.overlays.push(OverlayEntry {
             rx: 80,
             ry: 81,
@@ -254,6 +255,7 @@ mod tests {
         assert_eq!(reopened.cells[0].tile_index, 97);
         assert_eq!(reopened.cells[0].sub_tile, 2);
         assert_eq!(reopened.cells[0].z, 4);
+        assert_eq!(reopened.cells[0].legacy_ice_byte, 0x80);
         assert_eq!(reopened.terrain_objects[0].name, "TREE01");
         assert_eq!(reopened.entities[0].type_id, "CAOILD");
         assert_eq!(reopened.waypoints.len(), 2);
