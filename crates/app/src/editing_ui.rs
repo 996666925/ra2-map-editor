@@ -420,15 +420,32 @@ impl Editor {
         }
     }
     pub fn tool_options(&mut self, ui: &mut egui::Ui, scene: &MapScene) {
-        theme::section(
-            ui,
-            if self.tool == Tool::Terrain {
-                crate::i18n::text(self.terrain_mode.name())
-            } else {
-                self.tool.name()
-            },
-            "",
-        );
+        if self.tool == Tool::Place {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(tr!("放置设置")).strong().size(13.));
+                ui.small(tr!("操作帮助")).on_hover_ui(|ui| {
+                    ui.small(tr!("轮廓显示实际占地；红色表示越界、占用或高低不平。"));
+                    ui.small(tr!(
+                        "按住左键拖动连刷，同一笔按占地去重；不可放置的位置自动跳过。"
+                    ));
+                    ui.small(tr!(
+                        "按住 Shift 锁定地图轴向；松开恢复自由连刷，拖动中也可按下。"
+                    ));
+                    ui.small(tr!("松手提交，Esc / 右键取消整笔，Ctrl+Z 整笔撤销。"));
+                });
+            });
+            ui.add_space(2.);
+        } else {
+            theme::section(
+                ui,
+                if self.tool == Tool::Terrain {
+                    crate::i18n::text(self.terrain_mode.name())
+                } else {
+                    self.tool.name()
+                },
+                "",
+            );
+        }
         if self.doc.is_none() {
             ui.label(
                 RichText::new(
@@ -563,23 +580,21 @@ impl Editor {
                 ui.small(tr!("点击目标位置克隆完整属性，Esc 退出。"));
             }
             Tool::Place => {
-                theme::field(ui, tr!("分类"), category(&self.section));
-                theme::field(ui, tr!("类型"), scene.catalog.object_label(&self.type_id));
-                ui.label(RichText::new(tr!("所属方")).size(11.).color(theme::MUTED));
                 let houses = self.houses(scene);
-                Self::house_picker(ui, "placement-owner", &mut self.owner, &houses);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tr!("所属方")).size(11.).color(theme::MUTED));
+                    ui.vertical(|ui| {
+                        Self::house_picker(ui, "placement-owner", &mut self.owner, &houses);
+                    });
+                });
                 if self.section == "Infantry" {
-                    ui.add(egui::Slider::new(&mut self.infantry_subcell, 0..=4).text(tr!("子格")));
+                    ui.horizontal(|ui| {
+                        ui.label(tr!("子格"));
+                        ui.add(egui::DragValue::new(&mut self.infantry_subcell).range(0..=4))
+                            .accessible_name(tr!("步兵子格"));
+                    });
                 }
                 ui.checkbox(&mut self.allow_overlap, tr!("允许对象重叠"));
-                ui.small(tr!("轮廓显示实际占地；红色表示越界、占用或高低不平。"));
-                ui.small(tr!(
-                    "按住左键拖动连刷，同一笔按占地去重；不可放置的位置自动跳过。"
-                ));
-                ui.small(tr!(
-                    "按住 Shift 锁定地图轴向；松开恢复自由连刷，拖动中也可按下。"
-                ));
-                ui.small(tr!("松手提交，Esc / 右键取消整笔，Ctrl+Z 整笔撤销。"));
             }
             Tool::Waypoint => {
                 ui.add(

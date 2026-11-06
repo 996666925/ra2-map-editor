@@ -166,6 +166,82 @@ fn framework_material_keeps_depth_object_ownership_and_cpu_sampling_in_sync() {
 }
 
 #[test]
+fn magnified_framework_strokes_keep_their_coverage_across_fractional_pan_and_zoom() {
+    // Two-pixel strokes, like the generated height digits, separated by clear space.
+    let rgba: Vec<u8> = (0..64)
+        .flat_map(|x| {
+            if (4..6).contains(&x) {
+                [0, 0, 0, 255]
+            } else {
+                [255; 4]
+            }
+        })
+        .collect();
+    let mut s = VisualScene::default();
+    s.surfaces.push(std::sync::Arc::new(Surface {
+        size: [64, 1],
+        rgba: rgba.clone(),
+        original: Vec::new(),
+        framework: rgba,
+        depth: vec![200; 64],
+    }));
+    s.draws.push(Draw {
+        surface: 0,
+        position: [0., 0.],
+        base: 0,
+        tint: [1.; 3],
+        layer: 0,
+        writes: true,
+        owner: None,
+    });
+    for zoom in [1.25, 1.5, 2.45, 3.1, 5.] {
+        for phase in [0., 0.13, 0.5, 0.91] {
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(phase / zoom, 0.),
+                egui::vec2(32. / zoom, 1. / zoom),
+            );
+            let filtered = s
+                .raster(
+                    rect,
+                    [32, 1],
+                    ViewOptions {
+                        framework: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let width: f32 = filtered
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| (255 - p[0]) as f32 / 255.)
+                .sum();
+            assert!(
+                (width - 2. * zoom).abs() < 0.01,
+                "zoom={zoom}, phase={phase}, width={width}"
+            );
+        }
+    }
+    // At native scale and when reduced, framework still uses the original texels.
+    for zoom in [0.5, 1.] {
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(0.13, 0.), egui::vec2(16. / zoom, 1. / zoom));
+        assert_eq!(
+            s.raster(
+                rect,
+                [16, 1],
+                ViewOptions {
+                    framework: true,
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            s.raster(rect, [16, 1], Default::default()).unwrap()
+        );
+    }
+}
+
+#[test]
 fn incremental_bucket_moves_preserve_painter_order_and_full_raster_pixels() {
     let old = fixture();
     let mut updated = old.clone();

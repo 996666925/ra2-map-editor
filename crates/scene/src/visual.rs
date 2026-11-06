@@ -81,6 +81,33 @@ pub struct Surface {
     pub framework: Vec<u8>,
     pub depth: Vec<u16>,
 }
+impl Surface {
+    /// Match the GPU's screen-pixel coverage filter for magnified framework art.
+    fn framework_sample(
+        &self,
+        point: egui::Pos2,
+        footprint: egui::Vec2,
+        nearest: &[u8],
+    ) -> [u8; 4] {
+        let uv = point - egui::vec2(0.5, 0.5);
+        let lo = uv.floor();
+        let weight = ((uv - lo - egui::vec2(0.5, 0.5)) / footprint + egui::vec2(0.5, 0.5))
+            .clamp(egui::Vec2::ZERO, egui::Vec2::splat(1.));
+        let pixel = |dx: i32, dy: i32| {
+            let x = (lo.x as i32 + dx).clamp(0, self.size[0] as i32 - 1) as usize;
+            let y = (lo.y as i32 + dy).clamp(0, self.size[1] as i32 - 1) as usize;
+            let p = (y * self.size[0] as usize + x) * 4;
+            let rgba = &self.framework[p..p + 4];
+            if rgba[3] == 255 { rgba } else { nearest }
+        };
+        let [a, b, c, d] = [pixel(0, 0), pixel(1, 0), pixel(0, 1), pixel(1, 1)];
+        std::array::from_fn(|i| {
+            let top = f32::from(a[i]) * (1. - weight.x) + f32::from(b[i]) * weight.x;
+            let bottom = f32::from(c[i]) * (1. - weight.x) + f32::from(d[i]) * weight.x;
+            (top * (1. - weight.y) + bottom * weight.y).round() as u8
+        })
+    }
+}
 #[derive(Clone, PartialEq)]
 pub struct Draw {
     pub surface: usize,
@@ -829,9 +856,30 @@ impl VisualScene {
                     {
                         continue;
                     }
+                    let nearest = &rgba[src * 4..src * 4 + 4];
+                    let filtered;
+                    let color = if options.framework
+                        && d.layer == 0
+                        && !s.framework.is_empty()
+                        && nearest[3] == 255
+                        && scale.x > 1.
+                        && scale.y > 1.
+                    {
+                        filtered = s.framework_sample(
+                            egui::pos2(
+                                (x as f32 + 0.5) / scale.x + rect.left() - d.position[0],
+                                (y as f32 + 0.5) / scale.y + rect.top() - d.position[1],
+                            ),
+                            egui::vec2(1. / scale.x, 1. / scale.y),
+                            nearest,
+                        );
+                        &filtered
+                    } else {
+                        nearest
+                    };
                     blend(
                         &mut pixels[dst * 4..dst * 4 + 4],
-                        &rgba[src * 4..src * 4 + 4],
+                        color,
                         if options.lighting && !(options.framework && d.layer == 0) {
                             d.tint
                         } else {

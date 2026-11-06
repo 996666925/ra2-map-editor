@@ -655,3 +655,7 @@ mod tests {
 
 #[path = "world_checks.rs"]
 mod world_checks;
+
+#[cfg(test)]
+#[path = "framework_tests.rs"]
+mod framework_tests;

@@ -64,6 +64,7 @@ struct Instance {
     atlas: [u32; 2],
     base: i32,
     layer: u32,
+    /// RGB lighting tint; W marks surfaces with a framework material to filter.
     tint: [f32; 4],
 }
 #[repr(C)]
@@ -205,7 +206,12 @@ impl WorldGpu {
                 atlas,
                 base: d.base,
                 layer: d.layer,
-                tint: [d.tint[0], d.tint[1], d.tint[2], 0.],
+                tint: [
+                    d.tint[0],
+                    d.tint[1],
+                    d.tint[2],
+                    if s.framework.is_empty() { 0. } else { 1. },
+                ],
             });
             let pipe = if d.layer == 0 {
                 0
@@ -250,7 +256,16 @@ impl WorldGpu {
                         atlas,
                         base: d.base,
                         layer: d.layer,
-                        tint: [d.tint[0], d.tint[1], d.tint[2], 0.],
+                        tint: [
+                            d.tint[0],
+                            d.tint[1],
+                            d.tint[2],
+                            if scene.surfaces[d.surface].framework.is_empty() {
+                                0.
+                            } else {
+                                1.
+                            },
+                        ],
                     }
                 })
                 .collect(),
@@ -312,7 +327,16 @@ impl WorldGpu {
                 atlas,
                 base: d.base,
                 layer: d.layer,
-                tint: [d.tint[0], d.tint[1], d.tint[2], 0.],
+                tint: [
+                    d.tint[0],
+                    d.tint[1],
+                    d.tint[2],
+                    if scene.surfaces[d.surface].framework.is_empty() {
+                        0.
+                    } else {
+                        1.
+                    },
+                ],
             });
             batches.push(Batch {
                 page,
