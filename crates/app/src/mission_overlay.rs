@@ -1,5 +1,5 @@
-//! State-keyed authoring labels. Kept out of published previews and map bytes.
-use crate::i18n::tr;
+//! Authoring labels cached by document state and UI language, outside map bytes.
+use crate::i18n::{self, tr};
 use crate::{
     camera::MapCamera,
     document::{Cell, MapDocument},
@@ -9,7 +9,7 @@ use ra2_map_document::mission::{self, Kind};
 
 #[derive(Default)]
 pub(crate) struct MissionOverlay {
-    key: Option<(u64, u64)>,
+    key: Option<(u64, u64, i18n::Language)>,
     marks: Vec<Mark>,
 }
 struct Mark {
@@ -28,7 +28,8 @@ impl MissionOverlay {
         pointer: Option<egui::Pos2>,
         objects: bool,
     ) -> Option<(Kind, String)> {
-        if self.key != Some((doc.id, doc.state_id)) {
+        let key = (doc.id, doc.state_id, i18n::selected_language());
+        if self.key != Some(key) {
             self.marks.clear();
             for (_, id, value) in doc.ini_entries("CellTags") {
                 if let Some(at) = mission::cell_at(doc, &id) {
@@ -65,7 +66,7 @@ impl MissionOverlay {
                     });
                 }
             }
-            self.key = Some((doc.id, doc.state_id));
+            self.key = Some(key);
         }
         let world = camera.world_rect(rect);
         let mut hit = None;
@@ -117,6 +118,102 @@ mod tests {
         document::{Baseline, Target, Value},
         new_map::NewMapOptions,
     };
+
+    #[test]
+    fn labels_follow_language_switches_without_map_edits() {
+        use crate::i18n::{self, Language};
+
+        let bytes = NewMapOptions::default().bytes().unwrap();
+        let map = vera20k_core::map::map_file::load_from_bytes(bytes.clone()).unwrap();
+        let mut doc = MapDocument::new(Baseline::parse(bytes.into(), &map).unwrap());
+        doc.set_ini("CellTags", "80080", Some(b"CELL_{tag}".to_vec()))
+            .unwrap();
+        for (index, (section, type_id, column)) in [
+            ("Structures", "GAPOWR", 6),
+            ("Units", "HTNK", 7),
+            ("Infantry", "E1", 8),
+            ("Aircraft", "ORCA", 7),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = doc
+                .add_record(section, [82 + index as u16 * 2, 80], "Neutral", type_id)
+                .unwrap();
+            let record = doc.records()[&id]
+                .patched(&[(column, "OBJECT_{tag}".into())])
+                .unwrap();
+            doc.set(Target::Record(id), Some(Value::Record(record)))
+                .unwrap();
+        }
+        doc.commit("labels");
+        let before = doc.snapshot().bytes().unwrap();
+        let identity = (doc.id, doc.state_id, doc.saved_state);
+        let ctx = egui::Context::default();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800., 600.));
+        let (x, y) = vera20k_core::map::terrain::iso_to_screen(80, 80, 0);
+        let camera = MapCamera {
+            center: egui::pos2(x + 30., y + 15.),
+            zoom: 1.,
+        };
+        let mut overlay = MissionOverlay::default();
+        // Reuse one document and overlay across both cached frames and switches.
+        for language in [
+            Language::Chinese,
+            Language::Chinese,
+            Language::English,
+            Language::English,
+            Language::Chinese,
+            Language::English,
+            Language::Chinese,
+        ] {
+            i18n::select(&ctx, language);
+            let _language = i18n::enter(i18n::selected(&ctx));
+            let mut hit = None;
+            let output = crate::test_support::run_ui(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| {
+                    hit =
+                        overlay.draw(ui.painter(), &doc, rect, &camera, Some(rect.center()), true);
+                },
+            );
+            let mut labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            let mut expected = match language {
+                Language::Chinese => [
+                    "格子标签 CELL_{tag}",
+                    "建筑 0 · 标签 OBJECT_{tag}",
+                    "车辆 0 · 标签 OBJECT_{tag}",
+                    "步兵 0 · 标签 OBJECT_{tag}",
+                    "飞机 0 · 标签 OBJECT_{tag}",
+                ],
+                Language::English => [
+                    "Cell tag CELL_{tag}",
+                    "Buildings 0 · Tag OBJECT_{tag}",
+                    "Vehicles 0 · Tag OBJECT_{tag}",
+                    "Infantry 0 · Tag OBJECT_{tag}",
+                    "Aircraft 0 · Tag OBJECT_{tag}",
+                ],
+            };
+            labels.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(labels, expected, "{language:?}");
+            assert_eq!(hit, Some((Kind::CellTag, "80080".into())));
+            assert_eq!((doc.id, doc.state_id, doc.saved_state), identity);
+        }
+        assert_eq!(doc.snapshot().bytes().unwrap(), before);
+        assert_eq!(doc.undo_name(), Some("labels"));
+    }
 
     #[test]
     fn marker_hits_follow_pan_zoom_layer_visibility_and_history() {
