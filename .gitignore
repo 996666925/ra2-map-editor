@@ -22,6 +22,8 @@
 *.yr-editor-*.bak
 
 # Temporary files and operating system metadata
+__pycache__/
+*.pyc
 *.tmp
 *.swp
 *.swo
