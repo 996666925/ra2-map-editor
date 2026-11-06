@@ -925,6 +925,8 @@ impl MapView {
                         ui.label("地图名称");
                         ui.add(egui::TextEdit::singleline(&mut self.workbench.new_options.title).desired_width(f32::INFINITY)).accessible_name("地图名称");
                         let options = &mut self.workbench.new_options;
+                        ui.label("作者署名（可留空）");
+                        ui.add(egui::TextEdit::singleline(&mut options.author).desired_width(f32::INFINITY)).accessible_name("作者署名");
                         egui::Grid::new("new-map-fields").num_columns(2).spacing([20., 8.]).show(ui, |ui| {
                             ui.label("地图环境");
                             egui::ComboBox::from_id_salt("new-map-theater")

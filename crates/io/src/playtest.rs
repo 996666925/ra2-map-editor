@@ -156,7 +156,7 @@ impl PlayOptions {
         );
         let yes = |v| if v { "Yes" } else { "No" };
         let mut out = format!(
-            "[Settings]\nScenario=spawnmap.ini\nIsSinglePlayer=No\nGameMode=1\nSpecialHouseIsAlly=No\nPlayerCount=1\nAIPlayers={}\nSide={}\nColor={}\nGameSpeed={}\nSeed={}\nCredits={}\nUnitCount={}\nTechLevel={}\nBases=Yes\nSuperweapons={}\nCrates={}\nShortGame={}\n",
+            "[Settings]\nScenario=spawnmap.ini\nIsSinglePlayer=No\nGameMode=1\nSpecialHouseIsAlly=No\nPlayerCount=1\nAIPlayers={}\nSide={}\nColor={}\nGameSpeed={}\nSeed={}\nCredits={}\nUnitCount={}\nTechLevel={}\nBases={}\nSuperweapons={}\nCrates={}\nShortGame={}\n",
             self.ai,
             self.side,
             self.color,
@@ -165,6 +165,10 @@ impl PlayOptions {
             self.credits,
             self.units,
             self.tech,
+            yes(map
+                .ini
+                .section_or_empty("MultiplayerDialogSettings")
+                .read_bool("Bases", true)),
             yes(self.superweapons),
             yes(self.crates),
             yes(self.short_game)
@@ -198,6 +202,27 @@ impl PlayOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn map_starting_bases_are_forwarded_to_spawn() {
+        for setting in [
+            "",
+            "[MultiplayerDialogSettings]\nBases=no\n",
+            "[MultiplayerDialogSettings]\nBases=yes\n",
+        ] {
+            let mut bytes = ra2_map_document::new_map::NewMapOptions::default()
+                .bytes()
+                .unwrap();
+            bytes.extend_from_slice(setting.as_bytes());
+            let map = vera20k_core::map::map_file::load_from_bytes(bytes).unwrap();
+            let text = PlayOptions::default().spawn_ini(&map).unwrap();
+            let ini = vera20k_core::rules::ini_parser::IniFile::from_str(&text);
+            assert_eq!(
+                ini.section_or_empty("Settings").read_bool("Bases", true),
+                !setting.contains("Bases=no")
+            );
+        }
+    }
+
     #[test]
     fn thirty_player_spawn_writes_every_slot_and_reuses_only_stock_colors() {
         let bytes = ra2_map_document::new_map::NewMapOptions {

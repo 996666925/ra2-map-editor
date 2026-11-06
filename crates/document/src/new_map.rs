@@ -30,9 +30,19 @@ pub fn validate_title(title: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn validate_author(author: &str) -> Result<()> {
+    ensure!(author.trim().len() < 128, "作者署名最多 127 字节");
+    ensure!(
+        !author.chars().any(|c| c.is_control() || c == ';'),
+        "作者署名不能包含控制字符或分号"
+    );
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 pub struct NewMapOptions {
     pub title: String,
+    pub author: String,
     pub theater: String,
     pub width: u16,
     pub height: u16,
@@ -43,6 +53,7 @@ impl Default for NewMapOptions {
     fn default() -> Self {
         Self {
             title: "New Map".into(),
+            author: String::new(),
             theater: "TEMPERATE".into(),
             width: 80,
             height: 80,
@@ -58,6 +69,7 @@ impl NewMapOptions {
             "未知地图环境"
         );
         validate_title(&self.title)?;
+        validate_author(&self.author)?;
         ensure!(
             (MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).contains(&self.width)
                 && (MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).contains(&self.height),
@@ -100,12 +112,13 @@ impl NewMapOptions {
         );
         let mut out = format!(
             "; Created by YR Map Editor\r\n\
-             [Basic]\r\nName={}\r\nNewINIFormat=4\r\nMultiplayerOnly=yes\r\nMaxPlayers={}\r\n\
+             [Basic]\r\nName={}\r\nAuthor={}\r\nNewINIFormat=4\r\nMultiplayerOnly=yes\r\nMaxPlayers={}\r\n\
              [Map]\r\nTheater={}\r\nSize=0,0,{width},{height}\r\n\
              LocalSize=2,4,{},{}\r\nLevel={}\r\nFill=Clear\r\n\
              [Lighting]\r\nAmbient=1.000000\r\nRed=1.000000\r\nGreen=1.000000\r\nBlue=1.000000\r\n\
              [IsoMapPack5]\r\n",
             self.title.trim(),
+            self.author.trim(),
             self.players,
             self.theater,
             width - 4,

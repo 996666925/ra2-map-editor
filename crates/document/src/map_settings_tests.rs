@@ -528,3 +528,29 @@ fn legacy_radix_and_script_destination_overflow_are_not_silently_reinterpreted()
             .any(|a| a.blocking && a.source.starts_with("MOVE/"))
     );
 }
+
+#[test]
+fn author_and_starting_bases_roundtrip_and_undo() {
+    let mut doc = document();
+    let before = doc.snapshot().bytes().unwrap();
+    assert!(starting_bases(&doc));
+    set_author(&mut doc, "  中文作者  ").unwrap();
+    set_starting_bases(&mut doc, false).unwrap();
+    doc.commit("map identity");
+    let bytes = doc.snapshot().bytes().unwrap();
+    let map = map_file::load_from_bytes(bytes.clone()).unwrap();
+    let reopened = MapDocument::new(Baseline::parse(bytes.into(), &map).unwrap());
+    assert_eq!(reopened.ini_text("Basic", "Author"), "中文作者");
+    assert!(!starting_bases(&reopened));
+    assert!(set_author(&mut doc, "bad;author").is_err());
+    doc.undo();
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    let options = NewMapOptions {
+        author: "新建作者".into(),
+        ..Default::default()
+    };
+    let bytes = options.bytes().unwrap();
+    let map = map_file::load_from_bytes(bytes.clone()).unwrap();
+    let created = MapDocument::new(Baseline::parse(bytes.into(), &map).unwrap());
+    assert_eq!(created.ini_text("Basic", "Author"), "新建作者");
+}

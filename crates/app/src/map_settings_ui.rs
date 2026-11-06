@@ -22,6 +22,10 @@ pub(crate) struct MapSettingsUi {
     original_crates: Option<ra2_map_document::crate_settings::Draft>,
     name: Option<String>,
     original_name: Option<String>,
+    author: String,
+    original_author: String,
+    bases: bool,
+    original_bases: bool,
     players: u8,
     original_players: u8,
     pub profile: Profile,
@@ -58,13 +62,15 @@ impl MapSettingsUi {
             || self.light != self.original_light
             || self.crates != self.original_crates
             || self.name != self.original_name
+            || self.author != self.original_author
+            || self.bases != self.original_bases
             || self.players != self.original_players
     }
     pub fn allow_leave(&mut self) -> bool {
         if self.dirty() {
             self.open = true;
             self.message =
-                "请完成或取消地图名称、出生点、光照、箱子设置输入；尺寸修改需检查预览并应用，或放弃尺寸修改。".into();
+                "请完成或取消地图名称、署名、基地车、出生点、光照、箱子设置输入；尺寸修改需检查预览并应用，或放弃尺寸修改。".into();
             false
         } else {
             true
@@ -80,6 +86,10 @@ impl MapSettingsUi {
         self.original_crates = self.crates.clone();
         self.name = Some(doc.ini_text("Basic", "Name"));
         self.original_name = self.name.clone();
+        self.author = doc.ini_text("Basic", "Author");
+        self.original_author = self.author.clone();
+        self.bases = map_settings::starting_bases(doc);
+        self.original_bases = self.bases;
         self.players = ra2_map_document::player_starts::from_document(doc)
             .len()
             .clamp(2, 30) as u8;
@@ -119,6 +129,8 @@ impl MapSettingsUi {
             && self.light != self.original_light
             && self.options == self.original
             && self.crates == self.original_crates
+            && self.author == self.original_author
+            && self.bases == self.original_bases
             && self.name == self.original_name
             && self.players == self.original_players
             && !editor.stroking
@@ -151,6 +163,8 @@ impl MapSettingsUi {
             && self.crates != self.original_crates
             && self.options == self.original
             && self.light == self.original_light
+            && self.author == self.original_author
+            && self.bases == self.original_bases
             && self.name == self.original_name
             && self.players == self.original_players
             && !editor.stroking
@@ -185,7 +199,10 @@ impl MapSettingsUi {
         }
         if self.info_editing
             && self.tab == 3
-            && (self.name != self.original_name || self.players != self.original_players)
+            && (self.name != self.original_name
+                || self.players != self.original_players
+                || self.author != self.original_author
+                || self.bases != self.original_bases)
             && self.options == self.original
             && self.light == self.original_light
             && self.crates == self.original_crates
@@ -205,6 +222,12 @@ impl MapSettingsUi {
                     if self.name != self.original_name {
                         map_settings::rename(doc, self.name.as_deref().unwrap())?;
                     }
+                    if self.author != self.original_author {
+                        map_settings::set_author(doc, &self.author)?;
+                    }
+                    if self.bases != self.original_bases {
+                        map_settings::set_starting_bases(doc, self.bases)?;
+                    }
                     if self.players != self.original_players {
                         ra2_map_document::player_starts::set_count(doc, self.players)?;
                     }
@@ -218,6 +241,9 @@ impl MapSettingsUi {
                     self.identity = Some((doc.id, doc.state_id));
                     self.name = Some(doc.ini_text("Basic", "Name"));
                     self.original_name = self.name.clone();
+                    self.author = doc.ini_text("Basic", "Author");
+                    self.original_author = self.author.clone();
+                    self.original_bases = self.bases;
                     self.original_players = self.players;
                     self.info_editing = false;
                     self.message = "地图信息已自动生效，可撤销。".into();
@@ -255,6 +281,8 @@ impl MapSettingsUi {
         let light_before = self.light.clone();
         let crates_before = self.crates.clone();
         let name_before = self.name.clone();
+        let author_before = self.author.clone();
+        let bases_before = self.bases;
         let players_before = self.players;
         if let Some(rx) = &self.worker {
             match rx.try_recv() {
@@ -344,6 +372,11 @@ impl MapSettingsUi {
                     ui.small("修改地图显示名称，支持中文；按回车或移开焦点后自动生效，可撤销。Ctrl+S 保存地图。");
                     if let Err(error)=ra2_map_document::new_map::validate_title(name){ui.colored_label(egui::Color32::LIGHT_RED,error.to_string());}
                     ui.separator();
+                    ui.label("作者署名（可留空）");
+                    changed|=ui.add(egui::TextEdit::singleline(&mut self.author).desired_width(f32::INFINITY)).accessible_name("作者署名").changed();
+                    if let Err(error)=ra2_map_document::new_map::validate_author(&self.author){ui.colored_label(egui::Color32::LIGHT_RED,error.to_string());}
+                    changed|=ui.checkbox(&mut self.bases,"开局有基地车").changed();
+                    ui.small("遭遇战开局基地设置；启动器或房间设置可能覆盖此选项，不影响地图中手动放置的单位。");
                     ui.label("出生点数量");
                     changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut self.players).range(2..=ra2_map_document::new_map::MAX_PLAYERS),"出生点数量").changed();
                     ui.small("支持 2～30 个出生点，对应从 0 开始的连续航点。增加时补齐缺少的航点，保留已有位置；减少时删除多余出生点，其他任务航点保留。");
@@ -404,7 +437,11 @@ impl MapSettingsUi {
         if self.crates != crates_before {
             self.crates_editing = true;
         }
-        if self.name != name_before || self.players != players_before {
+        if self.name != name_before
+            || self.players != players_before
+            || self.author != author_before
+            || self.bases != bases_before
+        {
             self.info_editing = true;
         }
         self.finish_edits(ctx, editor, scene);

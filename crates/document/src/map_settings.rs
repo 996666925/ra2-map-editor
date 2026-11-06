@@ -23,6 +23,33 @@ pub fn rename(doc: &mut MapDocument, title: &str) -> Result<()> {
     doc.set_ini("Basic", "Name", Some(title.trim().as_bytes().to_vec()))
 }
 
+pub fn set_author(doc: &mut MapDocument, author: &str) -> Result<()> {
+    crate::new_map::validate_author(author)?;
+    doc.set_ini("Basic", "Author", Some(author.trim().as_bytes().to_vec()))
+}
+
+pub fn starting_bases(doc: &MapDocument) -> bool {
+    !matches!(
+        doc.ini_text("MultiplayerDialogSettings", "Bases")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "no" | "false" | "0"
+    )
+}
+
+pub fn set_starting_bases(doc: &mut MapDocument, enabled: bool) -> Result<()> {
+    doc.set_ini(
+        "MultiplayerDialogSettings",
+        "Bases",
+        Some(if enabled {
+            b"yes".to_vec()
+        } else {
+            b"no".to_vec()
+        }),
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Options {
     pub width: u16,
