@@ -537,7 +537,7 @@ impl Editor {
         let ask = as_new || self.target.is_none();
         let path = if ask {
             rfd::FileDialog::new()
-                .add_filter("YR 地图", &["map", "yrm"])
+                .add_filter("YR 地图", &["yrm", "map"])
                 .set_file_name(
                     self.target
                         .as_ref()

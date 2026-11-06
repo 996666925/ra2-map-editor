@@ -176,7 +176,7 @@ impl MapView {
             self.leave_after_save = false;
             return;
         }
-        self.load_now(directory, "Untitled.map".into(), Some(options));
+        self.load_now(directory, "Untitled.yrm".into(), Some(options));
     }
     fn open_now(&mut self, directory: PathBuf, name: String) {
         self.load_now(directory, name, None);
@@ -937,7 +937,7 @@ impl MapView {
         match action {
             Leave::Open(directory, name) => self.open_now(directory, name),
             Leave::New(directory, options) => {
-                self.load_now(directory, "Untitled.map".into(), Some(options))
+                self.load_now(directory, "Untitled.yrm".into(), Some(options))
             }
             Leave::Close => {
                 self.allow_close = true;

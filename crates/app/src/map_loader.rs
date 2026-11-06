@@ -224,7 +224,7 @@ impl MapLoader {
             .send(MapRequest {
                 generation,
                 directory,
-                name: "Untitled.map".into(),
+                name: "Untitled.yrm".into(),
                 snapshot: None,
                 new_map: Some(options),
                 profile: Default::default(),
