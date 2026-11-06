@@ -46,6 +46,7 @@ pub struct LoadTimings {
     pub pipelines_reused: bool,
     pub incremental_scene: bool,
     pub incremental_gpu: bool,
+    pub visual_reused: bool,
     pub uploaded_instance_bytes: usize,
 }
 pub struct LoadProgress {
@@ -130,7 +131,11 @@ impl MapLoader {
                             let incremental = if let Some((old,before,old_profile))=&previous {
                                 if *old_profile==profile {ra2_map_scene::work::update_records(old,before,&snapshot,install,profile,&cancelled)?} else {None}
                             } else {None};
-                            if let Some(scene)=incremental {timings.incremental_scene=true;scene} else {
+                            if let Some(scene)=incremental {
+                                timings.incremental_scene=true;
+                                timings.visual_reused=previous.as_ref().is_some_and(|(old,_,_)|Arc::ptr_eq(&old.visual,&scene.visual));
+                                scene
+                            } else {
                                 ra2_map_scene::map::load_scene_bytes_controlled(install,&name,"编辑快照".into(),snapshot.bytes()?,Instant::now(),profile,&cancelled)?
                             }
                         }else{load_scene_controlled(install, &name,&cancelled)?};
@@ -142,9 +147,13 @@ impl MapLoader {
                     if current.load(Ordering::Acquire) != generation {continue;}
                     let prepared = result.as_ref().ok().filter(|scene|!scene.images.is_empty()).and_then(|scene| {
                         let state = gpu.as_ref()?;
+                        timings.pipelines_reused = pipelines.is_some();
+                        if timings.visual_reused && let Some(gpu)=&previous_gpu {
+                            timings.incremental_gpu=true;
+                            return Some(Ok(gpu.clone()));
+                        }
                         stage("准备地形图集与 GPU 管线…");
                         let preparing = Instant::now();
-                        timings.pipelines_reused = pipelines.is_some();
                         let updated = previous_gpu.as_ref().filter(|_|timings.incremental_scene).and_then(|gpu|gpu.updated_records(&state.device,&state.queue,scene));
                         let prepared = if let Some(gpu)=updated {
                             timings.incremental_gpu=true; Ok(gpu)

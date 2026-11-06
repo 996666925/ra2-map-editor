@@ -709,6 +709,15 @@ impl Editor {
                 doc.undo_name()
             }
             .map(str::to_owned);
+            let spatial = doc
+                .pending_targets()
+                .chain(doc.history_targets(redo))
+                .any(|target| {
+                    matches!(
+                        target,
+                        Target::Record(_) | Target::Terrain(_) | Target::Overlay(_)
+                    )
+                });
             let baseline = doc.base.clone();
             let changed = if redo { doc.redo() } else { doc.undo() };
             let structural = !Arc::ptr_eq(&baseline, &doc.base);
@@ -716,7 +725,7 @@ impl Editor {
                 if structural {
                     self.structural_changed(scene);
                 } else {
-                    self.changed(scene);
+                    self.changed(scene, spatial);
                 }
                 self.select(self.selected);
                 self.status = tr!(
@@ -732,10 +741,12 @@ impl Editor {
             }
         }
     }
-    fn changed(&mut self, scene: &MapScene) {
+    fn changed(&mut self, scene: &MapScene, spatial: bool) {
         self.refresh = true;
         self.last_edit = Instant::now();
-        self.cache(scene);
+        if spatial {
+            self.cache(scene);
+        }
     }
     pub(crate) fn structural_changed(&mut self, scene: &MapScene) {
         self.structural_refresh = true;
@@ -744,13 +755,19 @@ impl Editor {
         self.fill.cancel();
         self.object_brush.cancel();
         self.select(None);
-        self.changed(scene);
+        self.changed(scene, true);
     }
     pub fn commit(&mut self, scene: &MapScene, name: &str) {
-        if let Some(doc) = &mut self.doc
-            && doc.commit(name)
-        {
-            self.changed(scene);
+        if let Some(doc) = &mut self.doc {
+            let spatial = doc.pending_targets().any(|target| {
+                matches!(
+                    target,
+                    Target::Record(_) | Target::Terrain(_) | Target::Overlay(_)
+                )
+            });
+            if doc.commit(name) {
+                self.changed(scene, spatial);
+            }
         }
     }
     fn delete(&mut self, scene: &MapScene) {

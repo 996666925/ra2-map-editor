@@ -101,7 +101,7 @@ pub struct VisualScene {
     surface_cache: HashMap<String, usize>,
     terrain_cache: HashMap<(vera20k_core::map::theater::TileKey, u8), usize>,
     light: Option<Arc<lighting::CellLightGrid>>,
-    profile: Option<ra2_map_document::lighting::Profile>,
+    pub(crate) profile: Option<ra2_map_document::lighting::Profile>,
     static_draws: usize,
     records: HashMap<
         u64,
@@ -135,8 +135,8 @@ impl VisualScene {
         Self::build_cached(scene, install, resolved, profile, None, &|| false)
             .expect("uncancelled scene build")
     }
-    /// `previous` is valid only for record-only changes with identical terrain,
-    /// INI, resources and lighting profile (enforced by work::update_records).
+    /// `previous` requires identical terrain, visual INI, resources and lighting
+    /// profile, enforced by work::update_records. Mission-only INI may differ.
     pub(crate) fn build_cached(
         scene: &MapScene,
         install: &Install,

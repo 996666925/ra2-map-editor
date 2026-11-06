@@ -370,13 +370,20 @@ impl MapView {
                         self.center = scene.bounds.center();
                         self.fit = true;
                     }
-                    self.reset_overview();
+                    let visual_reused = self
+                        .scene
+                        .as_ref()
+                        .is_some_and(|old| Arc::ptr_eq(&old.visual, &scene.visual));
+                    if !visual_reused {
+                        self.reset_overview();
+                    }
                     match message.gpu {
                         Some(Ok(gpu)) => {
-                            // Targets bind the scene's atlases and instance buffers,
-                            // not just its viewport size. Rebind after every load,
-                            // edit, undo or redo, even when the canvas stays the same size.
-                            self.target = None;
+                            // Rebind when atlases/instances change. Mission-only
+                            // edits retain the same GPU and its viewport target.
+                            if self.gpu.as_ref().is_none_or(|old| !Arc::ptr_eq(old, &gpu)) {
+                                self.target = None;
+                            }
                             self.gpu = Some(gpu);
                         }
                         Some(Err(e)) => {
@@ -414,7 +421,9 @@ impl MapView {
                         if let Some(doc) = &mut self.editor.doc {
                             doc.resource_profile = Some(scene.revision.id());
                         }
-                        self.editor.cache(&scene);
+                        if !visual_reused {
+                            self.editor.cache(&scene);
+                        }
                     }
                     self.editor.structural_refresh = false;
                     self.scene = Some(scene);

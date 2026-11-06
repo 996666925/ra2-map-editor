@@ -51,6 +51,95 @@ fn view() -> (MapView, PathBuf) {
     (view, root)
 }
 
+#[test]
+#[ignore = "requires a GPU adapter; uses synthetic assets only"]
+fn mission_refresh_preserves_gpu_and_viewport_bindings_through_history() {
+    struct Wake(std::thread::Thread);
+    impl std::task::Wake for Wake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let waker = std::task::Waker::from(Arc::new(Wake(std::thread::current())));
+    let mut context = std::task::Context::from_waker(&waker);
+    let config = egui_wgpu::WgpuConfiguration::default();
+    let mut future = std::pin::pin!(egui_wgpu::RenderState::create(
+        &config,
+        &instance,
+        None,
+        Default::default()
+    ));
+    let state = loop {
+        match std::future::Future::poll(future.as_mut(), &mut context) {
+            std::task::Poll::Ready(result) => break result.expect("GPU adapter"),
+            std::task::Poll::Pending => std::thread::park(),
+        }
+    };
+    let fixture = crate::test_support::map_loader_fixture();
+    let path = fixture.0.join("gpu.map");
+    std::fs::write(
+        &path,
+        crate::new_map::NewMapOptions {
+            width: 20,
+            height: 20,
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap(),
+    )
+    .unwrap();
+    let ctx = egui::Context::default();
+    let (mut view, root) = view();
+    view.loader = MapLoader::with_gpu(ctx.clone(), state.clone()).unwrap();
+    view.open_now(fixture.0.clone(), path.to_string_lossy().into_owned());
+    let wait = |view: &mut MapView| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while view.loading || view.editor.refresh {
+            view.poll(&ctx);
+            assert!(Instant::now() < deadline, "preview worker timed out");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(view.error.is_none(), "{:?}", view.error);
+    };
+    wait(&mut view);
+    let gpu = view.gpu.as_ref().unwrap().clone();
+    let target = gpu.target(&state.device, [128, 128]);
+    view.target = Some(target.clone());
+    view.editor
+        .doc
+        .as_mut()
+        .unwrap()
+        .set_ini("Events", "TRIGGER", Some(b"1,13,0,2".to_vec()))
+        .unwrap();
+    view.editor.commit(view.scene.as_ref().unwrap(), "event");
+    for action in 0..3 {
+        if action > 0 {
+            view.editor
+                .history(action == 2, view.scene.as_ref().unwrap());
+        }
+        wait(&mut view);
+        assert!(view.timings.visual_reused);
+        assert_eq!(view.timings.uploaded_instance_bytes, 0);
+        assert_eq!(view.timings.gpu_prepare_ms, 0.);
+        assert!(Arc::ptr_eq(view.gpu.as_ref().unwrap(), &gpu));
+        assert!(Arc::ptr_eq(view.target.as_ref().unwrap(), &target));
+    }
+    view.editor
+        .doc
+        .as_mut()
+        .unwrap()
+        .set_ini("Lighting", "Ambient", Some(b"0.5".to_vec()))
+        .unwrap();
+    view.editor.commit(view.scene.as_ref().unwrap(), "lighting");
+    wait(&mut view);
+    assert!(!view.timings.visual_reused);
+    assert!(!Arc::ptr_eq(view.gpu.as_ref().unwrap(), &gpu));
+    assert!(view.target.is_none());
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn flat_authoring_view() -> (MapView, MapScene, PathBuf) {
     let (mut view, root) = view();
     let fixture = ra2_map_assets::test_support::Fixture::with_authoring();

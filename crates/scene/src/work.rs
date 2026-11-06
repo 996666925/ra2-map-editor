@@ -1,4 +1,4 @@
-//! Cooperative cancellation and safe record-only scene updates.
+//! Cooperative cancellation and conservative scene updates from snapshot changes.
 use crate::map::MapScene;
 use anyhow::{Result, ensure};
 use ra2_map_assets::assets::Install;
@@ -8,14 +8,15 @@ use ra2_map_document::{
     source::SourceMap,
 };
 use std::sync::Arc;
+use vera20k_core::rules::ini_parser::IniFile;
 
 pub fn checkpoint(cancelled: &dyn Fn() -> bool) -> Result<()> {
     ensure!(!cancelled(), "operation cancelled");
     Ok(())
 }
 
-/// Terrain/INI/overlay changes use native resolution. Record-only edits retain
-/// the authoritative resolved terrain and decoded images/materials.
+/// Known mission fields retain the complete visual scene. Record edits retain
+/// resolved terrain/materials; unknown INI, terrain and overlay edits fall back.
 pub fn update_records(
     old: &MapScene,
     before: &Snapshot,
@@ -27,31 +28,59 @@ pub fn update_records(
     if !Arc::ptr_eq(&before.base, &after.base)
         || old.revision != install.revision
         || old.resolved.is_none()
+        || old.visual.profile != Some(profile)
     {
         return Ok(None);
     }
-    let mut targets = std::collections::BTreeSet::new();
-    targets.extend(before.changes.keys());
-    targets.extend(after.changes.keys());
-    if targets.iter().any(|key| {
-        before.changes.get(key) != after.changes.get(key) && !matches!(key, Target::Record(_))
-    }) {
+    let Some(targets) = after.changed_targets_since(before) else {
+        return Ok(None);
+    };
+    let targets: Vec<_> = targets.collect();
+    if targets
+        .iter()
+        .any(|key| matches!(key, Target::Terrain(_) | Target::Overlay(_)))
+    {
         return Ok(None);
     }
     checkpoint(cancelled)?;
     let started = std::time::Instant::now();
-    let (source, _) = SourceMap::parse(old.source.name.clone(), "编辑快照".into(), after.bytes()?)?;
+    let bytes = after.bytes()?;
+    if targets.iter().any(|key| !matches!(key, Target::Record(_))) {
+        let previous_ini = IniFile::from_bytes(old.source.bytes())?;
+        let next_ini = IniFile::from_bytes(&bytes)?;
+        let fields = crate::scene_changes::MissionFields::new(
+            &previous_ini,
+            &next_ini,
+            &old.catalog,
+            &install.catalog,
+        );
+        if targets.iter().any(|target| {
+            !matches!(target, Target::Record(_))
+                && !after
+                    .ini_target(target)
+                    .is_some_and(|(section, key)| fields.contains(section, key))
+        }) {
+            return Ok(None);
+        }
+    }
+    let (source, _) = SourceMap::parse(old.source.name.clone(), "编辑快照".into(), bytes)?;
     checkpoint(cancelled)?;
     let mut scene = old.clone();
     scene.source = source;
-    scene.visual = Arc::new(crate::visual::VisualScene::build_cached(
-        &scene,
-        install,
-        old.resolved.as_ref().unwrap(),
-        profile,
-        Some(&old.visual),
-        cancelled,
-    )?);
+    if targets.iter().any(|key| matches!(key, Target::Record(_))) {
+        scene.visual = Arc::new(crate::visual::VisualScene::build_cached(
+            &scene,
+            install,
+            old.resolved.as_ref().unwrap(),
+            profile,
+            Some(&old.visual),
+            cancelled,
+        )?);
+    }
     scene.elapsed_ms = started.elapsed().as_millis();
     Ok(Some(scene))
 }
+
+#[cfg(test)]
+#[path = "work_tests.rs"]
+mod tests;

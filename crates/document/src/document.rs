@@ -284,6 +284,40 @@ pub struct Snapshot {
     pub state_id: u64,
 }
 impl Snapshot {
+    /// Actual differences between two states of the same immutable baseline.
+    /// Includes removals when undo returns a target to its original value.
+    pub fn changed_targets_since<'a>(
+        &'a self,
+        before: &'a Self,
+    ) -> Option<impl Iterator<Item = &'a Target>> {
+        if !Arc::ptr_eq(&self.base, &before.base) {
+            return None;
+        }
+        Some(
+            self.changes
+                .keys()
+                .chain(
+                    before
+                        .changes
+                        .keys()
+                        .filter(|target| !self.changes.contains_key(*target)),
+                )
+                .filter(|target| self.changes.get(*target) != before.changes.get(*target)),
+        )
+    }
+
+    /// Resolve a physical or newly authored INI target without parsing map packs.
+    pub fn ini_target<'a>(&'a self, target: &'a Target) -> Option<(&'a str, &'a str)> {
+        match target {
+            Target::IniLine(index) => {
+                let line = self.base.raw.lines.get(*index)?;
+                Some((&line.section, line.key.as_deref()?))
+            }
+            Target::IniNew(section, key) => Some((section, key)),
+            _ => None,
+        }
+    }
+
     pub fn bytes(&self) -> Result<Vec<u8>> {
         if self.changes.is_empty() {
             return Ok(self.base.raw.bytes.to_vec());
@@ -770,6 +804,20 @@ impl MapDocument {
     }
     pub fn dirty(&self) -> bool {
         self.saved_state != Some(self.state_id) || !self.pending.is_empty()
+    }
+    pub fn pending_targets(&self) -> impl Iterator<Item = &Target> {
+        self.pending.keys()
+    }
+    /// Inspect before undo/redo. Structural replacements also change the baseline.
+    pub fn history_targets(&self, redo: bool) -> impl Iterator<Item = &Target> {
+        let transaction = if redo {
+            self.redo.last()
+        } else {
+            self.undo.back()
+        };
+        transaction
+            .into_iter()
+            .flat_map(|transaction| transaction.changes.keys())
     }
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {

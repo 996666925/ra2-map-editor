@@ -17,5 +17,6 @@ pub mod visual;
 #[cfg(test)]
 mod joining_tests;
 mod mission_catalog;
+mod scene_changes;
 
 pub mod work;

@@ -49,6 +49,18 @@ cargo run --locked -p ra2-map-document --example record_allocation_audit
 
 输出 CSV，每种规模取 7 次中位数。每次从同一文档 fork，计时只包含 `add_record`，不含地图准备、fork、连刷占用检查和渲染。对比时使用相同构建配置；默认开发配置的结果不代表发布版本或完整界面性能。
 
+## 编辑后的场景刷新
+
+文档提供事务目标与快照差异，普通任务段、已注册脚本/特遣部队/小队的已知字段，以及地图标题和作者等元数据可复用静态视觉场景。后台仍更新地图原文快照，保持标题、导出与编辑数据一致；GPU 实例、图集和视口绑定一并复用，诊断和任务标签按文档版本更新。仅 INI 的提交、撤销和重做不重建对象、小地图等空间缓存。
+
+对象记录继续使用增量更新。地形、覆盖物、光照、House/国家、玩家/会话模式、规则、资源变化和未知扩展继续完整刷新；任务 ID 与类型、House 或安装规则段同名时也保守回退。光照预览配置变化不会复用旧视觉场景。
+
+`LoadTimings.visual_reused` 标记完整视觉场景复用；此路径的 GPU 准备耗时和实例上传字节均为零。CPU 回归覆盖快照差异、撤销/重做、混合修改、资源刷新以及与完整重建的像素比较。以下测试另需本机 GPU，只使用合成资源，核对实际 GPU 和视口对象在任务编辑及历史操作间保持一致，光照编辑则重新绑定：
+
+```powershell
+cargo test --locked --workspace --lib mission_refresh_preserves_gpu_and_viewport_bindings_through_history -- --ignored
+```
+
 ## UI 交互录像
 
 补全与表单快捷键的 `egui_kittest` 测试包含控件名称检查和缺字检查。安装 `ffmpeg` 并加入 PATH 后，可选择录制补全交互过程，MP4 写入 `target/ui-tests/recordings/`：

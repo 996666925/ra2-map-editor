@@ -10,6 +10,56 @@ use vera20k_core::{
 
 use crate::test_support::{document, fixture};
 
+#[test]
+fn snapshot_target_differences_follow_ini_edits_and_history() {
+    let mut doc = document();
+    let original = doc.snapshot();
+    let target = doc.ini_entries("Unknown")[0].0.clone();
+    doc.set(target.clone(), Some(Value::Ini(b"changed".to_vec())))
+        .unwrap();
+    doc.set_ini("Events", "TRIGGER", Some(b"1,13,0,2".to_vec()))
+        .unwrap();
+    let pending: Vec<_> = doc.pending_targets().cloned().collect();
+    assert_eq!(pending.len(), 2);
+    assert!(doc.commit("INI edit"));
+    let after = doc.snapshot();
+    let changes: Vec<_> = after.changed_targets_since(&original).unwrap().collect();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(after.ini_target(&target), Some(("Unknown", "A")));
+    assert!(
+        changes
+            .iter()
+            .any(|target| after.ini_target(target) == Some(("Events", "TRIGGER")))
+    );
+    assert_eq!(
+        doc.history_targets(false).cloned().collect::<Vec<_>>(),
+        pending
+    );
+    assert!(doc.undo());
+    assert_eq!(
+        doc.snapshot()
+            .changed_targets_since(&after)
+            .unwrap()
+            .count(),
+        2
+    );
+    assert_eq!(
+        doc.history_targets(true).cloned().collect::<Vec<_>>(),
+        pending
+    );
+    assert!(doc.redo());
+    assert_eq!(
+        doc.snapshot()
+            .changed_targets_since(&after)
+            .unwrap()
+            .count(),
+        0
+    );
+    let map = map_file::load_from_bytes(after.bytes().unwrap()).unwrap();
+    let reopened = MapDocument::new(Baseline::parse(after.bytes().unwrap().into(), &map).unwrap());
+    assert!(reopened.snapshot().changed_targets_since(&after).is_none());
+}
+
 fn numbered_document(section: &str, keys: &[&str]) -> MapDocument {
     let mut bytes = fixture();
     bytes.extend_from_slice(format!("\r\n[{section}]\r\n").as_bytes());

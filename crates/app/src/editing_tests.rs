@@ -2,6 +2,55 @@ use super::*;
 use ra2_map_document::test_support::{document, fixture};
 
 #[test]
+fn ini_commits_and_history_keep_spatial_caches_until_the_scene_changes() {
+    let (mut editor, ctx, root) = editor();
+    let scene = terrain_scene();
+    editor.attach(&scene);
+    let revision = editor.visual_revision;
+    editor
+        .doc
+        .as_mut()
+        .unwrap()
+        .set_ini("Events", "TRIGGER", Some(b"1,13,0,2".to_vec()))
+        .unwrap();
+    editor.commit(&scene, "event");
+    assert!(editor.refresh);
+    assert_eq!(editor.visual_revision, revision);
+    editor.refresh = false;
+    editor.history(false, &scene);
+    assert!(editor.refresh);
+    assert_eq!(editor.visual_revision, revision);
+    assert!(
+        editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .ini_value("Events", "TRIGGER")
+            .is_none()
+    );
+    editor.history(true, &scene);
+    assert_eq!(editor.visual_revision, revision);
+    assert_eq!(
+        editor.doc.as_ref().unwrap().ini_text("Events", "TRIGGER"),
+        "1,13,0,2"
+    );
+    editor
+        .doc
+        .as_mut()
+        .unwrap()
+        .add_record("Units", [20, 20], "Neutral", "HTNK")
+        .unwrap();
+    editor.commit(&scene, "unit");
+    assert!(editor.visual_revision > revision);
+    let revision = editor.visual_revision;
+    editor.history(false, &scene);
+    assert!(editor.visual_revision > revision);
+    drop(editor);
+    drop(ctx);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn navigator_pixels_match_embedded_preview_at_the_same_size() {
     let (mut editor, ctx, _root) = editor();
     let scene = terrain_scene();
