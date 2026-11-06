@@ -728,113 +728,213 @@ fn joining_ramps_protects_objects_overlays_and_incomplete_end_caps() {
 
 #[test]
 fn probe_continuation_from_every_ramp_subtile() {
-    let (mut doc,scene)=setup();
-    cliff_tools::plan(&doc,&scene,cliff_tools::rectangle([35,35],[65,65]),4)
-        .unwrap().apply(&mut doc).unwrap();
+    let (mut doc, scene) = setup();
+    cliff_tools::plan(&doc, &scene, cliff_tools::rectangle([35, 35], [65, 65]), 4)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
     doc.commit("plateau");
-    let mut failed=Vec::new();
-    for (start,end) in [([35,35],[35,35]),([65,35],[65,35]),([35,65],[35,65]),([65,65],[65,65]),
-        ([50,35],[50,35]),([50,65],[50,65]),([35,50],[35,50]),([65,50],[65,50])] {
-      let p=ramp(&doc,&scene,start,end,4).unwrap();
-      p.apply(&mut doc).unwrap();doc.commit("entrance");
-      for &at in p.edits.keys() {
-        let v=value(&doc,&scene,at);
-        let id=scene.palette.raw_ids[&v.tile];
-        let shape=scene.palette.templates[&(id,0)].cells[usize::from(v.sub)].unwrap();
-        if shape.slope==0 {continue;}
-        let base=infer_base(&doc,&scene,at);
-        if ramp(&doc,&scene,at,at,base).is_err() {failed.push((start,at,base,id,v.sub));}
-      }
-      doc.undo();
+    let mut failed = Vec::new();
+    for (start, end) in [
+        ([35, 35], [35, 35]),
+        ([65, 35], [65, 35]),
+        ([35, 65], [35, 65]),
+        ([65, 65], [65, 65]),
+        ([50, 35], [50, 35]),
+        ([50, 65], [50, 65]),
+        ([35, 50], [35, 50]),
+        ([65, 50], [65, 50]),
+    ] {
+        let p = ramp(&doc, &scene, start, end, 4).unwrap();
+        p.apply(&mut doc).unwrap();
+        doc.commit("entrance");
+        for &at in p.edits.keys() {
+            let v = value(&doc, &scene, at);
+            let id = scene.palette.raw_ids[&v.tile];
+            let shape = scene.palette.templates[&(id, 0)].cells[usize::from(v.sub)].unwrap();
+            if shape.slope == 0 {
+                continue;
+            }
+            let base = infer_base(&doc, &scene, at);
+            if ramp(&doc, &scene, at, at, base).is_err() {
+                failed.push((start, at, base, id, v.sub));
+            }
+        }
+        doc.undo();
     }
-    assert!(failed.is_empty(),"unhandled slope cells: {failed:?}");
+    assert!(failed.is_empty(), "unhandled slope cells: {failed:?}");
 }
 
 #[test]
 fn probe_drag_from_every_end_cap_subtile() {
-    let (mut doc,scene)=setup();
-    cliff_tools::plan(&doc,&scene,cliff_tools::rectangle([35,35],[65,65]),4)
-        .unwrap().apply(&mut doc).unwrap();
+    let (mut doc, scene) = setup();
+    cliff_tools::plan(&doc, &scene, cliff_tools::rectangle([35, 35], [65, 65]), 4)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
     doc.commit("plateau");
-    let ids=scene.palette.tile_ids.unwrap();
-    let mut failed=Vec::new();let mut passed=0;
-    for start in [[35,35],[65,35],[35,65],[65,65]] {
-      let p=ramp(&doc,&scene,start,start,4).unwrap();
-      p.apply(&mut doc).unwrap();doc.commit("entrance");
-      for (&at,&v) in &p.edits {
-        let id=scene.palette.raw_ids[&v.tile];
-        let index=i32::from(id)-ids.slope_set_pieces;
-        if !(0..10).contains(&index) {continue;}
-        let axis=if index<=1 || (4..=6).contains(&index) {0} else {1};
-        for sign in [-1,1] {
-          let end=offset(at,if axis==0 {sign*4}else{0},if axis==1 {sign*4}else{0}).unwrap();
-          match ramp(&doc,&scene,at,end,infer_base(&doc,&scene,at)) {
-            Ok(_)=>passed+=1,
-            Err(e)=>failed.push(format!("corner={start:?}, at={at:?}, end={end:?}, cap={index}, sub={}: {e:#}",v.sub))
-          }
+    let ids = scene.palette.tile_ids.unwrap();
+    let mut failed = Vec::new();
+    let mut passed = 0;
+    for start in [[35, 35], [65, 35], [35, 65], [65, 65]] {
+        let p = ramp(&doc, &scene, start, start, 4).unwrap();
+        p.apply(&mut doc).unwrap();
+        doc.commit("entrance");
+        for (&at, &v) in &p.edits {
+            let id = scene.palette.raw_ids[&v.tile];
+            let index = i32::from(id) - ids.slope_set_pieces;
+            if !(0..10).contains(&index) {
+                continue;
+            }
+            let axis = if index <= 1 || (4..=6).contains(&index) {
+                0
+            } else {
+                1
+            };
+            for sign in [-1, 1] {
+                let end = offset(
+                    at,
+                    if axis == 0 { sign * 4 } else { 0 },
+                    if axis == 1 { sign * 4 } else { 0 },
+                )
+                .unwrap();
+                match ramp(&doc, &scene, at, end, infer_base(&doc, &scene, at)) {
+                    Ok(_) => passed += 1,
+                    Err(e) => failed.push(format!(
+                        "corner={start:?}, at={at:?}, end={end:?}, cap={index}, sub={}: {e:#}",
+                        v.sub
+                    )),
+                }
+            }
         }
-      }
-      doc.undo();
+        doc.undo();
     }
-    eprintln!("passed {passed}, failed {}",failed.len());
-    for f in &failed {eprintln!("{f}");}
+    eprintln!("passed {passed}, failed {}", failed.len());
+    for f in &failed {
+        eprintln!("{f}");
+    }
     assert!(failed.is_empty());
 }
 
 #[test]
 fn probe_every_cliff_corner_subtile() {
- let (mut doc,scene)=setup();
- let plateau=cliff_tools::plan(&doc,&scene,cliff_tools::rectangle([35,35],[65,65]),4).unwrap();
- plateau.apply(&mut doc).unwrap();doc.commit("plateau");
- let base=scene.palette.tile_ids.unwrap().cliffs.cliff_set.unwrap();
- let mut failed=Vec::new();
- for stamp in &plateau.cliffs {
-  if ![1,12,21,29].contains(&(stamp.tile-base+1)){continue;}
-  let t=&scene.palette.templates[&(stamp.tile,0)];
-  for (sub,c) in t.cells.iter().enumerate() {if c.is_none(){continue;}
-   let at=offset(stamp.origin,sub as i32 % i32::from(t.width),sub as i32 / i32::from(t.width)).unwrap();
-   if let Err(e)=ramp(&doc,&scene,at,at,infer_base(&doc,&scene,at)) {failed.push(format!("at={at:?}, piece={} sub={sub}: {e:#}",stamp.tile-base+1));}
-  }
- }
- assert!(failed.is_empty(),"{failed:?}");
+    let (mut doc, scene) = setup();
+    let plateau =
+        cliff_tools::plan(&doc, &scene, cliff_tools::rectangle([35, 35], [65, 65]), 4).unwrap();
+    plateau.apply(&mut doc).unwrap();
+    doc.commit("plateau");
+    let base = scene.palette.tile_ids.unwrap().cliffs.cliff_set.unwrap();
+    let mut failed = Vec::new();
+    for stamp in &plateau.cliffs {
+        if ![1, 12, 21, 29].contains(&(stamp.tile - base + 1)) {
+            continue;
+        }
+        let t = &scene.palette.templates[&(stamp.tile, 0)];
+        for (sub, c) in t.cells.iter().enumerate() {
+            if c.is_none() {
+                continue;
+            }
+            let at = offset(
+                stamp.origin,
+                sub as i32 % i32::from(t.width),
+                sub as i32 / i32::from(t.width),
+            )
+            .unwrap();
+            if let Err(e) = ramp(&doc, &scene, at, at, infer_base(&doc, &scene, at)) {
+                failed.push(format!(
+                    "at={at:?}, piece={} sub={sub}: {e:#}",
+                    stamp.tile - base + 1
+                ));
+            }
+        }
+    }
+    assert!(failed.is_empty(), "{failed:?}");
 }
 
 #[test]
 fn probe_wide_candidate_can_bridge_gap_when_narrow_start_cannot_fit() {
- let (mut doc,scene)=setup();
- cliff_tools::plan(&doc,&scene,cliff_tools::rectangle([35,35],[65,65]),4).unwrap().apply(&mut doc).unwrap();
- doc.commit("plateau");
- let mut failures=Vec::new();
- for (corner,inward) in [([35,35],[1,1]),([65,35],[-1,1]),([35,65],[1,-1]),([65,65],[-1,-1])] {
-  ramp(&doc,&scene,corner,corner,4).unwrap().apply(&mut doc).unwrap();doc.commit("corner");
-  for axis in 0..2 {for distance in 1..=12 {
-   let mut start=corner;start[axis]=(i32::from(start[axis])+inward[axis]*distance)as u16;
-   let mut end=start;end[axis]=(i32::from(start[axis])+inward[axis]*6)as u16;
-   if ramp(&doc,&scene,start,end,4).is_ok(){continue;}
-   let direction=if axis==0 {if inward[1]>0 {2}else{0}}else if inward[0]>0 {3}else{1};
-   let mut valid=None;
-   for x in -6..=1 {for y in -6..=1 {
-    let Some(mut origin)=offset(start,x,y)else{continue};
-    if inward[axis]<0 {origin[axis]-=6;}
-    if ramp_candidate(&doc,&scene,start,origin,4,direction,6).is_ok(){valid=Some(origin);}
-   }}
-   if let Some(origin)=valid {failures.push((corner,start,end,origin));}
-  }}
-  doc.undo();
- }
- assert!(failures.is_empty(),"valid wider plans incorrectly rejected: {failures:?}");
+    let (mut doc, scene) = setup();
+    cliff_tools::plan(&doc, &scene, cliff_tools::rectangle([35, 35], [65, 65]), 4)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    doc.commit("plateau");
+    let mut failures = Vec::new();
+    for (corner, inward) in [
+        ([35, 35], [1, 1]),
+        ([65, 35], [-1, 1]),
+        ([35, 65], [1, -1]),
+        ([65, 65], [-1, -1]),
+    ] {
+        ramp(&doc, &scene, corner, corner, 4)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        doc.commit("corner");
+        for axis in 0..2 {
+            for distance in 1..=12 {
+                let mut start = corner;
+                start[axis] = (i32::from(start[axis]) + inward[axis] * distance) as u16;
+                let mut end = start;
+                end[axis] = (i32::from(start[axis]) + inward[axis] * 6) as u16;
+                if ramp(&doc, &scene, start, end, 4).is_ok() {
+                    continue;
+                }
+                let direction = if axis == 0 {
+                    if inward[1] > 0 { 2 } else { 0 }
+                } else if inward[0] > 0 {
+                    3
+                } else {
+                    1
+                };
+                let mut valid = None;
+                for x in -6..=1 {
+                    for y in -6..=1 {
+                        let Some(mut origin) = offset(start, x, y) else {
+                            continue;
+                        };
+                        if inward[axis] < 0 {
+                            origin[axis] -= 6;
+                        }
+                        if ramp_candidate(&doc, &scene, start, origin, 4, direction, 6).is_ok() {
+                            valid = Some(origin);
+                        }
+                    }
+                }
+                if let Some(origin) = valid {
+                    failures.push((corner, start, end, origin));
+                }
+            }
+        }
+        doc.undo();
+    }
+    assert!(
+        failures.is_empty(),
+        "valid wider plans incorrectly rejected: {failures:?}"
+    );
 }
 
 #[test]
 fn adjacent_corner_entrances_can_connect_along_the_shared_edge() {
- let (mut doc,scene)=setup();
- cliff_tools::plan(&doc,&scene,cliff_tools::rectangle([40,40],[58,58]),4).unwrap().apply(&mut doc).unwrap();
- doc.commit("plateau");
- ramp(&doc,&scene,[40,58],[44,58],4).unwrap().apply(&mut doc).unwrap();doc.commit("first corner");
- ramp(&doc,&scene,[58,58],[54,58],4).unwrap().apply(&mut doc).unwrap();doc.commit("second corner");
- let p=ramp(&doc,&scene,[49,58],[51,58],4).unwrap();
- p.apply(&mut doc).unwrap();
- complete(&doc,&scene,&p);
+    let (mut doc, scene) = setup();
+    cliff_tools::plan(&doc, &scene, cliff_tools::rectangle([40, 40], [58, 58]), 4)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    doc.commit("plateau");
+    ramp(&doc, &scene, [40, 58], [44, 58], 4)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    doc.commit("first corner");
+    ramp(&doc, &scene, [58, 58], [54, 58], 4)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    doc.commit("second corner");
+    let p = ramp(&doc, &scene, [49, 58], [51, 58], 4).unwrap();
+    p.apply(&mut doc).unwrap();
+    complete(&doc, &scene, &p);
 }
 
 #[test]

@@ -257,8 +257,9 @@ fn audit(install: &Install, bytes: &[u8], root: &Path, name: &str, restore: bool
                 o["id"] == i["id"] && ["type", "owner", "health"].iter().all(|k| o[k] == i[k])
             })
         });
+        // Audit beam geometry independently of a player's fog visibility.
         let light = light_id
-            .and_then(|id| sim.building_spotlight(id, &runtime.resources.rules))
+            .and_then(|id| sim.building_spotlight(id, None, &runtime.resources.rules))
             .map(|l| json!({"coord":l.coord,"origin":l.beam_origin,"edges":l.beam_edges}));
         let row = json!({"tick":tick,"objects":current,"light":light,"flags":sim.global_variables()[..9]});
         for effect in output.trigger_effects {

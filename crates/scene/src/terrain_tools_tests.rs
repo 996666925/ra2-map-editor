@@ -316,7 +316,15 @@ fn height_clamps_raw_levels_and_constructs_smooth_plateau_with_transactional_und
     for at in &selected {
         assert_eq!(doc.terrain(*at).unwrap().level, 15);
     }
-    height(&mut doc, &scene, &selected, TerrainMode::Flatten, 127, false).unwrap();
+    height(
+        &mut doc,
+        &scene,
+        &selected,
+        TerrainMode::Flatten,
+        127,
+        false,
+    )
+    .unwrap();
     assert!(
         height(&mut doc, &scene, &selected, TerrainMode::Raise, 0, false)
             .unwrap()

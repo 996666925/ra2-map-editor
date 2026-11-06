@@ -365,7 +365,7 @@ fn retail_voxel_gpu_readback_matches_cpu_and_preserves_composite_depth() {
         let sprites = renderer.render_batch(&model, Some(&hva), &params, false);
         for (params, actual) in params.iter().zip(sprites) {
             let facing = params.facing;
-            let expected = vxl_raster::render_vxl(&model, Some(&hva), &params, Some(&vpl));
+            let expected = vxl_raster::render_vxl(&model, Some(&hva), params, Some(&vpl));
             assert_eq!(
                 actual.palette_indices, expected.palette_indices,
                 "{name} {facing}"

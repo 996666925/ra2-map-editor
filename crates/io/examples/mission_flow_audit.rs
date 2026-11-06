@@ -133,9 +133,6 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
         .load_scenario(NativeScenarioRulesPrefix::Campaign(None), &map.ini)?
         .into_parts();
     rules.install_art_data(vera20k_core::rules::art_data::ArtRegistry::from_ini(&art));
-    rules.bind_animation_sequences(
-        &vera20k_core::rules::infantry_sequence::parse_infantry_sequence_registry(&art),
-    );
     let teams = TeamAiIniRegistry::load_retail(&install.manager, &map.ini, false)
         .map_err(anyhow::Error::msg)?;
     let roster =

@@ -31,6 +31,8 @@ cargo clippy --locked --workspace --no-deps --all-targets -- -D warnings
 python tools/check_i18n.py
 ```
 
+推送分支或提交 PR 时，[Checks 工作流](../.github/workflows/checks.yml) 会在 Windows 上执行上述四项检查。CI 使用固定版本的 Rust 和引擎子模块，不需要游戏资源或 GPU；需要真实资源的忽略测试仍按下文手动执行。全目标 Clippy 包含审计示例，可检查引擎升级后的接口适配。
+
 格式化时去掉 `-Check`。使用该脚本可只处理编辑器 workspace，避免 `cargo fmt --all` 遍历本地引擎依赖。
 
 界面本地化、消息编写和新增语言的步骤见 [语言资源说明](../crates/app/locales/README.md)。语言切换、持久化、翻译占位符与中英文布局测试包含在应用测试中。
