@@ -4,6 +4,7 @@ use crate::ui_theme::{self as theme, Icon};
 use egui::RichText;
 #[derive(Default)]
 pub(super) struct Workbench {
+    pub(super) flat_view: crate::flat_view::FlatView,
     pub(super) task_overlay: crate::mission_overlay::MissionOverlay,
     pub(super) map_settings: crate::map_settings_ui::MapSettingsUi,
     pub(super) settings: bool,
@@ -462,13 +463,32 @@ impl MapView {
         if self.editor.selected.is_some() {
             self.editor.selection_properties(ui, scene);
         } else if let Some(cell) = self.selected.and_then(|i| scene.cells.get(i)) {
+            let value = self
+                .editor
+                .doc
+                .as_ref()
+                .map(|doc| ra2_map_scene::terrain_tools::value(doc, scene, [cell.rx, cell.ry]));
             theme::field(ui, "格子坐标", format!("{}, {}", cell.rx, cell.ry));
             theme::field(
                 ui,
                 "地形子块",
-                format!("{} : {}", cell.tile_id, cell.sub_tile),
+                value.map_or_else(
+                    || format!("{} : {}", cell.tile_id, cell.sub_tile),
+                    |v| {
+                        format!(
+                            "{} : {}",
+                            scene
+                                .palette
+                                .raw_ids
+                                .get(&v.tile)
+                                .copied()
+                                .map_or(v.tile, i32::from),
+                            v.sub
+                        )
+                    },
+                ),
             );
-            theme::field(ui, "高度", cell.z as i8);
+            theme::field(ui, "高度", value.map_or(cell.z, |v| v.level) as i8);
             theme::badge(
                 ui,
                 if scene.is_playable(cell) {
@@ -489,17 +509,29 @@ impl MapView {
         ui.separator();
         ui.add_space(6.);
         theme::section(ui, "显示图层", "");
-        for (index, label) in [
-            (0, "矿石与覆盖物"),
-            (1, "对象预览与标记"),
-            (2, "航点与玩家起点"),
-        ] {
-            ui.checkbox(&mut self.editor.layers[index], label);
+        if self.editor.framework {
+            ui.small("框架与 2D 地形互斥；Ctrl+F 切换框架，F2 切换 2D。");
         }
-        ui.checkbox(&mut self.editor.task_labels, "任务标签与格子触发点");
-        ui.checkbox(&mut self.editor.base_nodes_visible, "基地节点与建造顺序");
-        ui.checkbox(&mut self.editor.remap, "所属方换色");
-        ui.checkbox(&mut self.editor.lighting, "地图基础光照");
+        if self.editor.flat_view {
+            ui.checkbox(&mut self.workbench.flat_view.heights, "2D 高度数字");
+            ui.checkbox(
+                &mut self.workbench.flat_view.templates,
+                "2D 完整模板边界 / 编号",
+            );
+            ui.small("金线：高度变化；蓝线：模板外沿；红叉 / 红点：对象占地 / 覆盖物。");
+        } else {
+            for (index, label) in [
+                (0, "矿石与覆盖物"),
+                (1, "对象预览与标记"),
+                (2, "航点与玩家起点"),
+            ] {
+                ui.checkbox(&mut self.editor.layers[index], label);
+            }
+            ui.checkbox(&mut self.editor.task_labels, "任务标签与格子触发点");
+            ui.checkbox(&mut self.editor.base_nodes_visible, "基地节点与建造顺序");
+            ui.checkbox(&mut self.editor.remap, "所属方换色");
+            ui.checkbox(&mut self.editor.lighting, "地图基础光照");
+        }
         ui.add_space(8.);
         ui.separator();
         egui::CollapsingHeader::new("地图信息")
@@ -617,11 +649,12 @@ impl MapView {
         if (response.clicked() || response.dragged())
             && let Some(pointer) = response.interact_pointer_pos()
         {
-            self.center = ra2_map_scene::radar::canvas_position(
-                scene,
-                self.editor.doc.as_ref(),
-                navigator_point(bounds, rect, pointer),
-            );
+            let position = navigator_point(bounds, rect, pointer);
+            self.center = if self.editor.flat_view {
+                position
+            } else {
+                ra2_map_scene::radar::canvas_position(scene, self.editor.doc.as_ref(), position)
+            };
             self.fit = false;
         }
         let p = ui.painter().with_clip_rect(rect);
@@ -649,7 +682,11 @@ impl MapView {
         let screen = ui.ctx().content_rect();
         // The precise canvas extent is retained from its last layout pass.
         let extent = self.workbench.canvas_extent.unwrap_or(screen.size());
-        let radar_center = ra2_map_scene::radar::radar_position(scene, self.center);
+        let radar_center = if self.editor.flat_view {
+            self.center
+        } else {
+            ra2_map_scene::radar::radar_position(scene, self.center)
+        };
         let world = egui::Rect::from_center_size(radar_center, extent / self.zoom);
         let visible = egui::Rect::from_min_max(project(world.min), project(world.max))
             .intersect(rect.shrink(1.));
@@ -828,6 +865,8 @@ impl MapView {
                 for text in [
                     "中键 / 右键拖动，或空格 + 左键拖动：平移地图",
                     "滚轮：围绕鼠标缩放；Home：适应地图；1：原始像素比例",
+                    "F2：切换 2D 地形视图，铺平地形并显示高度与模板边界；对象与区域工具自动返回立体视图",
+                    "Ctrl+F：框架模式，同步简化画布、地形素材栏和放置预览；与 2D 地形互斥",
                     "F：定位当前对象或格子；小地图单击 / 拖动：快速定位",
                 ] {
                     ui.label(text);

@@ -174,7 +174,11 @@ impl Editor {
         };
         let world = camera.world_rect(rect);
         let outline = |cell: Cell, level: u8, color: Color32| {
-            let (x, y) = vera20k_core::map::terrain::iso_to_screen(cell[0], cell[1], level);
+            let (x, y) = vera20k_core::map::terrain::iso_to_screen(
+                cell[0],
+                cell[1],
+                if self.flat_view { 0 } else { level },
+            );
             let center = rect.min + (egui::pos2(x + 30., y + 15.) - world.min) * camera.zoom;
             if !rect.expand(60. * camera.zoom).contains(center) {
                 return;
@@ -192,6 +196,20 @@ impl Editor {
                 let mut edits: Vec<_> = plan.edits.iter().collect();
                 edits.sort_by_key(|(at, _)| (u32::from(at[0]) + u32::from(at[1]), at[0]));
                 for (&cell, v) in edits {
+                    if self.framework {
+                        self.ui_state.framework_textures.draw(
+                            painter,
+                            scene,
+                            crate::framework_view::View {
+                                rect,
+                                camera,
+                                flat: self.flat_view,
+                            },
+                            cell,
+                            *v,
+                            Color32::from_white_alpha(210),
+                        );
+                    }
                     let color = if plan.cells.contains(&cell) {
                         Color32::LIGHT_GREEN
                     } else {
@@ -201,7 +219,9 @@ impl Editor {
                         (f32::from(cell[0]) - f32::from(cell[1])) * 30.,
                         f32::from(cell[0] + cell[1]) * 15. - f32::from(v.level) * 15.,
                     );
-                    if let Some(&tile) = scene.palette.raw_ids.get(&v.tile)
+                    if !self.flat_view
+                        && !self.framework
+                        && let Some(&tile) = scene.palette.raw_ids.get(&v.tile)
                         && let Some(image) = scene.palette.previews.get(&(tile, 0))
                     {
                         let position = origin

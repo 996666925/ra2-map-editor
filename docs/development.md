@@ -44,6 +44,15 @@ Remove-Item Env:KITTEST_RECORD
 
 ## 真实资源验证
 
+框架材质与六环境地图数据校验、普通 / 框架 PNG 对照，以及共享深度的 GPU / CPU 像素对照：
+
+```powershell
+cargo run --locked -p ra2-map-scene --example framework_audit -- 'D:/Games/YR' target/framework-audit
+cargo run --locked -p ra2-map-render --example framework_gpu_audit -- 'D:/Games/YR' target/framework-audit/TEMPERATE.map target/framework-gpu-audit
+```
+
+审计检查框架材质的透明覆盖和几何、视图切换不修改地图，以及框架、光照和换色组合的 CPU / GPU 一致性。本机有 `marble.mix` 时也会报告各环境兼容的 FA2 原生框架模板数量。
+
 窗口测试需要本机游戏目录；地图、截图与报告只写入本地 `target/`。
 
 ```powershell

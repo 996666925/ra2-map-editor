@@ -260,7 +260,11 @@ impl Editor {
             Color32::LIGHT_RED
         };
         let outline = |painter: &egui::Painter, at: Cell, level: u8| {
-            let (x, y) = vera20k_core::map::terrain::iso_to_screen(at[0], at[1], level);
+            let (x, y) = vera20k_core::map::terrain::iso_to_screen(
+                at[0],
+                at[1],
+                if self.flat_view { 0 } else { level },
+            );
             let center = rect.min + (egui::pos2(x + 30., y + 15.) - world.min) * camera.zoom;
             if !rect.expand(60. * camera.zoom).contains(center) {
                 return;
@@ -269,15 +273,49 @@ impl Editor {
                 .map(|[x, y]| center + egui::vec2(x, y) * camera.zoom);
             painter.add(egui::Shape::convex_polygon(
                 points.to_vec(),
-                color.gamma_multiply(0.10),
+                if self.flat_view && !self.framework {
+                    crate::flat_view::height_color(level)
+                } else {
+                    color.gamma_multiply(0.10)
+                },
                 egui::Stroke::new(1., color),
             ));
+            if self.flat_view && camera.zoom >= 0.65 {
+                painter.text(
+                    center,
+                    egui::Align2::CENTER_CENTER,
+                    (level as i8).to_string(),
+                    egui::FontId::monospace(11.),
+                    color,
+                );
+            }
         };
         match plan {
             Some(plan) => {
+                if self.framework {
+                    let mut cells: Vec<_> = plan.edits.iter().collect();
+                    cells.sort_by_key(|(at, _)| (u32::from(at[0]) + u32::from(at[1]), at[0]));
+                    for (&at, &value) in cells {
+                        self.ui_state.framework_textures.draw(
+                            painter,
+                            scene,
+                            crate::framework_view::View {
+                                rect,
+                                camera,
+                                flat: self.flat_view,
+                            },
+                            at,
+                            value,
+                            Color32::from_white_alpha(210),
+                        );
+                    }
+                }
                 // Filled water and restored ground are part of the ghost too.
                 let stamped: BTreeSet<_> = plan.cliffs.iter().map(|s| (s.tile, s.origin)).collect();
                 for (&at, v) in &plan.edits {
+                    if self.flat_view || self.framework {
+                        continue;
+                    }
                     let Some(&tile) = scene.palette.raw_ids.get(&v.tile) else {
                         continue;
                     };
@@ -327,6 +365,9 @@ impl Editor {
                     (u32::from(s.origin[0]) + u32::from(s.origin[1]), s.origin[0])
                 });
                 for stamp in stamps {
+                    if self.flat_view || self.framework {
+                        continue;
+                    }
                     let key = vera20k_core::map::theater::TileKey {
                         tile_id: stamp.tile,
                         sub_tile: 0,
@@ -373,6 +414,9 @@ impl Editor {
                             .level
                     };
                     outline(painter, at, level + if high { 4 } else { 0 });
+                    if self.flat_view {
+                        continue;
+                    }
                     if let Some(name) = scene.catalog.overlays.get(usize::from(id))
                         && let Some(im) = scene.sprites.overlay_frames.get(&(name.clone(), frame))
                     {

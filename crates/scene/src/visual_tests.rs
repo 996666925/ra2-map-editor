@@ -102,12 +102,14 @@ fn fixture() -> VisualScene {
         size: [2, 1],
         rgba: vec![50, 100, 150, 255, 60, 120, 180, 255],
         original: Vec::new(),
+        framework: vec![220, 180, 200, 255, 200, 160, 180, 255],
         depth: vec![200, 200],
     }));
     s.surfaces.push(std::sync::Arc::new(Surface {
         size: [2, 1],
         rgba: vec![255, 0, 0, 255, 0, 255, 0, 255],
         original: vec![0, 0, 255, 255, 0, 0, 255, 255],
+        framework: Vec::new(),
         depth: vec![201, 199],
     }));
     s.draws.push(Draw {
@@ -130,6 +132,37 @@ fn fixture() -> VisualScene {
     });
     s.index();
     s
+}
+
+#[test]
+fn framework_material_keeps_depth_object_ownership_and_cpu_sampling_in_sync() {
+    let s = fixture();
+    let framework = ViewOptions {
+        framework: true,
+        ..Default::default()
+    };
+    assert_ne!(
+        s.sample(egui::pos2(0.5, 0.5), framework).0,
+        s.sample(egui::pos2(0.5, 0.5), ViewOptions::default()).0
+    );
+    for x in [0.5, 1.5] {
+        let point = egui::pos2(x, 0.5);
+        assert_eq!(
+            s.sample(point, framework).1,
+            s.sample(point, ViewOptions::default()).1
+        );
+        let image = s
+            .raster(
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2., 1.)),
+                [2, 1],
+                framework,
+            )
+            .unwrap();
+        assert_eq!(
+            &image[x.floor() as usize * 4..x.floor() as usize * 4 + 4],
+            &s.sample(point, framework).0
+        );
+    }
 }
 
 #[test]

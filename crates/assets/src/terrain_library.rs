@@ -152,11 +152,20 @@ pub fn template_preview(
     variant: u8,
     tmp: &TmpFile,
 ) -> Option<DecodedImage> {
+    template_preview_images(&palette.images, tile, variant, tmp)
+}
+
+pub(crate) fn template_preview_images(
+    images: &HashMap<TileKey, DecodedImage>,
+    tile: u16,
+    variant: u8,
+    tmp: &TmpFile,
+) -> Option<DecodedImage> {
     let mut parts = Vec::new();
     let mut bounds = [i32::MAX, i32::MAX, i32::MIN, i32::MIN];
     for (sub, cell) in tmp.tiles.iter().enumerate() {
         let Some(cell) = cell else { continue };
-        let image = palette.images.get(&TileKey {
+        let image = images.get(&TileKey {
             tile_id: tile,
             sub_tile: sub as u8,
             variant,

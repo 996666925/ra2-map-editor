@@ -22,6 +22,10 @@ pub struct TerrainPalette {
     pub morphable: std::collections::HashSet<u16>,
     pub groups: std::collections::HashMap<u16, crate::terrain_library::TerrainGroup>,
     pub previews: std::collections::HashMap<(u16, u8), crate::assets::DecodedImage>,
+    pub framework_images: std::collections::HashMap<TileKey, crate::assets::DecodedImage>,
+    pub framework_previews: std::collections::HashMap<(u16, u8), crate::assets::DecodedImage>,
+    pub framework_native: std::collections::HashSet<u16>,
+    pub framework_heights: Vec<crate::assets::DecodedImage>,
     pub bridge_rim: Option<vera20k_core::map::bridge_rim_tiles::HighBridgeRimTiles>,
     pub raw_ids: std::collections::HashMap<i32, u16>,
 }
@@ -149,7 +153,13 @@ impl Catalog {
 
     pub fn terrain_palette(&self, manager: &AssetManager, theater: &TheaterData) -> TerrainPalette {
         use vera20k_core::assets::tmp_file::TmpFile;
+        let framework = crate::framework::Source::open(manager.ra2_dir(), theater);
         let mut palette = TerrainPalette {
+            framework_heights: crate::framework::height_tiles(
+                framework
+                    .as_ref()
+                    .map_or_else(Vec::new, |source| source.heights(theater)),
+            ),
             tile_ids: Some(vera20k_core::map::rmg::TileIds::resolve(theater)),
             groups: crate::terrain_library::groups(theater),
             bridge_rim: Some(theater.high_bridge_rim_tiles),
@@ -170,6 +180,12 @@ impl Catalog {
                 let Ok(tmp) = TmpFile::from_bytes(bytes) else {
                     continue;
                 };
+                let native = framework
+                    .as_ref()
+                    .and_then(|source| source.template(theater, tile_id, &tmp));
+                if native.is_some() {
+                    palette.framework_native.insert(tile_id);
+                }
                 // Map subtiles are bytes, so larger templates cannot be authored.
                 if tmp.tiles.len() > 256 {
                     continue;
@@ -228,11 +244,29 @@ impl Catalog {
                             rgba,
                         },
                     );
+                    let schematic = crate::framework::image(
+                        &palette.images[&key],
+                        &tmp,
+                        index,
+                        native.as_ref(),
+                        theater,
+                    );
+                    palette.framework_images.insert(key, schematic);
                 }
                 if let Some(preview) =
                     crate::terrain_library::template_preview(&palette, tile_id, variant, &tmp)
                 {
                     palette.previews.insert((tile_id, variant), preview);
+                }
+                if let Some(preview) = crate::terrain_library::template_preview_images(
+                    &palette.framework_images,
+                    tile_id,
+                    variant,
+                    &tmp,
+                ) {
+                    palette
+                        .framework_previews
+                        .insert((tile_id, variant), preview);
                 }
             }
         }

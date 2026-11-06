@@ -23,6 +23,105 @@ fn scene() -> MapScene {
 }
 
 #[test]
+fn manual_cliff_defaults_to_low_ground_and_keeps_explicit_high_anchors() {
+    let (mut e, ctx, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    let choices = terrain_ui::choices(
+        &scene,
+        Some(ra2_map_assets::terrain_library::TerrainCategory::Cliff),
+        None,
+        false,
+        false,
+        "",
+    );
+    let index = *choices
+        .iter()
+        .find(|&&i| {
+            let b = &scene.brushes[i];
+            let t = &scene.palette.templates[&(b.key.tile_id, b.key.variant)];
+            t.cells
+                .first()
+                .and_then(|s| *s)
+                .is_some_and(|s| s.height == 4)
+                && t.cells.iter().flatten().any(|s| s.height == 0)
+        })
+        .unwrap();
+    e.select_terrain_material(index, false);
+    let brush = &scene.brushes[e.brush];
+    let t = &scene.palette.templates[&(brush.key.tile_id, brush.key.variant)];
+    assert_eq!(t.cells[usize::from(brush.key.sub_tile)].unwrap().height, 0);
+    e.template_level = None;
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    let at = [35, 35];
+    let plan = terrain_tools::template_placement(e.doc.as_ref().unwrap(), &scene, brush, at, None)
+        .unwrap();
+    assert_eq!(
+        plan.iter().find(|(cell, _)| *cell == at).unwrap().1.level,
+        4
+    );
+    e.pointer(&scene, Some(at), true, true, false, None);
+    e.pointer(&scene, Some(at), false, false, true, None);
+    for (cell, v) in plan {
+        assert_eq!(e.doc.as_ref().unwrap().terrain(cell), Some(v));
+    }
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    let high = scene
+        .brushes
+        .iter()
+        .position(|b| {
+            b.key.tile_id == brush.key.tile_id
+                && b.key.variant == brush.key.variant
+                && b.key.sub_tile == 0
+        })
+        .unwrap();
+    e.brush = high;
+    crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+        e.terrain_template_options(ui, &scene)
+    });
+    assert_eq!(
+        e.brush, high,
+        "redrawing options must preserve a manually chosen high anchor"
+    );
+    let next = choices.iter().position(|&i| i == index).unwrap() + 1;
+    {
+        use egui_kittest::kittest::Queryable as _;
+        let mut harness = crate::test_support::harness()
+            .with_context_setup(|ctx| {
+                ctx.add_font_provider(Arc::new(
+                    egui_system_font_provider::SystemFontProvider::new(),
+                ))
+            })
+            .with_accessibility_check(false)
+            .build_ui(|ui| e.terrain_template_options(ui, &scene));
+        harness.run();
+        harness.get_by_label("下一块 ▶").click();
+        harness.run();
+        drop(harness);
+        assert_eq!(e.brush, choices[next]);
+        let mut harness = crate::test_support::harness()
+            .with_context_setup(|ctx| {
+                ctx.add_font_provider(Arc::new(
+                    egui_system_font_provider::SystemFontProvider::new(),
+                ))
+            })
+            .with_accessibility_check(false)
+            .build_ui(|ui| e.terrain_template_options(ui, &scene));
+        harness.run();
+        harness.get_by_label("◀ 上一块").click();
+        harness.run();
+        drop(harness);
+        assert_eq!(e.brush, index);
+    }
+    e.select_terrain_material(high, true);
+    assert_eq!(e.brush, high);
+    assert_eq!(e.terrain_mode, TerrainMode::Subtile);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn plateau_preview_is_cached_and_matches_release_even_after_tool_and_height_change() {
     let (mut e, ctx, root) = editor();
     let scene = scene();

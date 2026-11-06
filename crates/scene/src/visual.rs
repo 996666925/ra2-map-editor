@@ -59,6 +59,7 @@ pub struct ViewOptions {
     pub objects: bool,
     pub lighting: bool,
     pub remap: bool,
+    pub framework: bool,
 }
 impl Default for ViewOptions {
     fn default() -> Self {
@@ -67,6 +68,7 @@ impl Default for ViewOptions {
             objects: true,
             lighting: true,
             remap: true,
+            framework: false,
         }
     }
 }
@@ -75,6 +77,8 @@ pub struct Surface {
     pub size: [u32; 2],
     pub rgba: Vec<u8>,
     pub original: Vec<u8>,
+    /// Alternate terrain material with the same alpha and depth admission.
+    pub framework: Vec<u8>,
     pub depth: Vec<u16>,
 }
 #[derive(Clone, PartialEq)]
@@ -95,7 +99,7 @@ pub struct VisualScene {
     pub owners: HashMap<u64, (String, String)>,
     buckets: HashMap<(i32, i32), Vec<usize>>,
     surface_cache: HashMap<String, usize>,
-    terrain_cache: HashMap<vera20k_core::map::theater::TileKey, usize>,
+    terrain_cache: HashMap<(vera20k_core::map::theater::TileKey, u8), usize>,
     light: Option<Arc<lighting::CellLightGrid>>,
     profile: Option<ra2_map_document::lighting::Profile>,
     static_draws: usize,
@@ -180,16 +184,25 @@ impl VisualScene {
                 let Some(image) = scene.image(cell) else {
                     continue;
                 };
-                let surface = *tiles.entry(MapScene::key(cell)).or_insert_with(|| {
-                    let id = out.surfaces.len();
-                    out.surfaces.push(Arc::new(Surface {
-                        size: [image.width, image.height],
-                        rgba: image.rgba.clone(),
-                        original: Vec::new(),
-                        depth: image.depth.iter().map(|&n| 32768 + u16::from(n)).collect(),
-                    }));
-                    id
-                });
+                let key = MapScene::key(cell);
+                let height_tile = scene.palette.framework_height_tile(key);
+                let surface = *tiles
+                    .entry((key, if height_tile { cell.z } else { 0 }))
+                    .or_insert_with(|| {
+                        let id = out.surfaces.len();
+                        let framework = scene
+                            .palette
+                            .framework_rgba(key, cell.z)
+                            .map_or_else(Vec::new, |rgba| rgba.into_owned());
+                        out.surfaces.push(Arc::new(Surface {
+                            size: [image.width, image.height],
+                            rgba: image.rgba.clone(),
+                            original: Vec::new(),
+                            framework,
+                            depth: image.depth.iter().map(|&n| 32768 + u16::from(n)).collect(),
+                        }));
+                        id
+                    });
                 out.draws.push(Draw {
                     surface,
                     position: [
@@ -593,6 +606,7 @@ impl VisualScene {
                 size: [image.info.width, image.info.height],
                 rgba,
                 original: image.rgba.clone(),
+                framework: Vec::new(),
                 depth,
             }));
             id
@@ -692,7 +706,9 @@ impl VisualScene {
                 if !d.visible(options) {
                     continue;
                 }
-                let rgba = if !options.remap && !s.original.is_empty() {
+                let rgba = if options.framework && !s.framework.is_empty() {
+                    &s.framework
+                } else if !options.remap && !s.original.is_empty() {
                     &s.original
                 } else {
                     &s.rgba
@@ -704,7 +720,11 @@ impl VisualScene {
                 blend(
                     &mut color,
                     &rgba[p * 4..p * 4 + 4],
-                    if options.lighting { d.tint } else { [1.; 3] },
+                    if options.lighting && !(options.framework && d.layer == 0) {
+                        d.tint
+                    } else {
+                        [1.; 3]
+                    },
                 );
                 if d.writes {
                     depth = z
@@ -752,7 +772,9 @@ impl VisualScene {
                 continue;
             }
             let s = &self.surfaces[d.surface];
-            let rgba = if !options.remap && !s.original.is_empty() {
+            let rgba = if options.framework && !s.framework.is_empty() {
+                &s.framework
+            } else if !options.remap && !s.original.is_empty() {
                 &s.original
             } else {
                 &s.rgba
@@ -797,7 +819,11 @@ impl VisualScene {
                     blend(
                         &mut pixels[dst * 4..dst * 4 + 4],
                         &rgba[src * 4..src * 4 + 4],
-                        if options.lighting { d.tint } else { [1.; 3] },
+                        if options.lighting && !(options.framework && d.layer == 0) {
+                            d.tint
+                        } else {
+                            [1.; 3]
+                        },
                     );
                     if d.writes {
                         depth[dst] = z;

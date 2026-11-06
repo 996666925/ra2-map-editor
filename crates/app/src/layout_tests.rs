@@ -51,6 +51,554 @@ fn view() -> (MapView, PathBuf) {
     (view, root)
 }
 
+fn flat_authoring_view() -> (MapView, MapScene, PathBuf) {
+    let (mut view, root) = view();
+    let fixture = ra2_map_assets::test_support::Fixture::with_authoring();
+    let mut install = fixture.install();
+    install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
+    let scene = ra2_map_scene::map::load_scene_bytes(
+        &mut install,
+        "flat.map",
+        "test".into(),
+        crate::new_map::NewMapOptions {
+            width: 40,
+            height: 40,
+            level: 4,
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap(),
+        Instant::now(),
+    )
+    .unwrap();
+    view.editor.attach(&scene);
+    view.editor
+        .activate_terrain_mode(ra2_map_scene::terrain_tools::TerrainMode::Plateau);
+    view.editor.flat_view = true;
+    view.center = crate::flat_view::position([35, 35]);
+    view.zoom = 1.;
+    view.fit = false;
+    view.scene = Some(scene.clone());
+    (view, scene, root)
+}
+
+fn flat_frame(
+    view: &mut MapView,
+    ctx: &egui::Context,
+    at: Option<[u16; 2]>,
+    button: Option<bool>,
+    key: Option<egui::Key>,
+) {
+    let mut events = Vec::new();
+    if let Some(at) = at {
+        let rect = view.workbench.canvas_rect.unwrap();
+        let camera = crate::camera::MapCamera {
+            center: view.center,
+            zoom: view.zoom,
+        };
+        let pos =
+            rect.min + (crate::flat_view::position(at) - camera.world_rect(rect).min) * camera.zoom;
+        events.push(egui::Event::PointerMoved(pos));
+        if let Some(pressed) = button {
+            events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            });
+        }
+    }
+    if let Some(key) = key {
+        events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        });
+        events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: Default::default(),
+        });
+    }
+    crate::test_support::run_ui(
+        ctx,
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200., 800.),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| view.canvas_inner(ui, None),
+    );
+}
+
+#[test]
+fn flat_terrain_canvas_drag_preview_commit_and_history_share_exact_cells() {
+    let (mut view, scene, root) = flat_authoring_view();
+    let ctx = egui::Context::default();
+    flat_frame(&mut view, &ctx, None, None, None);
+    let before = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    flat_frame(&mut view, &ctx, Some([30, 30]), Some(true), None);
+    flat_frame(&mut view, &ctx, Some([42, 42]), None, Some(egui::Key::F2));
+    assert!(view.editor.flat_view, "a drag must not change projection");
+    assert_eq!(
+        view.hover.map(|i| [scene.cells[i].rx, scene.cells[i].ry]),
+        Some([42, 42])
+    );
+    let plan = view.editor.plateau_preview_plan(&scene, [42, 42]).unwrap();
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    flat_frame(&mut view, &ctx, Some([42, 42]), Some(false), None);
+    assert!(
+        !view.editor.status.starts_with("本笔未修改"),
+        "{}",
+        view.editor.status
+    );
+    for (&at, &value) in &plan.edits {
+        assert_eq!(view.editor.doc.as_ref().unwrap().terrain(at), Some(value));
+    }
+    let after = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    view.editor.history(false, &scene);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    view.editor.history(true, &scene);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        after
+    );
+    flat_frame(&mut view, &ctx, None, None, Some(egui::Key::F2));
+    assert!(!view.editor.flat_view);
+    flat_frame(&mut view, &ctx, None, None, Some(egui::Key::F2));
+    assert!(view.editor.flat_view);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        after
+    );
+    flat_frame(&mut view, &ctx, Some([30, 30]), Some(true), None);
+    flat_frame(
+        &mut view,
+        &ctx,
+        Some([42, 42]),
+        None,
+        Some(egui::Key::Escape),
+    );
+    flat_frame(&mut view, &ctx, Some([42, 42]), Some(false), None);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        after
+    );
+    view.editor.tool = crate::editing::Tool::Region;
+    flat_frame(&mut view, &ctx, None, None, None);
+    assert!(
+        !view.editor.flat_view,
+        "region tools must use their own projection"
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn flat_terrain_manual_cliff_uses_the_selected_subtile_and_base_height() {
+    let (mut view, scene, root) = flat_authoring_view();
+    view.editor
+        .activate_terrain_mode(ra2_map_scene::terrain_tools::TerrainMode::Template);
+    view.editor.brush = scene
+        .brushes
+        .iter()
+        .position(|b| {
+            b.key.sub_tile != 0
+                && scene
+                    .palette
+                    .templates
+                    .get(&(b.key.tile_id, 0))
+                    .is_some_and(|t| t.cells.iter().flatten().any(|s| s.height > 0))
+        })
+        .unwrap();
+    view.editor.template_level = Some(6);
+    let at = [35, 35];
+    let planned = ra2_map_scene::terrain_tools::template_placement(
+        view.editor.doc.as_ref().unwrap(),
+        &scene,
+        &scene.brushes[view.editor.brush],
+        at,
+        Some(6),
+    )
+    .unwrap();
+    let before = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    let ctx = egui::Context::default();
+    flat_frame(&mut view, &ctx, None, None, None);
+    flat_frame(&mut view, &ctx, Some(at), None, None);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    flat_frame(&mut view, &ctx, Some(at), Some(true), None);
+    flat_frame(&mut view, &ctx, Some(at), Some(false), None);
+    for (at, value) in planned {
+        assert_eq!(view.editor.doc.as_ref().unwrap().terrain(at), Some(value));
+    }
+    let brush = scene.brushes[view.editor.brush].key;
+    view.editor.tool = crate::editing::Tool::Pick;
+    flat_frame(&mut view, &ctx, Some(at), Some(true), None);
+    flat_frame(&mut view, &ctx, Some(at), Some(false), None);
+    assert_eq!(scene.brushes[view.editor.brush].key.tile_id, brush.tile_id);
+    assert_eq!(
+        scene.brushes[view.editor.brush].key.sub_tile,
+        brush.sub_tile
+    );
+    view.editor.history(false, &scene);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn flat_terrain_workspace_fits_compact_and_desktop_windows() {
+    let (mut view, scene, root) = flat_authoring_view();
+    ra2_map_scene::cliff_tools::plan(
+        view.editor.doc.as_ref().unwrap(),
+        &scene,
+        ra2_map_scene::cliff_tools::rectangle([28, 28], [44, 44]),
+        4,
+    )
+    .unwrap()
+    .apply(view.editor.doc.as_mut().unwrap())
+    .unwrap();
+    view.editor.commit(&scene, "fixture plateau");
+    view.editor.tool = crate::editing::Tool::Select;
+    let before = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    let mut harness = crate::test_support::harness()
+        .with_context_setup(setup)
+        .with_accessibility_check(false)
+        .with_size([1280., 800.])
+        .build_ui(|ui| {
+            egui::Panel::left("flat-tools")
+                .default_size(260.)
+                .show(ui, |ui| view.toolbox(ui));
+            egui::Panel::right("flat-inspector")
+                .default_size(235.)
+                .show(ui, |ui| view.inspector(ui));
+            egui::CentralPanel::default().show(ui, |ui| view.canvas_inner(ui, None));
+        });
+    for size in [[1280., 800.], [900., 600.]] {
+        harness.set_size(size.into());
+        harness.run();
+        harness.get_by_label("2D 地形");
+        harness.get_by_label("2D 高度数字");
+        #[cfg(feature = "ui-test-video")]
+        {
+            let output =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/flat-terrain-audit");
+            std::fs::create_dir_all(&output).unwrap();
+            harness
+                .render()
+                .unwrap()
+                .save(output.join(format!("flat-terrain-{}.png", size[0])))
+                .unwrap();
+        }
+    }
+    drop(harness);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn framework_and_flat_modes_are_mutually_exclusive_and_keep_other_tools() {
+    let (mut view, _scene, root) = flat_authoring_view();
+    let before = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    let ctx = egui::Context::default();
+    flat_frame(&mut view, &ctx, None, None, None);
+    let modifiers = egui::Modifiers {
+        ctrl: true,
+        command: true,
+        ..Default::default()
+    };
+    for expected in [true, false, true] {
+        crate::test_support::run_ui(
+            &ctx,
+            egui::RawInput {
+                events: vec![
+                    egui::Event::Key {
+                        key: egui::Key::F,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    },
+                    egui::Event::Key {
+                        key: egui::Key::F,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| view.canvas_inner(ui, None),
+        );
+        assert_eq!(view.editor.framework, expected);
+        assert!(!view.editor.flat_view);
+    }
+    flat_frame(&mut view, &ctx, None, None, Some(egui::Key::F2));
+    assert!(view.editor.flat_view && !view.editor.framework);
+    flat_frame(&mut view, &ctx, None, None, Some(egui::Key::F2));
+    view.editor.set_framework(true);
+    view.editor.tool = crate::editing::Tool::Region;
+    flat_frame(&mut view, &ctx, None, None, None);
+    assert!(view.editor.framework);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn framework_workspace_shows_matching_palette_in_compact_and_desktop_windows() {
+    let (mut view, mut scene, root) = flat_authoring_view();
+    if let Some(directory) = std::env::var_os("RA2_FRAMEWORK_GAME_DIR") {
+        let mut install = ra2_map_assets::assets::Install::open(Path::new(&directory)).unwrap();
+        scene = ra2_map_scene::map::load_scene_bytes(
+            &mut install,
+            "framework.map",
+            "UI audit".into(),
+            crate::new_map::NewMapOptions {
+                width: 40,
+                height: 40,
+                level: 4,
+                ..Default::default()
+            }
+            .bytes()
+            .unwrap(),
+            Instant::now(),
+        )
+        .unwrap();
+        view.editor.attach(&scene);
+    }
+    ra2_map_scene::cliff_tools::plan(
+        view.editor.doc.as_ref().unwrap(),
+        &scene,
+        ra2_map_scene::cliff_tools::rectangle([28, 28], [44, 44]),
+        4,
+    )
+    .unwrap()
+    .apply(view.editor.doc.as_mut().unwrap())
+    .unwrap();
+    view.editor.commit(&scene, "plateau");
+    view.editor.prepare_cliff_smoke_preview(&scene).unwrap();
+    view.editor.set_framework(true);
+    view.editor.flat_view = false;
+    view.zoom = 0.75;
+    view.scene = Some(scene);
+    let before = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    let mut harness = crate::test_support::harness()
+        .with_context_setup(setup)
+        .with_accessibility_check(false)
+        .with_size([1280., 800.])
+        .build_ui(|ui| {
+            egui::Panel::left("framework-tools")
+                .default_size(260.)
+                .show(ui, |ui| view.toolbox(ui));
+            egui::Panel::right("framework-inspector")
+                .default_size(235.)
+                .show(ui, |ui| view.inspector(ui));
+            egui::CentralPanel::default().show(ui, |ui| view.canvas_inner(ui, None));
+        });
+    for size in [[1280., 800.], [900., 600.]] {
+        harness.set_size(size.into());
+        harness.run();
+        harness.get_by_label("框架");
+        harness.get_by_label("2D 地形");
+        #[cfg(feature = "ui-test-video")]
+        {
+            let output =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/framework-ui-audit");
+            std::fs::create_dir_all(&output).unwrap();
+            harness
+                .render()
+                .unwrap()
+                .save(output.join(format!("framework-{}.png", size[0])))
+                .unwrap();
+        }
+    }
+    drop(harness);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn canvas_mode_buttons_switch_exclusively_without_moving_the_map() {
+    let (mut view, _, root) = flat_authoring_view();
+    let before = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    let modes = std::cell::Cell::new((false, false));
+    let mut harness = crate::test_support::harness()
+        .with_context_setup(setup)
+        .with_accessibility_check(false)
+        .with_size([1200., 800.])
+        .build_ui(|ui| {
+            view.canvas_inner(ui, None);
+            modes.set((view.editor.framework, view.editor.flat_view));
+        });
+    harness.run();
+    assert_eq!(modes.get(), (false, true));
+    for (label, expected) in [
+        ("框架", (true, false)),
+        ("2D 地形", (false, true)),
+        ("2D 地形", (false, false)),
+        ("框架", (true, false)),
+        ("框架", (false, false)),
+    ] {
+        harness.get_by_label(label).click();
+        harness.run();
+        assert_eq!(modes.get(), expected);
+    }
+    drop(harness);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn bridge_drag_in_canvas_keeps_tracking_pointer_as_preview_gets_longer() {
     let (mut view, root) = view();

@@ -2,6 +2,7 @@
 pub mod assets;
 pub mod catalog;
 mod chinese;
+pub mod framework;
 pub mod map_sprites;
 pub mod sprites;
 pub mod terrain_library;

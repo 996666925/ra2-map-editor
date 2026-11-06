@@ -90,6 +90,8 @@ pub struct Editor {
     play_displays: Vec<playtest_ui::PlayDisplay>,
     pub exporting: bool,
     pub lighting: bool,
+    pub flat_view: bool,
+    pub framework: bool,
     pub task_labels: bool,
     pub base_nodes_visible: bool,
     pub remap: bool,
@@ -166,6 +168,7 @@ impl Editor {
             objects: self.layers[1],
             lighting: self.lighting,
             remap: self.remap,
+            framework: self.framework,
         }
     }
     pub fn new(ctx: egui::Context, root: PathBuf) -> Result<Self> {
@@ -175,6 +178,8 @@ impl Editor {
             play_displays: Vec::new(),
             exporting: false,
             lighting: true,
+            flat_view: false,
+            framework: false,
             task_labels: true,
             base_nodes_visible: true,
             remap: true,
@@ -892,11 +897,12 @@ impl Editor {
                 self.select_from_canvas(marker);
             } else if self.tool == Tool::Pick {
                 if let Some(at) = at
-                    && let Some(c) = scene.cells.iter().find(|c| [c.rx, c.ry] == at)
+                    && let Some(value) = self.doc.as_ref().and_then(|doc| doc.terrain(at))
+                    && let Some(tile) = scene.palette.raw_ids.get(&value.tile)
                     && let Some(index) = scene
                         .brushes
                         .iter()
-                        .position(|b| b.key.tile_id == c.tile_id && b.key.sub_tile == c.sub_tile)
+                        .position(|b| b.key.tile_id == *tile && b.key.sub_tile == value.sub)
                 {
                     self.select_terrain_material(index, true);
                 }
@@ -1168,6 +1174,7 @@ impl Editor {
         camera: &crate::camera::MapCamera,
         at: Option<Cell>,
     ) {
+        self.set_framework(self.framework);
         if self.tool != Tool::Terrain {
             return;
         }
@@ -1194,12 +1201,33 @@ impl Editor {
             };
             match terrain_tools::template_placement(doc, scene, brush, at, self.template_level) {
                 Ok(cells) => {
-                    if let Some(texture) = terrain_ui::template_texture(
-                        &mut self.ui_state,
-                        painter.ctx(),
-                        scene,
-                        brush.key,
-                    ) {
+                    if self.framework {
+                        let mut sorted = cells.clone();
+                        sorted.sort_by_key(|(at, _)| (u32::from(at[0]) + u32::from(at[1]), at[0]));
+                        for (at, value) in sorted {
+                            self.ui_state.framework_textures.draw(
+                                painter,
+                                scene,
+                                crate::framework_view::View {
+                                    rect,
+                                    camera,
+                                    flat: self.flat_view,
+                                },
+                                at,
+                                value,
+                                Color32::from_white_alpha(210),
+                            );
+                        }
+                    }
+                    if !self.flat_view
+                        && !self.framework
+                        && let Some(texture) = terrain_ui::template_texture(
+                            &mut self.ui_state,
+                            painter.ctx(),
+                            scene,
+                            brush.key,
+                        )
+                    {
                         let t = &scene.palette.templates[&(brush.key.tile_id, brush.key.variant)];
                         let sub = usize::from(brush.key.sub_tile);
                         let anchor_height = t.cells[sub].unwrap().height;
@@ -1281,16 +1309,33 @@ impl Editor {
         };
         let world = camera.world_rect(rect);
         for (cell, level) in cells {
-            let (x, y) = vera20k_core::map::terrain::iso_to_screen(cell[0], cell[1], level);
+            let (x, y) = vera20k_core::map::terrain::iso_to_screen(
+                cell[0],
+                cell[1],
+                if self.flat_view { 0 } else { level },
+            );
             let p = egui::pos2(x + 30., y + 15.);
             let center = rect.min + (p - world.min) * camera.zoom;
             let points = [[0., -15.], [30., 0.], [0., 15.], [-30., 0.]]
                 .map(|[x, y]| center + egui::vec2(x, y) * camera.zoom);
             painter.add(egui::Shape::convex_polygon(
                 points.to_vec(),
-                color.gamma_multiply(0.12),
+                if self.flat_view && !self.framework {
+                    crate::flat_view::height_color(level)
+                } else {
+                    color.gamma_multiply(0.12)
+                },
                 egui::Stroke::new(1., color),
             ));
+            if self.flat_view && camera.zoom >= 0.65 {
+                painter.text(
+                    center,
+                    egui::Align2::CENTER_CENTER,
+                    (level as i8).to_string(),
+                    egui::FontId::monospace(11.),
+                    color,
+                );
+            }
         }
     }
     pub fn markers(

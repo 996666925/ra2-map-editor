@@ -77,6 +77,7 @@ struct View {
 struct Page {
     color: wgpu::Texture,
     original: wgpu::Texture,
+    framework: wgpu::Texture,
     depth: wgpu::Texture,
 }
 pub(crate) struct WorldGpu {
@@ -128,6 +129,7 @@ impl WorldGpu {
         for (p, &height) in heights.iter().enumerate() {
             let mut rgba = vec![0; (width * height * 4) as usize];
             let mut original = rgba.clone();
+            let mut framework = rgba.clone();
             let mut depth = vec![0u16; (width * height) as usize];
             for (s, &(page, pos)) in scene.surfaces.iter().zip(&placements) {
                 if page != p {
@@ -144,6 +146,13 @@ impl WorldGpu {
                         &s.original
                     };
                     original[dst * 4..(dst + w) * 4].copy_from_slice(&raw[src * 4..(src + w) * 4]);
+                    let schematic = if s.framework.is_empty() {
+                        &s.rgba
+                    } else {
+                        &s.framework
+                    };
+                    framework[dst * 4..(dst + w) * 4]
+                        .copy_from_slice(&schematic[src * 4..(src + w) * 4]);
                     depth[dst..dst + w].copy_from_slice(&s.depth[src..src + w]);
                 }
             }
@@ -177,6 +186,7 @@ impl WorldGpu {
             pages.push(Page {
                 color: texture(wgpu::TextureFormat::Rgba8Unorm, &rgba, 4),
                 original: texture(wgpu::TextureFormat::Rgba8Unorm, &original, 4),
+                framework: texture(wgpu::TextureFormat::Rgba8Unorm, &framework, 4),
                 depth: texture(
                     wgpu::TextureFormat::R16Uint,
                     bytemuck::cast_slice(&depth),
@@ -396,6 +406,12 @@ impl WorldGpu {
                             binding: 5,
                             resource: visible.as_entire_binding(),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 6,
+                            resource: wgpu::BindingResource::TextureView(
+                                &p.framework.create_view(&Default::default()),
+                            ),
+                        },
                     ],
                 })
             })
@@ -415,7 +431,7 @@ impl WorldGpu {
                 options.overlays as u32,
                 options.objects as u32,
                 options.lighting as u32,
-                options.remap as u32,
+                options.remap as u32 | ((options.framework as u32) << 1),
             ],
         };
         // Target resources are bound to one immutable scene. A resize or scene
@@ -556,6 +572,7 @@ pub(crate) fn pipelines(device: &wgpu::Device) -> std::sync::Arc<[wgpu::RenderPi
             tex(1, wgpu::TextureSampleType::Float { filterable: false }),
             tex(2, wgpu::TextureSampleType::Float { filterable: false }),
             tex(3, wgpu::TextureSampleType::Uint),
+            tex(6, wgpu::TextureSampleType::Float { filterable: false }),
             buffer(
                 4,
                 wgpu::BufferBindingType::Storage { read_only: true },

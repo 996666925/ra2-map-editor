@@ -120,6 +120,22 @@ impl TerrainGpu {
             for (mode, options) in [
                 ("normal", ViewOptions::default()),
                 (
+                    "framework",
+                    ViewOptions {
+                        framework: true,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "framework-unlit",
+                    ViewOptions {
+                        framework: true,
+                        remap: false,
+                        lighting: false,
+                        ..Default::default()
+                    },
+                ),
+                (
                     "unlit",
                     ViewOptions {
                         lighting: false,

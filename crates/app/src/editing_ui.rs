@@ -4,6 +4,8 @@ use egui::{RichText, TextureHandle};
 
 #[derive(Default)]
 pub(super) struct EditorUi {
+    pub framework: bool,
+    pub framework_textures: crate::framework_view::Textures,
     pub(super) tab: u8,
     pub(super) terrain_page: tool_palette::TerrainPage,
     filters: [String; 5],

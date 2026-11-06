@@ -13,7 +13,12 @@ pub(super) fn template_texture(
 ) -> Option<TextureHandle> {
     let id = (key.tile_id, key.variant);
     if !state.template_textures.contains_key(&id) {
-        let image = scene.palette.previews.get(&id)?;
+        let image = if state.framework {
+            &scene.palette.framework_previews
+        } else {
+            &scene.palette.previews
+        }
+        .get(&id)?;
         if state.template_textures.len() >= 128 {
             state.template_textures.clear();
         }
@@ -32,7 +37,7 @@ pub(super) fn template_texture(
     state.template_textures.get(&id).cloned()
 }
 
-/// One entry per complete template; holes never become selectable anchors.
+/// Complete cliff templates use the lowest available subtile as their default anchor.
 pub(super) fn choices(
     scene: &MapScene,
     category: Option<TerrainCategory>,
@@ -42,6 +47,34 @@ pub(super) fn choices(
     filter: &str,
 ) -> Vec<usize> {
     let mut seen = BTreeSet::new();
+    let mut cliff_anchors = HashMap::new();
+    if !subtiles {
+        for (i, brush) in scene.brushes.iter().enumerate() {
+            let key = brush.key;
+            if !scene
+                .palette
+                .groups
+                .get(&key.tile_id)
+                .is_some_and(|g| g.category == TerrainCategory::Cliff)
+            {
+                continue;
+            }
+            let Some(cell) = scene
+                .palette
+                .templates
+                .get(&(key.tile_id, key.variant))
+                .and_then(|t| t.cells.get(usize::from(key.sub_tile)))
+                .and_then(|s| *s)
+            else {
+                continue;
+            };
+            let candidate = (cell.height, key.sub_tile, i);
+            let best = cliff_anchors
+                .entry((key.tile_id, key.variant))
+                .or_insert(candidate);
+            *best = (*best).min(candidate);
+        }
+    }
     scene
         .brushes
         .iter()
@@ -57,11 +90,26 @@ pub(super) fn choices(
                     || metadata.is_some_and(|g| g.category.name().contains(filter)))
                 && (subtiles || seen.insert((b.key.tile_id, b.key.variant)))
         })
-        .map(|(i, _)| i)
+        .map(|(i, b)| {
+            cliff_anchors
+                .get(&(b.key.tile_id, b.key.variant))
+                .map_or(i, |&(_, _, anchor)| anchor)
+        })
         .collect()
 }
 
 impl Editor {
+    pub(crate) fn set_framework(&mut self, enabled: bool) {
+        if self.stroking {
+            return;
+        }
+        self.framework = enabled;
+        if self.ui_state.framework != enabled {
+            self.ui_state.framework = enabled;
+            self.ui_state.textures.clear();
+            self.ui_state.template_textures.clear();
+        }
+    }
     pub(crate) fn prepare_cliff_smoke_preview(&mut self, scene: &MapScene) -> Result<()> {
         self.show_library(0, "", "");
         self.ui_state.terrain_category = Some(TerrainCategory::Cliff);
@@ -83,6 +131,7 @@ impl Editor {
     }
 
     pub(super) fn terrain_library(&mut self, ui: &mut egui::Ui, scene: &MapScene, filter: &str) {
+        self.set_framework(self.framework);
         let filling = self.terrain_mode == TerrainMode::Fill && self.tool == Tool::Terrain;
         let fill_groups: BTreeSet<_> = if filling {
             scene
@@ -215,7 +264,12 @@ impl Editor {
                             let texture = if subtiles {
                                 let cache_key = (key.tile_id, key.sub_tile, key.variant);
                                 if !self.ui_state.textures.contains_key(&cache_key)
-                                    && let Some(image) = scene.palette.images.get(&key)
+                                    && let Some(image) = if self.framework {
+                                        &scene.palette.framework_images
+                                    } else {
+                                        &scene.palette.images
+                                    }
+                                    .get(&key)
                                 {
                                     if self.ui_state.textures.len() >= 192 {
                                         self.ui_state.textures.clear();
@@ -321,6 +375,7 @@ impl Editor {
     }
 
     pub(super) fn terrain_template_options(&mut self, ui: &mut egui::Ui, scene: &MapScene) {
+        self.set_framework(self.framework);
         let Some(brush) = scene.brushes.get(self.brush) else {
             return;
         };
@@ -396,6 +451,9 @@ impl Editor {
             ui.add(egui::Image::new(&texture).fit_to_exact_size(size * scale));
         }
         ui.small("点击下方菱形选择对齐鼠标的子块：");
+        if group.is_some_and(|g| g.category == TerrainCategory::Cliff) {
+            ui.small("悬崖模板默认以最低子块对齐；也可点击高侧子块接续已有高台。");
+        }
         let scale = ((ui.available_width() - 8.) / (f32::from(t.width + t.height) * 30.)).min(0.75);
         let size = egui::vec2(
             f32::from(t.width + t.height) * 30.,

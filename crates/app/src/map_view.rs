@@ -182,6 +182,7 @@ impl MapView {
         self.load_now(directory, name, None);
     }
     fn load_now(&mut self, directory: PathBuf, name: String, new_map: Option<MapCreation>) {
+        self.workbench.flat_view.invalidate();
         self.workbench.canvas_pan = false;
         self.workbench.cancel_secondary = false;
         self.editor.doc = None;
@@ -252,6 +253,7 @@ impl MapView {
             self.workbench.mission.base.cancel_drag();
         }
         if let Some((base, meta, path)) = self.editor.restored.take() {
+            self.workbench.flat_view.invalidate();
             self.directory = meta.directory.clone();
             self.name = meta.name.clone();
             self.editor.restore(base, meta, path);
@@ -495,6 +497,18 @@ impl MapView {
         if editing {
             self.editor.shortcuts(ui.ctx(), scene);
         }
+        let flat_supported = matches!(
+            self.editor.tool,
+            crate::editing::Tool::Select
+                | crate::editing::Tool::Terrain
+                | crate::editing::Tool::Pick
+        ) && !self.workbench.mission.open
+            && !self.workbench.mission.picking();
+        if self.editor.flat_view && !flat_supported {
+            crate::flat_view::set_enabled(&mut self.editor, scene, &mut self.center, false);
+        }
+        let mut flat = self.editor.flat_view;
+        let mut framework = self.editor.framework;
         if scene.images.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.label("当前地图暂无可预览的地形，请查看左侧诊断；可继续查看地图头并导出原文。");
@@ -506,19 +520,30 @@ impl MapView {
             .inner_margin(egui::Margin::symmetric(12, 7))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    theme::badge(ui, &scene.source.header.theater, theme::BLUE);
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(if scene.source.title.is_empty() {
-                                "地图视图"
-                            } else {
-                                &scene.source.title
-                            })
-                            .size(12.)
-                            .strong(),
-                        )
-                        .truncate(),
-                    );
+                    if ui.available_width() > 600. { theme::badge(ui, &scene.source.header.theater, theme::BLUE); }
+                    ui.add_enabled_ui(editing && !self.editor.stroking, |ui| {
+                        if ui.toggle_value(&mut framework, "框架")
+                            .on_hover_text("Ctrl+F：框架模式，简化悬崖与坡道外观；开启时关闭 2D 地形。")
+                            .changed() && framework { flat = false; }
+                        if ui.toggle_value(&mut flat, "2D 地形")
+                            .on_hover_text("F2：铺平地形以对齐悬崖；开启时关闭框架。对象与区域工具使用立体视图。")
+                            .changed() && flat { framework = false; }
+                    });
+                    if ui.available_width() > 240. {
+                        ui.add_sized(
+                            [ui.available_width() - 195., 20.],
+                            egui::Label::new(
+                                egui::RichText::new(if scene.source.title.is_empty() {
+                                    "地图视图"
+                                } else {
+                                    &scene.source.title
+                                })
+                                .size(12.)
+                                .strong(),
+                            )
+                            .truncate(),
+                        );
+                    }
                     crate::ui_theme::right_to_left(ui, |ui| {
                         if ui.button("适应地图").clicked() {
                             self.fit = true;
@@ -537,8 +562,10 @@ impl MapView {
                             .color(theme::MUTED),
                         );
                         if self.loading {
-                            ui.spinner();
-                            ui.label(self.stage);
+                            ui.spinner().on_hover_text(self.stage);
+                            if ui.available_width() > 180. {
+                                ui.label(self.stage);
+                            }
                         }
                     });
                 });
@@ -551,6 +578,38 @@ impl MapView {
         self.workbench.canvas_rect = Some(rect);
         let keyboard =
             editing && !ui.ctx().text_edit_focused() && !crate::form_edit::popup_open(ui.ctx());
+        if keyboard
+            && !self.editor.stroking
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
+        {
+            framework = !framework;
+            if framework {
+                flat = false;
+            }
+        }
+        if keyboard
+            && !self.editor.stroking
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F2))
+        {
+            flat = !flat;
+            if flat {
+                framework = false;
+            }
+        }
+        if framework {
+            flat = false;
+        }
+        if flat && !flat_supported {
+            self.editor.activate_tool(crate::editing::Tool::Terrain);
+        }
+        crate::flat_view::set_enabled(&mut self.editor, scene, &mut self.center, flat);
+        self.editor.set_framework(framework);
+        self.workbench.flat_view.prepare(scene);
+        let map_bounds = if self.editor.flat_view {
+            self.workbench.flat_view.bounds
+        } else {
+            scene.bounds
+        };
         if keyboard && (response.hovered() || response.has_focus()) {
             ui.input_mut(|i| {
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::Home) {
@@ -570,7 +629,11 @@ impl MapView {
                         .and_then(|at| scene.cells.iter().find(|c| [c.rx, c.ry] == at))
                         .or_else(|| self.selected.and_then(|n| scene.cells.get(n)));
                     if let Some(c) = cell {
-                        self.center = egui::pos2(c.screen_x + 30., c.screen_y + 15.);
+                        self.center = if self.editor.flat_view {
+                            crate::flat_view::position([c.rx, c.ry])
+                        } else {
+                            egui::pos2(c.screen_x + 30., c.screen_y + 15.)
+                        };
                         self.fit = false;
                     }
                 }
@@ -622,9 +685,9 @@ impl MapView {
                 && self.editor.tool == crate::editing::Tool::Select
                 && !self.workbench.mission.picking())
         {
-            self.center = scene.bounds.center();
-            self.zoom = ((rect.width() - 30.) / scene.bounds.width())
-                .min((rect.height() - 30.) / scene.bounds.height())
+            self.center = map_bounds.center();
+            self.zoom = ((rect.width() - 30.) / map_bounds.width())
+                .min((rect.height() - 30.) / map_bounds.height())
                 .clamp(0.01, 8.);
             self.fit = false;
         }
@@ -658,7 +721,15 @@ impl MapView {
                 .round()
                 .max(1.) as u32,
         ];
-        if let (Some(gpu), Some(state)) = (&self.gpu, state) {
+        if self.editor.flat_view {
+            self.workbench.flat_view.draw(
+                &ui.painter().with_clip_rect(rect),
+                scene,
+                &self.editor,
+                rect,
+                &camera,
+            );
+        } else if let (Some(gpu), Some(state)) = (&self.gpu, state) {
             if self.target.as_ref().is_none_or(|t| t.size != size) {
                 self.target = Some(gpu.target(&state.device, size));
             }
@@ -680,15 +751,82 @@ impl MapView {
                 egui::CursorIcon::Crosshair
             });
         }
-        self.hover = response
-            .hover_pos()
-            .and_then(|p| scene.pick(camera.world_point(rect, p)));
+        self.hover = response.hover_pos().and_then(|p| {
+            let world = camera.world_point(rect, p);
+            if self.editor.flat_view {
+                self.workbench.flat_view.pick(world)
+            } else {
+                scene.pick(world)
+            }
+        });
         if response.clicked() && !panning {
             self.selected = self.hover;
         }
         let painter = ui.painter().with_clip_rect(rect);
         let at = self.hover.map(|i| [scene.cells[i].rx, scene.cells[i].ry]);
         self.editor.brush_modifiers(ui.input(|i| i.modifiers));
+        if self.editor.flat_view {
+            self.editor
+                .terrain_preview(&painter, scene, rect, &camera, at);
+            for &cell in &self.editor.feedback {
+                painter.add(egui::Shape::closed_line(
+                    crate::flat_view::points(cell, rect, &camera).to_vec(),
+                    egui::Stroke::new(1., egui::Color32::LIGHT_GREEN),
+                ));
+            }
+            if editing && !panning && !self.workbench.cancel_secondary {
+                self.editor.pointer(
+                    scene,
+                    at,
+                    primary_press && response.contains_pointer(),
+                    primary_down,
+                    primary_release,
+                    None,
+                );
+            }
+            for (index, color) in [
+                (self.hover, egui::Color32::YELLOW),
+                (self.selected, egui::Color32::LIGHT_BLUE),
+            ] {
+                if let Some(c) = index.and_then(|i| scene.cells.get(i)) {
+                    painter.add(egui::Shape::closed_line(
+                        crate::flat_view::points([c.rx, c.ry], rect, &camera).to_vec(),
+                        egui::Stroke::new(2., color),
+                    ));
+                }
+            }
+            if let Some(at) = at
+                && let Some(doc) = &self.editor.doc
+            {
+                let v = ra2_map_scene::terrain_tools::value(doc, scene, at);
+                painter.text(
+                    rect.left_bottom() + egui::vec2(12., -12.),
+                    egui::Align2::LEFT_BOTTOM,
+                    format!(
+                        "2D · {}, {} · 高度 {} · 模板 {}:{}",
+                        at[0],
+                        at[1],
+                        v.level as i8,
+                        scene
+                            .palette
+                            .raw_ids
+                            .get(&v.tile)
+                            .copied()
+                            .map_or(v.tile, i32::from),
+                        v.sub
+                    ),
+                    egui::FontId::monospace(12.),
+                    egui::Color32::WHITE,
+                );
+            }
+            if primary_release || !primary_down {
+                self.workbench.canvas_pan = false;
+            }
+            if secondary_release {
+                self.workbench.cancel_secondary = false;
+            }
+            return;
+        }
         self.editor
             .terrain_preview(&painter, scene, rect, &camera, at);
         let marker = self
