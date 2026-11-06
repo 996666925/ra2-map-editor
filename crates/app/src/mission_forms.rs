@@ -21,84 +21,20 @@ pub(super) fn parameter(
     let mut pick = false;
     ui.horizontal_wrapped(|ui| {
         ui.label(crate::i18n::text(p.label));
-        let mut choices = Vec::new();
+        let choices = choices::get(ui.ctx(), p.kind, doc, scene);
         let mut resource_choices = None;
         match p.kind {
             P::Integer { min, max, unit } => {
                 let unit = crate::i18n::text(unit);
                 ui.small(format!("{min}–{max} {unit}"));
             }
-            P::Reference(kind) => {
-                choices = scene
-                    .mission_definitions
-                    .candidates(doc, kind)
-                    .into_iter()
-                    .map(|(id, fixed)| {
-                        let mut label = format!(
-                            "{id} · {}",
-                            if fixed {
-                                scene.mission_definitions.source.as_str()
-                            } else {
-                                tr!("地图")
-                            }
-                        );
-                        if kind == Kind::Global {
-                            label = format!("{id} · {}", doc.ini_text("EditorGlobalNames", &id));
-                        }
-                        (id, label)
-                    })
-                    .collect()
-            }
-            P::Waypoint { letters } => {
-                choices = doc
-                    .records()
-                    .values()
-                    .filter(|r| r.section == "Waypoints")
-                    .filter_map(|r| {
-                        let index = r.key.parse::<u32>().ok()?;
-                        let token = if letters {
-                            schema::waypoint_token(index).ok()?
-                        } else {
-                            index.to_string()
-                        };
-                        Some((token.clone(), format!("{} · {token}", r.type_id())))
-                    })
-                    .collect();
+            P::Waypoint { .. } => {
                 pick = ui.small_button(tr!("从地图选取")).clicked();
             }
-            P::Type(section) => {
-                choices = scene
-                    .catalog
-                    .object_types
-                    .iter()
-                    .filter(|(k, _)| {
-                        (section.is_empty() || section == "Foot")
-                            && matches!(
-                                k.as_str(),
-                                "Infantry" | "Units" | "Aircraft" | "Structures"
-                            )
-                            && (section != "Foot" || k.as_str() != "Structures")
-                            || k.as_str() == section
-                    })
-                    .flat_map(|(_, ids)| ids.iter())
-                    .map(|id| (id.clone(), scene.catalog.object_label(id).into_owned()))
-                    .collect();
+            P::Type(_) => {
                 pick = ui.small_button(tr!("从地图选对象")).clicked();
             }
-            P::Country => {
-                if let Some(countries) = scene.catalog.rules.section("Countries") {
-                    choices = countries
-                        .registry_ids()
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, id)| (i.to_string(), format!("{i} · {id}")))
-                        .collect();
-                }
-                choices.extend([
-                    ("-1".into(), tr!("-1 · 事件任意国家 / 动作无目标").into()),
-                    ("8997".into(), tr!("8997 · 动作保留所属方").into()),
-                ]);
-            }
+            P::Reference(_) | P::Country => {}
             P::Csf | P::Sound | P::Eva | P::Theme => {
                 let key = match p.kind {
                     P::Csf => "Csf",
@@ -114,7 +50,7 @@ pub(super) fn parameter(
                 pick = ui.small_button(tr!("从地图选格子")).clicked();
             }
         }
-        let choices = resource_choices.unwrap_or(&choices);
+        let choices = resource_choices.unwrap_or(choices.as_slice());
         crate::completion::reference(
             ui,
             ui.make_persistent_id(("parameter", p.index)),

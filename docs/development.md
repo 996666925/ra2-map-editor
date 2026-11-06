@@ -61,6 +61,20 @@ cargo run --locked -p ra2-map-document --example record_allocation_audit
 cargo test --locked --workspace --lib mission_refresh_preserves_gpu_and_viewport_bindings_through_history -- --ignored
 ```
 
+## 表单候选与连刷占用缓存
+
+任务参数、AI 触发器和 CSV 引用控件共享 egui Context 内的候选列表。对象类型和国家候选按资源目录与语言缓存；引用和航点还依赖文档身份及 `edit_revision()`。修订计数覆盖未提交修改、取消、编辑检查点恢复、失败事务回滚、撤销/重做和结构替换，不能只以提交后的 `state_id` 判断有效性。CSF、声音等候选继续直接借用资源缓存，未知 Mod 值仍可自由输入。
+
+文档的 `record_iter()` 和 `record()` 提供包含未提交修改的借用视图，编号分配、航点检查与占用索引无需克隆整张对象表。连刷开始时建立原有对象的占用索引，在当前笔中共享；新增占用由手势维护，Shift 回撤恢复该手势，取消或结束后丢弃索引。下一笔从当前文档重新建立，因此撤销、重做、重叠开关和新的资源配置会被重新读取。
+
+以下 CPU 性能审计使用 1,000 / 3,000 条合成记录及候选，比较每次重建与缓存复用，输出 `target/step5-caches.json`：
+
+```powershell
+cargo test --locked --workspace --lib synthetic_candidate_and_occupancy_profile -- --ignored --nocapture
+```
+
+每项取 7 组、每组 20 次的平均耗时中位数。计时仅包含候选查询或单次放置校验，不包含地图准备、文档写入、整笔连刷和渲染；缓存首次建立的成本仍然存在。
+
 ## UI 交互录像
 
 补全与表单快捷键的 `egui_kittest` 测试包含控件名称检查和缺字检查。安装 `ffmpeg` 并加入 PATH 后，可选择录制补全交互过程，MP4 写入 `target/ui-tests/recordings/`：

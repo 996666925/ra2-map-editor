@@ -19,6 +19,7 @@ struct Settings {
 #[derive(Clone)]
 struct Gesture {
     settings: Settings,
+    occupancy: Arc<placement::Occupancy>,
     last: Option<Cell>,
     visited: BTreeSet<Cell>,
     occupied: BTreeSet<Cell>,
@@ -45,31 +46,26 @@ impl ObjectBrush {
     }
 }
 
-fn place(doc: &mut MapDocument, scene: &MapScene, settings: &Settings, at: Cell) -> Result<u64> {
+fn place(
+    doc: &mut MapDocument,
+    scene: &MapScene,
+    settings: &Settings,
+    occupancy: &placement::Occupancy,
+    at: Cell,
+) -> Result<u64> {
     doc.atomic(|doc| {
         // Terrain coordinates are INI keys: overlap must never replace a tree.
         ensure!(
-            settings.section != "Terrain"
-                || !doc
-                    .records()
-                    .values()
-                    .any(|r| r.section == "Terrain" && r.cell() == Some(at)),
+            settings.section != "Terrain" || !occupancy.has_tree(at),
             "每格只能保存一条地形对象记录，请先移动或删除原对象"
         );
         let id = doc.add_record(&settings.section, at, &settings.owner, &settings.type_id)?;
-        let mut record = doc.records()[&id].clone();
+        let mut record = doc.record(id).unwrap().clone();
         if record.section == "Infantry" {
             record = record.patched(&[(5, settings.subcell.to_string())])?;
             doc.set(Target::Record(id), Some(Value::Record(record.clone())))?;
         }
-        placement::validate(
-            doc,
-            scene,
-            &[record],
-            &BTreeSet::from([id]),
-            settings.overlap,
-            &BTreeMap::new(),
-        )?;
+        occupancy.validate(doc, scene, &[record], settings.overlap, &BTreeMap::new())?;
         Ok(id)
     })
 }
@@ -100,6 +96,11 @@ impl Editor {
             self.object_brush.segment = None;
             self.stroking = true;
             self.object_brush.gesture = Some(Gesture {
+                occupancy: Arc::new(placement::Occupancy::new(
+                    self.doc.as_ref().unwrap(),
+                    scene,
+                    &BTreeSet::new(),
+                )),
                 settings: Settings {
                     section: self.section.clone(),
                     type_id: self.type_id.clone(),
@@ -176,7 +177,13 @@ impl Editor {
                         continue;
                     }
                     let result = footprint.and_then(|cells| {
-                        let id = place(self.doc.as_mut().unwrap(), scene, &g.settings, cell)?;
+                        let id = place(
+                            self.doc.as_mut().unwrap(),
+                            scene,
+                            &g.settings,
+                            &g.occupancy,
+                            cell,
+                        )?;
                         Ok((id, cells))
                     });
                     match result {

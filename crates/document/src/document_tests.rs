@@ -2,13 +2,116 @@ use crate::{
     document::*,
     raw_ini::{RawIni, lcw_encode, pack_lines},
 };
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 use vera20k_core::{
     map::map_file,
     util::{base64::base64_decode, lcw, lzo},
 };
 
 use crate::test_support::{document, fixture};
+
+#[test]
+fn borrowed_records_merge_pending_updates_and_deletions_in_id_order() {
+    let mut doc = document();
+    let original = doc.base.records.clone();
+    let old = *original
+        .iter()
+        .find(|(_, record)| record.section == "Infantry")
+        .unwrap()
+        .0;
+    assert!(std::ptr::eq(
+        doc.record(old).unwrap(),
+        &doc.base.records[&old]
+    ));
+    let moved = original[&old].moved([3, 2]).unwrap();
+    doc.set(Target::Record(old), Some(Value::Record(moved.clone())))
+        .unwrap();
+    let new = doc.add_record("Units", [2, 2], "Neutral", "HTNK").unwrap();
+    let mut expected = original.clone();
+    expected.insert(old, moved);
+    expected.insert(new, doc.record(new).unwrap().clone());
+    let verify = |doc: &MapDocument, expected: &BTreeMap<u64, Record>| {
+        assert_eq!(
+            doc.record_iter().collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|(&id, record)| (id, record))
+                .collect::<Vec<_>>()
+        );
+        for (&id, record) in expected {
+            assert_eq!(doc.record(id), Some(record));
+        }
+    };
+    verify(&doc, &expected);
+    doc.set(Target::Record(old), None).unwrap();
+    expected.remove(&old);
+    verify(&doc, &expected);
+    assert!(doc.record(old).is_none());
+    doc.commit("record changes");
+    assert!(doc.undo());
+    verify(&doc, &original);
+    assert!(doc.redo());
+    verify(&doc, &expected);
+    doc.set(Target::Record(new), None).unwrap();
+    doc.cancel();
+    verify(&doc, &expected);
+}
+
+#[test]
+fn edit_revision_invalidates_pending_and_restored_states_without_rewinding() {
+    let mut doc = document();
+    let initial = doc.edit_revision();
+    let state = doc.state_id;
+    doc.set_ini("Events", "T", Some(b"1,13,0,2".to_vec()))
+        .unwrap();
+    assert_eq!(doc.state_id, state);
+    assert!(doc.edit_revision() > initial);
+    let first = doc.edit_revision();
+    doc.set_ini("Events", "T", Some(b"1,13,0,2".to_vec()))
+        .unwrap();
+    assert_eq!(
+        doc.edit_revision(),
+        first,
+        "no-op edits keep cached candidates"
+    );
+    let checkpoint = doc.edit_checkpoint();
+    doc.set_ini("Events", "T", Some(b"1,13,0,3".to_vec()))
+        .unwrap();
+    let changed = doc.edit_revision();
+    doc.restore_edit(&checkpoint).unwrap();
+    assert!(doc.edit_revision() > changed);
+    let restored = doc.edit_revision();
+    let result: anyhow::Result<()> = doc.atomic(|doc| {
+        doc.set_ini("Events", "T", Some(b"1,13,0,4".to_vec()))?;
+        anyhow::bail!("rollback")
+    });
+    assert!(result.is_err());
+    assert!(doc.edit_revision() > restored);
+    assert_eq!(doc.ini_text("Events", "T"), "1,13,0,2");
+    doc.commit("event");
+    let committed = doc.edit_revision();
+    doc.undo();
+    assert!(doc.edit_revision() > committed);
+    let undone = doc.edit_revision();
+    doc.redo();
+    assert!(doc.edit_revision() > undone);
+    let before = doc.edit_revision();
+    doc.set_ini("Events", "T", Some(b"1,13,0,5".to_vec()))
+        .unwrap();
+    doc.cancel();
+    assert!(doc.edit_revision() > before);
+    let fork = doc.fork();
+    assert_ne!(fork.id, doc.id);
+    assert_eq!(fork.ini_text("Events", "T"), doc.ini_text("Events", "T"));
+    let before = doc.edit_revision();
+    let mut replacement = doc.snapshot().bytes().unwrap();
+    replacement.extend_from_slice(b"\r\n[EditorGlobalNames]\r\n0=changed\r\n");
+    doc.replace_bytes(replacement, "structural").unwrap();
+    assert!(doc.edit_revision() > before);
+    let before = doc.edit_revision();
+    doc.undo();
+    assert!(doc.edit_revision() > before);
+}
 
 #[test]
 fn snapshot_target_differences_follow_ini_edits_and_history() {

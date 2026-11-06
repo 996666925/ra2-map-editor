@@ -13,6 +13,8 @@ use std::sync::Arc;
 mod ai_forms;
 #[path = "mission_authoring_smoke.rs"]
 mod authoring_smoke;
+#[path = "mission_choices.rs"]
+mod choices;
 #[path = "mission_forms.rs"]
 mod forms;
 
@@ -906,7 +908,7 @@ fn reference_input(
     key: &str,
     value: &mut String,
     doc: &ra2_map_document::document::MapDocument,
-    definitions: &mission::ExternalDefinitions,
+    definitions: &Arc<mission::ExternalDefinitions>,
 ) {
     let kind = match key {
         "House" | "Player" => Some(Kind::House),
@@ -917,18 +919,9 @@ fn reference_input(
         _ => None,
     };
     let width = (ui.available_width() - if kind.is_some() { 84. } else { 0. }).clamp(70., 220.);
-    let choices: Vec<_> = kind
-        .into_iter()
-        .flat_map(|kind| definitions.candidates(doc, kind))
-        .map(|(id, external)| {
-            let source = if external {
-                definitions.source.as_str()
-            } else {
-                tr!("地图")
-            };
-            (id.clone(), format!("{id} · {source}"))
-        })
-        .collect();
+    let choices = kind
+        .map(|kind| choices::references(ui.ctx(), kind, doc, definitions))
+        .unwrap_or_default();
     crate::completion::reference(
         ui,
         ui.make_persistent_id((key, "text")),
@@ -942,7 +935,7 @@ fn reference_input(
             .selected_text(tr!("选择"))
             .width(70.)
             .show_ui(ui, |ui| {
-                for (id, label) in &choices {
+                for (id, label) in choices.iter() {
                     ui.selectable_value(value, id.clone(), label);
                 }
             });
@@ -953,7 +946,7 @@ fn csv_form(
     value: &mut String,
     labels: &[&str],
     doc: &ra2_map_document::document::MapDocument,
-    definitions: &mission::ExternalDefinitions,
+    definitions: &Arc<mission::ExternalDefinitions>,
 ) {
     let mut fields = mission::csv(value);
     let mut changed = false;

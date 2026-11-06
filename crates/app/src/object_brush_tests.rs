@@ -80,6 +80,60 @@ fn shift_object_brush_locks_both_axes_and_preserves_undo_and_cancel() {
 }
 
 #[test]
+fn occupancy_is_shared_during_retraction_and_rebuilt_for_each_new_stroke() {
+    let (mut e, _, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    start(&mut e, "Units", "HTNK");
+    e.brush_modifiers(egui::Modifiers::SHIFT);
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    let occupancy = e.object_brush.gesture.as_ref().unwrap().occupancy.clone();
+    e.pointer(&scene, Some([24, 20]), false, true, false, None);
+    e.pointer(&scene, Some([21, 20]), false, true, false, None);
+    assert!(Arc::ptr_eq(
+        &occupancy,
+        &e.object_brush.gesture.as_ref().unwrap().occupancy
+    ));
+    e.pointer(&scene, Some([21, 20]), false, false, true, None);
+    assert!(e.object_brush.gesture.is_none());
+    let after = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.brush_modifiers(egui::Modifiers::NONE);
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    assert!(!Arc::ptr_eq(
+        &occupancy,
+        &e.object_brush.gesture.as_ref().unwrap().occupancy
+    ));
+    assert!(
+        e.object_brush.gesture.as_ref().unwrap().created.is_empty(),
+        "last stroke is now a pre-existing obstacle"
+    );
+    e.pointer(&scene, Some([20, 20]), false, false, true, None);
+    e.history(false, &scene);
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    assert_eq!(
+        e.object_brush.gesture.as_ref().unwrap().created.len(),
+        1,
+        "undo releases the obstacle for the next stroke"
+    );
+    e.cancel_active(&scene);
+    e.history(true, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    assert!(
+        e.object_brush.gesture.as_ref().unwrap().created.is_empty(),
+        "redo restores the obstacle"
+    );
+    e.cancel_active(&scene);
+    e.allow_overlap = true;
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    assert_eq!(e.object_brush.gesture.as_ref().unwrap().created.len(), 1);
+    e.cancel_active(&scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn shift_building_line_shrinks_without_losing_prefix_or_existing_objects() {
     let (mut e, _, root) = editor();
     let scene = scene();

@@ -1399,9 +1399,8 @@ pub fn parameter_error(doc: &MapDocument, kind: ParameterKind, value: &str) -> O
         ParameterKind::Waypoint { letters } => {
             let id = waypoint_index(value, letters).filter(|id| *id < 702);
             if id.is_none_or(|id| {
-                !doc.records()
-                    .values()
-                    .any(|r| r.section == "Waypoints" && r.key.parse::<u32>().ok() == Some(id))
+                !doc.record_iter()
+                    .any(|(_, r)| r.section == "Waypoints" && r.key.parse::<u32>().ok() == Some(id))
             }) {
                 return Some("航点不存在；字母编码字段请使用 A/B/AA 等".into());
             }

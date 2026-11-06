@@ -496,6 +496,7 @@ pub struct MapDocument {
     next_state: u64,
     next_record: u64,
     history_bytes: usize,
+    edit_revision: u64,
 }
 static NEXT_DOC: AtomicU64 = AtomicU64::new(1);
 impl MapDocument {
@@ -542,6 +543,7 @@ impl MapDocument {
         self.base = state.base.clone();
         self.changes = state.changes.clone();
         self.next_record = state.next_record;
+        self.edit_revision = self.edit_revision.wrapping_add(1);
     }
     fn trim_history(&mut self) {
         while self.history_bytes > 64 * 1024 * 1024 && self.undo.len() > 1 {
@@ -578,6 +580,7 @@ impl MapDocument {
         self.changes = checkpoint.changes.clone();
         self.pending = checkpoint.pending.clone();
         self.next_record = checkpoint.next_record;
+        self.edit_revision = self.edit_revision.wrapping_add(1);
         Ok(())
     }
     /// A command-level savepoint, including an already pending brush transaction.
@@ -588,12 +591,12 @@ impl MapDocument {
             Ok(value) => Ok(value),
             Err(error) => {
                 (self.changes, self.pending, self.next_record) = saved;
+                self.edit_revision = self.edit_revision.wrapping_add(1);
                 Err(error)
             }
         }
     }
     pub fn insert_record(&mut self, mut record: Record) -> Result<u64> {
-        let current = self.records();
         if record.section != "Terrain" {
             let reserved: HashSet<String> = self
                 .base
@@ -601,8 +604,8 @@ impl MapDocument {
                 .entries(&record.section)
                 .filter_map(|(_, line)| line.key.clone())
                 .chain(
-                    current
-                        .values()
+                    self.record_iter()
+                        .map(|(_, record)| record)
                         .filter(|r| r.section == record.section)
                         .map(|r| r.key.clone()),
                 )
@@ -638,6 +641,7 @@ impl MapDocument {
             next_state: 1,
             next_record,
             history_bytes: 0,
+            edit_revision: 0,
         }
     }
     pub fn value(&self, target: &Target) -> Option<Value> {
@@ -659,6 +663,7 @@ impl MapDocument {
         }
     }
     fn assign(&mut self, target: Target, value: Option<Value>) {
+        self.edit_revision = self.edit_revision.wrapping_add(1);
         if value == self.base.value(&target) {
             self.changes.remove(&target);
         } else {
@@ -696,7 +701,7 @@ impl MapDocument {
                 self.check_cell(record.cell().context("记录坐标无效")?)?;
                 if record.section == "Terrain" {
                     ensure!(
-                        !self.records().iter().any(|(other, r)| other != id
+                        !self.record_iter().any(|(other, r)| other != *id
                             && r.section == "Terrain"
                             && r.cell() == record.cell()),
                         "该格子已有地形对象"
@@ -828,18 +833,52 @@ impl MapDocument {
             state_id: self.state_id,
         }
     }
-    pub fn records(&self) -> BTreeMap<u64, Record> {
-        let mut records = self.base.records.clone();
-        for (target, value) in &self.changes {
-            if let Target::Record(id) = target {
-                if let Some(Value::Record(record)) = value {
-                    records.insert(*id, record.clone());
-                } else {
-                    records.remove(id);
+    /// Changes inside a pending transaction also invalidate derived UI data.
+    /// Pair with document ID; the counter never rewinds on undo or rollback.
+    pub fn edit_revision(&self) -> u64 {
+        self.edit_revision
+    }
+    pub fn record(&self, id: u64) -> Option<&Record> {
+        match self.changes.get(&Target::Record(id)) {
+            Some(Some(Value::Record(record))) => Some(record),
+            Some(_) => None,
+            None => self.base.records.get(&id),
+        }
+    }
+    /// Borrow the current records in stable ID order, including pending edits.
+    pub fn record_iter(&self) -> impl Iterator<Item = (u64, &Record)> {
+        let mut base = self.base.records.iter().peekable();
+        let mut changes = self
+            .changes
+            .range(Target::Record(0)..=Target::Record(u64::MAX))
+            .peekable();
+        std::iter::from_fn(move || {
+            loop {
+                match (base.peek(), changes.peek()) {
+                    (Some((id, _)), Some((Target::Record(changed), _))) if id < &changed => {
+                        return base.next().map(|(&id, record)| (id, record));
+                    }
+                    (_, Some(_)) => {
+                        let (Target::Record(id), value) = changes.next().unwrap() else {
+                            unreachable!()
+                        };
+                        if base.peek().is_some_and(|(base_id, _)| *base_id == id) {
+                            base.next();
+                        }
+                        if let Some(Value::Record(record)) = value {
+                            return Some((*id, record));
+                        }
+                    }
+                    (Some(_), None) => return base.next().map(|(&id, record)| (id, record)),
+                    (None, None) => return None,
                 }
             }
-        }
-        records
+        })
+    }
+    pub fn records(&self) -> BTreeMap<u64, Record> {
+        self.record_iter()
+            .map(|(id, record)| (id, record.clone()))
+            .collect()
     }
     pub fn add_record(
         &mut self,
@@ -856,7 +895,6 @@ impl MapDocument {
             ),
             "不支持该对象分类"
         );
-        let records = self.records();
         if section == "Terrain" {
             let coordinate_radix = if self
                 .base
@@ -882,10 +920,10 @@ impl MapDocument {
                 cell[0] < coordinate_radix,
                 "地形对象横坐标须小于 {coordinate_radix}；旧格式地图请使用 NewINIFormat=4"
             );
-            let existing = records
-                .iter()
+            let existing = self
+                .record_iter()
                 .find(|(_, r)| r.section == section && r.cell() == Some(cell))
-                .map(|(&id, _)| id);
+                .map(|(id, _)| id);
             let id = existing.unwrap_or(self.next_record);
             if existing.is_none() {
                 self.next_record += 1;
@@ -904,8 +942,9 @@ impl MapDocument {
         }
         // Keep exact key spellings: legacy keys such as "01" do not reserve "1".
         // Build the set once instead of scanning every record for every number.
-        let used_keys: HashSet<_> = records
-            .values()
+        let used_keys: HashSet<_> = self
+            .record_iter()
+            .map(|(_, record)| record)
             .filter(|r| r.section == section)
             .map(|r| r.key.as_str())
             .collect();
@@ -942,11 +981,10 @@ impl MapDocument {
         ensure!(index <= 701, "航点索引应为 0..701");
         ensure!(cell[0] < 1000, "航点横坐标须小于 1000");
         let key = index.to_string();
-        let records = self.records();
-        let existing = records
-            .iter()
+        let existing = self
+            .record_iter()
             .find(|(_, r)| r.section == "Waypoints" && r.key == key)
-            .map(|(id, _)| *id);
+            .map(|(id, _)| id);
         let id = existing.unwrap_or_else(|| {
             let id = self.next_record;
             self.next_record += 1;

@@ -54,19 +54,12 @@ pub(super) fn form(
         // scalar selection uses the same cached catalog as mission parameters.
         ui.horizontal_wrapped(|ui| {
             ui.label(tr!("对象类型（数量条件）"));
-            let choices: Vec<_> = scene
-                .catalog
-                .object_types
-                .iter()
-                .filter(|(section, _)| {
-                    matches!(
-                        section.as_str(),
-                        "Structures" | "Units" | "Infantry" | "Aircraft"
-                    )
-                })
-                .flat_map(|(_, ids)| ids)
-                .map(|id| (id.clone(), scene.catalog.object_label(id).into_owned()))
-                .collect();
+            let choices = choices::get(
+                ui.ctx(),
+                mission::schema::ParameterKind::Type(""),
+                doc,
+                scene,
+            );
             crate::completion::reference(
                 ui,
                 ui.make_persistent_id("ai-type-text"),
@@ -79,19 +72,8 @@ pub(super) fn form(
                 .selected_text(tr!("选择类型…"))
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut f[5], "<none>".into(), tr!("无"));
-                    for (section, ids) in &scene.catalog.object_types {
-                        if matches!(
-                            section.as_str(),
-                            "Structures" | "Units" | "Infantry" | "Aircraft"
-                        ) {
-                            for id in ids {
-                                ui.selectable_value(
-                                    &mut f[5],
-                                    id.clone(),
-                                    scene.catalog.object_label(id),
-                                );
-                            }
-                        }
+                    for (id, label) in choices.iter() {
+                        ui.selectable_value(&mut f[5], id.clone(), label);
                     }
                 });
         });

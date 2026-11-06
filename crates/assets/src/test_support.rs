@@ -11,9 +11,11 @@ impl Default for Fixture {
 
 impl Fixture {
     pub fn new() -> Self {
+        static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "yr-editor-资源-{}-{}",
+            "yr-editor-资源-{}-{}-{}",
             std::process::id(),
+            NEXT_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

@@ -174,3 +174,33 @@ fn overlap_override_cannot_create_duplicate_terrain_coordinate_keys() {
     let r = doc.records()[&id].clone();
     assert!(validate(&doc, &scene, &[r], &BTreeSet::new(), true, &BTreeMap::new()).is_err());
 }
+
+#[test]
+fn frozen_occupancy_preserves_bridge_layers_subcells_and_failed_batches() {
+    let (mut doc, scene) = setup();
+    let infantry = doc
+        .add_record("Infantry", [20, 20], "Neutral", "E1")
+        .unwrap();
+    let original = doc.record(infantry).unwrap().clone();
+    let high = original.patched(&[(11, "1".into())]).unwrap();
+    let other_subcell = original.patched(&[(5, "1".into())]).unwrap();
+    let occupancy = Occupancy::new(&doc, &scene, &BTreeSet::new());
+    let check = |records: &[Record], overlap| {
+        occupancy.validate(&doc, &scene, records, overlap, &BTreeMap::new())
+    };
+    assert!(check(std::slice::from_ref(&original), false).is_err());
+    assert!(check(std::slice::from_ref(&original), true).is_ok());
+    assert!(check(std::slice::from_ref(&other_subcell), false).is_ok());
+    assert!(check(std::slice::from_ref(&high), false).is_ok());
+    let free = building([23, 20]);
+    assert!(check(&[free.clone(), free.clone()], false).is_err());
+    assert!(
+        check(std::slice::from_ref(&free), false).is_ok(),
+        "failed batch cannot leave provisional occupancy"
+    );
+    assert!(
+        Occupancy::new(&doc, &scene, &BTreeSet::from([infantry]))
+            .validate(&doc, &scene, &[original], false, &BTreeMap::new())
+            .is_ok()
+    );
+}
