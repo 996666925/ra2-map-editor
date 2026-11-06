@@ -67,7 +67,7 @@ impl NewMapOptions {
             u32::from(self.width) + u32::from(self.height) <= u32::from(MAX_MAP_SPAN),
             "VERA20k 要求地图宽度＋高度不超过 {MAX_MAP_SPAN}"
         );
-        ensure!(self.level <= 14, "初始高度须在 0～14 之间");
+        ensure!(self.level <= 127, "初始高度须在 0～127 之间");
         ensure!(
             (2..=MAX_PLAYERS).contains(&self.players),
             "玩家起点数量须在 2～{MAX_PLAYERS} 之间"
@@ -337,7 +337,7 @@ mod tests {
         }
         assert!(
             NewMapOptions {
-                level: 15,
+                level: 128,
                 ..options.clone()
             }
             .bytes()

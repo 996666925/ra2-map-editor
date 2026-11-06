@@ -438,7 +438,7 @@ impl Editor {
             self.template_level = fixed.then_some(0);
         }
         if let Some(level) = &mut self.template_level {
-            ui.add(egui::Slider::new(level, 0..=14).text("基准高度"));
+            ui.add(egui::Slider::new(level, 0..=127).text("基准高度"));
             ui.small("各子块高度 = 基准高度 + 模板相对高度。");
         } else {
             ui.small("高度跟随鼠标下的格子；所选锚点与该格等高。");

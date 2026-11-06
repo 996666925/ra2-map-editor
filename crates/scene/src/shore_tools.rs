@@ -75,7 +75,7 @@ pub(crate) fn protect(
 ) -> Result<()> {
     for (&at, &v) in edits {
         doc.check_cell(at)?;
-        ensure!(v.level <= 14, "地形高度超过 14 层");
+        ensure!(v.level <= 127, "地形高度超过 127 层");
         if v != value(doc, scene, at) {
             let tile = id(scene, v).context("自动地形无法映射到游戏素材")?;
             ensure!(

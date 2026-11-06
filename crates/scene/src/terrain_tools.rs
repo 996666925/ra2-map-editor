@@ -277,8 +277,8 @@ pub fn template_placement(
         );
         let level = base + i16::from(height);
         ensure!(
-            (0..=14).contains(&level),
-            "模板高度越过 0～14，请调整基准高度或放置位置"
+            (0..=127).contains(&level),
+            "模板高度越过 0～127，请调整基准高度或放置位置"
         );
         edits.push((
             cell,
@@ -412,7 +412,7 @@ pub fn recalculate(
 }
 
 /// Height editing uses the engine's corner grid and slope propagation. The
-/// native morph engine supports 0..12; explicit raw-level mode supports 0..14.
+/// native morph engine supports 0..12; explicit raw-level mode supports 0..127.
 pub fn height(
     doc: &mut MapDocument,
     scene: &MapScene,
@@ -438,7 +438,7 @@ pub fn height(
                 (
                     at,
                     TerrainValue {
-                        level: target(old.level).min(14),
+                        level: target(old.level).min(127),
                         ..old
                     },
                 )
@@ -530,7 +530,7 @@ pub fn height(
         let goal = target(c.level);
         ensure!(
             goal <= 12,
-            "自动坡面支持 0～12 层；可关闭自动坡面编辑到 14 层"
+            "自动坡面支持 0～12 层；可关闭自动坡面编辑到 127 层"
         );
         ensure!(
             morphable(c.tile) && c.overlay == -1 && !c.occupied,

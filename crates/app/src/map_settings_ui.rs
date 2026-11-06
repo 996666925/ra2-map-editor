@@ -301,7 +301,7 @@ impl MapSettingsUi {
                     egui::Grid::new("map-dimensions").num_columns(2).show(ui,|ui|{
                         for (name,value) in [("新宽度",&mut options.width),("新高度",&mut options.height)]{ui.label(name);changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION),name).changed();ui.end_row();}
                         ui.label("原图放置偏移（左、上）");ui.horizontal(|ui|{for (value,name) in options.offset.iter_mut().zip(["左侧偏移","顶部偏移"]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(-i32::from(MAX_MAP_SPAN)..=i32::from(MAX_MAP_SPAN)),name).changed();}});ui.end_row();
-                        ui.label("扩展区域清地高度");changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut options.fill_level).range(0..=14),"扩展区域清地高度").changed();ui.end_row();
+                        ui.label("扩展区域清地高度");changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut options.fill_level).range(0..=127),"扩展区域清地高度").changed();ui.end_row();
                         ui.label("可玩区域（左、上、宽、高）").on_hover_text("LocalSize");ui.horizontal_wrapped(|ui|{for (value,name) in options.local.iter_mut().zip(["可玩区域左侧","可玩区域顶部","可玩区域宽度","可玩区域高度"]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(0..=MAX_MAP_DIMENSION),name).changed();}});ui.end_row();
                     });
                     ui.horizontal_wrapped(|ui|{

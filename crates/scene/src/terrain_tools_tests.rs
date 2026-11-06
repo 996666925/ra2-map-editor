@@ -124,16 +124,16 @@ fn cliff_base_height_preflight_matches_stamp_and_rejects_overflow_without_partia
     b.key.sub_tile = 1; // High anchor on existing level zero used to prevent placement.
     let before = doc.snapshot().bytes().unwrap();
     assert!(template_placement(&doc, &scene, &b, [20, 20], None).is_err());
-    let planned = template_placement(&doc, &scene, &b, [20, 20], Some(3)).unwrap();
-    stamp_at_height(&mut doc, &scene, &b, [20, 20], true, Some(3)).unwrap();
+    let planned = template_placement(&doc, &scene, &b, [20, 20], Some(123)).unwrap();
+    stamp_at_height(&mut doc, &scene, &b, [20, 20], true, Some(123)).unwrap();
     for (at, value) in planned {
         assert_eq!(doc.terrain(at), Some(value));
     }
-    assert_eq!(doc.terrain([20, 20]).unwrap().level, 7);
-    assert_eq!(doc.terrain([19, 20]).unwrap().level, 3);
+    assert_eq!(doc.terrain([20, 20]).unwrap().level, 127);
+    assert_eq!(doc.terrain([19, 20]).unwrap().level, 123);
     doc.commit("cliff");
     let after = doc.snapshot().bytes().unwrap();
-    assert!(stamp_at_height(&mut doc, &scene, &b, [25, 25], true, Some(11)).is_err());
+    assert!(stamp_at_height(&mut doc, &scene, &b, [25, 25], true, Some(124)).is_err());
     assert_eq!(doc.snapshot().bytes().unwrap(), after);
     doc.undo();
     assert_eq!(doc.snapshot().bytes().unwrap(), before);
@@ -312,13 +312,18 @@ fn height_clamps_raw_levels_and_constructs_smooth_plateau_with_transactional_und
     doc.undo();
     assert_eq!(doc.snapshot().bytes().unwrap(), before);
     height(&mut doc, &scene, &selected, TerrainMode::Flatten, 14, false).unwrap();
+    height(&mut doc, &scene, &selected, TerrainMode::Raise, 0, false).unwrap();
+    for at in &selected {
+        assert_eq!(doc.terrain(*at).unwrap().level, 15);
+    }
+    height(&mut doc, &scene, &selected, TerrainMode::Flatten, 127, false).unwrap();
     assert!(
         height(&mut doc, &scene, &selected, TerrainMode::Raise, 0, false)
             .unwrap()
             .is_empty()
     );
     for at in &selected {
-        assert_eq!(doc.terrain(*at).unwrap().level, 14);
+        assert_eq!(doc.terrain(*at).unwrap().level, 127);
     }
 }
 

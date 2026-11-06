@@ -476,7 +476,7 @@ impl Editor {
                         ui.add(
                             egui::Slider::new(
                                 &mut self.flatten_level,
-                                0..=if self.smooth_heights { 12 } else { 14 },
+                                0..=if self.smooth_heights { 12 } else { 127 },
                             )
                             .text("目标高度"),
                         );

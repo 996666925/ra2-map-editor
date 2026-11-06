@@ -794,7 +794,7 @@ impl Editor {
         ensure!(
             clip.cells.iter().all(|c| c.at[0] < MAX_CELL_SIDE
                 && c.at[1] < MAX_CELL_SIDE
-                && c.terrain.is_none_or(|v| v.level <= 14)),
+                && c.terrain.is_none_or(|v| v.level <= 127)),
             "剪贴板坐标或高度无效"
         );
         ensure!(

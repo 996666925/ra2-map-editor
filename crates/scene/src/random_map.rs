@@ -145,7 +145,7 @@ fn normalize_water_levels(
         }
         let mut queue = VecDeque::from([first]);
         let mut component = vec![];
-        let mut shores = [0usize; 15];
+        let mut shores = [0usize; 128];
         let mut fallback = 0;
         while let Some(i) = queue.pop_front() {
             component.push(i);
@@ -184,7 +184,7 @@ fn normalize_water_levels(
             let cell = &mut map.cells[i];
             cell.z = base
                 .saturating_add(relative_height(cell.tile_index, cell.sub_tile))
-                .min(14);
+                .min(127);
         }
     }
 }

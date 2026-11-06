@@ -943,7 +943,7 @@ impl MapView {
                             crate::form_edit::number(ui, egui::DragValue::new(&mut options.height).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).suffix(" 格"), "地图高度");
                             ui.end_row();
                             ui.label("初始地面高度");
-                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.level).range(0..=14).suffix(" 层"), "初始地面高度");
+                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.level).range(0..=127).suffix(" 层"), "初始地面高度");
                             ui.end_row();
                             ui.label("玩家起点");
                             crate::form_edit::number(ui, egui::DragValue::new(&mut options.players).range(2..=MAX_PLAYERS).suffix(" 个"), "玩家起点");
