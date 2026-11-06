@@ -67,12 +67,26 @@ fn preview(install: &Install, catalog: &Catalog, section: &str, id: &str) -> Spr
         .unwrap_or(id);
     let image = if section == "Animations" {
         catalog.art.resolve_anim_image_id(id)
+    } else if section == "Infantry" {
+        catalog
+            .infantry_image(id)
+            .map(str::to_owned)
+            .unwrap_or_else(|| catalog.art.resolve_effective_image_id(id, rules_image))
     } else {
         catalog.art.resolve_effective_image_id(id, rules_image)
     };
     let entry = catalog.art.get(&image);
     let voxel = entry.is_some_and(|e| e.voxel);
-    let candidates = if matches!(section, "Terrain" | "Smudge") {
+    let candidates = if section == "Infantry"
+        && let Some(appearance) = catalog.infantry_appearances.get(&id.to_ascii_uppercase())
+    {
+        // Use the game's retained LoadSHP requests, including Arctic art.
+        appearance
+            .shp_loads
+            .iter()
+            .flat_map(|load| load.shp_names(install.theater.extension, &install.theater_name))
+            .collect()
+    } else if matches!(section, "Terrain" | "Smudge") {
         // Terrain/Smudge InitTheater loads the environment shape first. A
         // same-named SHP may be legacy art with an entirely different palette.
         vec![
@@ -147,7 +161,15 @@ fn preview(install: &Install, catalog: &Catalog, section: &str, id: &str) -> Spr
                     "Overlay" => overlay_palette(install, catalog, id),
                     _ => &install.theater.unit_palette,
                 });
-                decode_shp(install, name, pal)
+                if section == "Infantry" {
+                    catalog
+                        .infantry_frame(id, 0)
+                        .and_then(|frame| decode_shp_frame(install, name, pal, frame).ok())
+                        .map(Ok)
+                        .unwrap_or_else(|| decode_shp(install, name, pal))
+                } else {
+                    decode_shp(install, name, pal)
+                }
             })
     };
     match loaded {

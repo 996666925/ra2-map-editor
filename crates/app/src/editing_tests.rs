@@ -539,7 +539,7 @@ fn template_height_is_frozen_on_press_and_invalid_preview_does_not_write() {
         3
     );
     let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
-    editor.template_level = Some(15);
+    editor.template_level = Some(128);
     let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
         let rect = ui.max_rect();
         editor.terrain_preview(

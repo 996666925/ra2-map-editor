@@ -14,3 +14,7 @@ doctest = false
 [dependencies]
 vera20k-core.workspace = true
 glam.workspace = true
+wgpu.workspace = true
+pollster = "0.4"
+log.workspace = true
+bytemuck.workspace = true

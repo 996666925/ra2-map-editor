@@ -5,10 +5,16 @@ The editor pins the engine through its Git tree entry, rather than a moving bran
 Use `git submodule status` for the revision selected by your editor checkout.
 
 Both `vera20k-core` and `crates/voxel` use this checkout. The latter compiles
-the engine's existing CPU voxel renderer sources because those modules currently
+the engine's shared CPU/GPU voxel renderer sources because those modules currently
 belong to the full game client, rather than a separate render library.
 A Cargo Git dependency alone would not expose those source paths to the adapter.
-When the engine publishes a CPU renderer crate, both can become ordinary Cargo
+The adapter uses GPU palette-index rasterization on the asset worker and reads
+static images back for previews, picking and scene atlases, batching up to 32 poses
+per GPU submission. CPU fallback follows the engine admission rules. Multi-part
+merging requests the CPU result once because the GPU image has no geometric depth.
+No game-client renderer sources are copied or modified.
+
+When the engine publishes a renderer crate, both can become ordinary Cargo
 dependencies without retaining the source adapter.
 
 ## Initialize or restore the pinned revision

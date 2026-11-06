@@ -138,7 +138,11 @@ fn building_bib_and_opted_in_animation_shadows_keep_layer_offsets_without_double
 #[test]
 fn map_shp_uses_canvas_offsets_and_native_infantry_direction_without_thumbnail_scaling() {
     let fixture = Fixture::new();
-    std::fs::write(fixture.0.join("rulesmd.ini"), b"[InfantryTypes]\n0=GI\n").unwrap();
+    std::fs::write(
+        fixture.0.join("rulesmd.ini"),
+        b"[InfantryTypes]\n0=GI\n[GI]\nImage=GI\n",
+    )
+    .unwrap();
     std::fs::write(
         fixture.0.join("artmd.ini"),
         b"[GI]\nSequence=ReadySeq\nXDrawOffset=3\nYDrawOffset=4\n[ReadySeq]\nReady=0,1,1\n",
@@ -330,5 +334,204 @@ fn loader_returns_missing_directory_error_with_request_identity() {
             .unwrap()
             .to_string()
             .contains("游戏目录不存在")
+    );
+}
+
+/// Run with RA2_DIR pointing to retail YR assets; require actual GPU admission.
+#[test]
+#[ignore = "requires a GPU adapter and retail YR assets in RA2_DIR"]
+fn retail_voxel_gpu_readback_matches_cpu_and_preserves_composite_depth() {
+    use ra2_map_voxel::{
+        Renderer,
+        vxl_raster::{self, VxlRenderParams},
+    };
+    use vera20k_core::assets::{hva_file::HvaFile, vpl_file::VplFile, vxl_file::VxlFile};
+    let root = std::env::var_os("RA2_DIR").expect("RA2_DIR");
+    let install = Install::open(std::path::Path::new(&root)).unwrap();
+    let vpl = VplFile::from_bytes(install.manager.get_ref("voxels.vpl").unwrap()).unwrap();
+    let mut renderer = Renderer::new(Some(&vpl));
+    for name in ["mtnk", "mtnktur", "mtnkbarl", "orca"] {
+        let model =
+            VxlFile::from_bytes(install.manager.get_ref(&format!("{name}.vxl")).unwrap()).unwrap();
+        let hva =
+            HvaFile::from_bytes(install.manager.get_ref(&format!("{name}.hva")).unwrap()).unwrap();
+        let params: Vec<_> = (0..=255)
+            .step_by(8)
+            .map(|facing| VxlRenderParams {
+                facing,
+                ..Default::default()
+            })
+            .collect();
+        let sprites = renderer.render_batch(&model, Some(&hva), &params, false);
+        for (params, actual) in params.iter().zip(sprites) {
+            let facing = params.facing;
+            let expected = vxl_raster::render_vxl(&model, Some(&hva), &params, Some(&vpl));
+            assert_eq!(
+                actual.palette_indices, expected.palette_indices,
+                "{name} {facing}"
+            );
+            assert_eq!(
+                (
+                    actual.width,
+                    actual.height,
+                    actual.offset_x,
+                    actual.offset_y
+                ),
+                (
+                    expected.width,
+                    expected.height,
+                    expected.offset_x,
+                    expected.offset_y
+                )
+            );
+        }
+    }
+    assert_eq!(
+        renderer.gpu_draws(),
+        128,
+        "all ordinary poses must execute on the GPU"
+    );
+    assert_eq!(
+        renderer.gpu_submissions(),
+        4,
+        "one submission per model's 32 poses"
+    );
+    let model = VxlFile::from_bytes(install.manager.get_ref("mtnk.vxl").unwrap()).unwrap();
+    let params = VxlRenderParams {
+        use_buffer: true,
+        ..Default::default()
+    };
+    let expected = vxl_raster::render_vxl(&model, None, &params, Some(&vpl));
+    let actual = renderer.render(&model, None, &params, false);
+    assert_eq!(actual.palette_indices, expected.palette_indices);
+    assert_eq!(actual.depth, expected.depth);
+    assert_eq!(
+        renderer.gpu_draws(),
+        128,
+        "UseBuffer retains CPU rasterization"
+    );
+    let params: Vec<_> = (0..=255)
+        .step_by(8)
+        .map(|facing| VxlRenderParams {
+            facing,
+            ..Default::default()
+        })
+        .collect();
+    for (params, actual) in params
+        .iter()
+        .zip(renderer.render_batch(&model, None, &params, true))
+    {
+        let expected = vxl_raster::render_vxl(&model, None, params, Some(&vpl));
+        assert_eq!(actual.palette_indices, expected.palette_indices);
+        assert_eq!(
+            actual.depth, expected.depth,
+            "exact geometric depth for part merging"
+        );
+    }
+    assert_eq!(
+        renderer.gpu_draws(),
+        128,
+        "depth requests never duplicate GPU and CPU work"
+    );
+    assert_eq!(renderer.gpu_submissions(), 4);
+    let mixed = [
+        VxlRenderParams {
+            use_buffer: true,
+            ..Default::default()
+        },
+        VxlRenderParams::default(),
+    ];
+    for (params, actual) in mixed
+        .iter()
+        .zip(renderer.render_batch(&model, None, &mixed, false))
+    {
+        let expected = vxl_raster::render_vxl(&model, None, params, Some(&vpl));
+        assert_eq!(actual.palette_indices, expected.palette_indices);
+        if params.use_buffer {
+            assert_eq!(actual.depth, expected.depth);
+        }
+    }
+    assert_eq!(
+        renderer.gpu_draws(),
+        129,
+        "mixed batch admits only the ordinary pose"
+    );
+    assert_eq!(renderer.gpu_submissions(), 5);
+}
+
+#[test]
+fn infantry_ready_uses_retained_type_bank_after_map_image_reread() {
+    use vera20k_core::rules::ini_parser::IniFile;
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.0.join("rulesmd.ini"),
+        b"[InfantryTypes]\n0=GI\n[GI]\nImage=GI\n",
+    )
+    .unwrap();
+    std::fs::write(fixture.0.join("artmd.ini"), b"[GI]\nSequence=BaseSeq\n[BaseSeq]\nReady=2,1,1\n[ALT]\nSequence=MapSeq\n[MapSeq]\nReady=5\n").unwrap();
+    let frames: Vec<_> = (0..16).map(|_| ([1, 2], [1, 0])).collect();
+    write_shp_frames(&fixture, "gi.shp", &frames);
+    write_shp_frames(&fixture, "alt.shp", &frames);
+    let install = fixture.install();
+    let map = b"[GI]\nImage=ALT\n";
+    let mut catalog =
+        crate::catalog::Catalog::load(&install.manager, &install.theater).with_map(map);
+    let projected = crate::mission_resources::scenario_registries(
+        &install.manager,
+        &IniFile::from_bytes(map).unwrap(),
+        false,
+        None,
+    )
+    .unwrap();
+    std::sync::Arc::make_mut(&mut catalog).infantry_appearances = projected.infantry_appearances;
+    let sprites = crate::sprites::SpritePalette::load(&install, &catalog);
+    let object = &sprites.objects[&("Infantry".into(), "GI".into())];
+    // MapSeq replaces Start only: the same InfantryType retains count/stride.
+    assert_eq!(object.image(0).info.index, 12);
+    assert_eq!(object.image(224).info.index, 5);
+    assert_eq!(
+        sprites
+            .get("Infantry", "GI")
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap()
+            .info
+            .index,
+        12
+    );
+    assert_eq!(object.image(0).info.name.to_ascii_lowercase(), "alt.shp");
+}
+
+#[test]
+fn infantry_ready_uses_signed_nondirectional_stride() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.0.join("rulesmd.ini"),
+        b"[InfantryTypes]\n0=GI\n[GI]\nImage=GI\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.0.join("artmd.ini"),
+        b"[GI]\nSequence=ReadySeq\n[ReadySeq]\nReady=2,1,-3\n",
+    )
+    .unwrap();
+    write_shp_frames(&fixture, "gi.shp", &[([1, 2], [1, 0]); 4]);
+    let install = fixture.install();
+    let catalog = crate::catalog::Catalog::load(&install.manager, &install.theater);
+    let sprites = crate::sprites::SpritePalette::load(&install, &catalog);
+    let object = &sprites.objects[&("Infantry".into(), "GI".into())];
+    assert_eq!(object.image(0).info.index, 2);
+    assert_eq!(object.image(128).info.index, 2);
+    assert_eq!(
+        sprites
+            .get("Infantry", "GI")
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap()
+            .info
+            .index,
+        2
     );
 }

@@ -11,7 +11,7 @@
 | `src/` | 命令行与原生窗口启动 |
 | `crates/document/` | 地图文档、序列化、事务与历史 |
 | `crates/assets/` | 游戏资源读取与图像准备 |
-| `crates/voxel/` | CPU 体素与静态深度适配 |
+| `crates/voxel/` | GPU / CPU 体素与静态深度适配 |
 | `crates/scene/` | 地图场景、编辑算法、拾取与图片合成 |
 | `crates/render/` | GPU 渲染、图集与视口 |
 | `crates/io/` | 保存、恢复、导出、发布与试玩 |
@@ -52,6 +52,15 @@ cargo run --locked -p ra2-map-render --example framework_gpu_audit -- 'D:/Games/
 ```
 
 审计检查框架材质的透明覆盖和几何、视图切换不修改地图，以及框架、光照和换色组合的 CPU / GPU 一致性。本机有 `marble.mix` 时也会报告各环境兼容的 FA2 原生框架模板数量。
+
+体素适配直接编译固定版本引擎的 GPU 光栅器和 WGSL，在资源线程按最多 32 个朝向批量生成静态图，每批只提交、读回一次，供预览、拾取与地图图集共享。`UseBuffer` 等上游不支持的 GPU 路径直接复用 CPU 结果；车体、炮塔、炮管相交合成需要几何深度，因此整体走一次 CPU 路径，避免 GPU 绘制后再完整执行 CPU 光栅化。
+
+使用真实资源验证 GPU 的 32 朝向像素、合成深度和 CPU 回退（测试会要求实际 GPU 执行，不能以回退代替）：
+
+```powershell
+$env:RA2_DIR = 'D:/Games/YR'
+cargo test --locked -p ra2-map-assets --lib retail_voxel_gpu -- --ignored
+```
 
 窗口测试需要本机游戏目录；地图、截图与报告只写入本地 `target/`。
 

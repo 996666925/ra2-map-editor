@@ -19,13 +19,14 @@ pub enum ResourceKind {
     Theme,
     Movie,
     Animation,
+    VoxelAnim,
     Weapon,
     SuperWeapon,
     Warhead,
     ParticleSystem,
 }
 impl ResourceKind {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Building,
         Self::Techno,
         Self::Country,
@@ -34,6 +35,7 @@ impl ResourceKind {
         Self::Theme,
         Self::Movie,
         Self::Animation,
+        Self::VoxelAnim,
         Self::Weapon,
         Self::SuperWeapon,
         Self::Warhead,
@@ -50,6 +52,7 @@ impl ResourceKind {
             Self::Theme => "themes",
             Self::Movie => "movies",
             Self::Animation => "animations",
+            Self::VoxelAnim => "voxelAnims",
             Self::Weapon => "weapons",
             Self::SuperWeapon => "superWeapons",
             Self::Warhead => "warheads",
@@ -66,6 +69,7 @@ impl ResourceKind {
             Self::Theme => "theme",
             Self::Movie => "movie",
             Self::Animation => "animation",
+            Self::VoxelAnim => "voxelAnim",
             Self::Weapon => "weapon",
             Self::SuperWeapon => "superWeapon",
             Self::Warhead => "warhead",
@@ -98,6 +102,8 @@ pub struct Catalog {
     pub themes: Vec<String>,
     pub movies: Vec<String>,
     pub animations: Vec<String>,
+    #[serde(rename = "voxelAnims")]
+    pub voxel_anims: Vec<String>,
     pub weapons: Vec<String>,
     #[serde(rename = "superWeapons")]
     pub super_weapons: Vec<String>,
@@ -170,6 +176,7 @@ impl Catalog {
             ResourceKind::Theme => &self.themes,
             ResourceKind::Movie => &self.movies,
             ResourceKind::Animation => &self.animations,
+            ResourceKind::VoxelAnim => &self.voxel_anims,
             ResourceKind::Weapon => &self.weapons,
             ResourceKind::SuperWeapon => &self.super_weapons,
             ResourceKind::Warhead => &self.warheads,
@@ -192,6 +199,7 @@ impl Catalog {
             ResourceKind::Theme => &mut self.themes,
             ResourceKind::Movie => &mut self.movies,
             ResourceKind::Animation => &mut self.animations,
+            ResourceKind::VoxelAnim => &mut self.voxel_anims,
             ResourceKind::Weapon => &mut self.weapons,
             ResourceKind::SuperWeapon => &mut self.super_weapons,
             ResourceKind::Warhead => &mut self.warheads,
@@ -272,6 +280,7 @@ impl Catalog {
             ("themes", "Theme", "音乐"),
             ("movies", "Movie", "影片"),
             ("animations", "Animation", "动画"),
+            ("voxelAnims", "VoxelAnim", "体素动画"),
             ("weapons", "Weapon", "武器类型"),
             ("superWeapons", "SuperWeapon", "超级武器"),
             ("warheads", "Warhead", "弹头"),

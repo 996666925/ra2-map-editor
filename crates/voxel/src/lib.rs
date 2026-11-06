@@ -1,8 +1,8 @@
-//! CPU-only adapter for VERA20k's existing voxel rasterizer.
+//! Adapter for VERA20k's shared CPU/GPU voxel rasterizer.
 //!
 //! Use the pinned vendor/vera20k submodule shared with the core dependency. Compile
 //! the original renderer sources directly: no copied raster implementation,
-//! engine modifications, game client, window, audio, GPU or simulation startup.
+//! engine modifications, game client, window, audio or simulation startup.
 #![allow(dead_code, unused_imports)]
 // --all-targets may build a lib-test target despite test=false. The source's
 // private engine test harness belongs to the engine workspace, not this adapter.
@@ -23,8 +23,45 @@ pub mod vxl_raster;
 #[path = "../../../vendor/vera20k/src/render/native_z.rs"]
 pub mod native_z;
 
+#[rustfmt::skip]
+#[path = "../../../vendor/vera20k/src/render/voxel_gpu.rs"]
+mod voxel_gpu;
+#[rustfmt::skip]
+#[path = "../../../vendor/vera20k/src/render/atlas_growth.rs"]
+mod atlas_growth;
+mod gpu;
+pub use gpu::Renderer;
+
 pub mod render {
+    pub(crate) use crate::atlas_growth;
     pub use crate::{native_z, vxl_normals, vxl_raster};
+    // These two descriptor helpers are the GPU raster's only shroud dependency.
+    pub(crate) mod shroud_buffer {
+        pub(crate) fn layout_entry(
+            binding: u32,
+            ty: wgpu::BindingType,
+        ) -> wgpu::BindGroupLayoutEntry {
+            wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty,
+                count: None,
+            }
+        }
+        pub(crate) fn texture_entry(
+            binding: u32,
+            sample_type: wgpu::TextureSampleType,
+        ) -> wgpu::BindGroupLayoutEntry {
+            layout_entry(
+                binding,
+                wgpu::BindingType::Texture {
+                    sample_type,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+            )
+        }
+    }
 }
 
 #[rustfmt::skip]

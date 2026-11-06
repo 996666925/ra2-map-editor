@@ -48,6 +48,8 @@ export interface MapSchema {
   readonly movies?: readonly string[];
   /** 当前资源配置可引用的动画类型；旧目录可省略，刷新类型后生成。 */
   readonly animations?: readonly string[];
+  /** 当前规则的 VoxelAnimType 目录，与普通 SHP 动画独立。 */
+  readonly voxelAnims?: readonly string[];
   /** 当前规则按原生分配顺序注册的武器类型；爆炸动作读取其 Damage 和 Warhead。 */
   readonly weapons?: readonly string[];
   /** 当前资源配置可引用的超级武器类型；旧目录可省略，刷新类型后生成。 */
@@ -150,6 +152,8 @@ export type Theme = Ref<"theme">;
 export type Movie = Ref<"movie">;
 /** 动画类型引用，由 m.animation() 取得。 */
 export type AnimationType = Ref<"animation">;
+/** 体素碎片动画类型，由 m.voxelAnim() 取得。 */
+export type VoxelAnimType = Ref<"voxelAnim">;
 /** 武器类型引用，由 m.weapon() 取得；与动画、弹头及超级武器分别编号。 */
 export type WeaponType = Ref<"weapon">;
 /** 原生粒子系统类型，不是单个 Particle。 */
@@ -189,7 +193,8 @@ export type Event =
 
 /** 小队行为脚本的一条命令，使用 order 中的方法构造，按数组顺序交给游戏执行。 */
 export type Order =
-  | { readonly kind: "followFriendlies" | "scout" | "fireSale" | "gatherAtEnemyBase" | "regroupAtBase" | "ironCurtain" | "enterGrinder" | "enterTankBunker" | "enterBioReactor" | "enterBattleBunker" | "enterNearestOccupiable" }
+  | { readonly kind: "startLightningStorm"; readonly frames: number }
+  | { readonly kind: "followFriendlies" | "scout" | "scoutHouses" | "stopLightningStorm" | "fireSale" | "gatherAtEnemyBase" | "regroupAtBase" | "ironCurtain" | "enterGrinder" | "enterTankBunker" | "enterBioReactor" | "enterBattleBunker" | "enterNearestOccupiable" }
   | { readonly kind: "idleAnimation"; readonly animation: number }
   | { readonly kind: "centerCamera"; readonly velocity: CameraVelocity }
   | { readonly kind: "attackEnemyBuilding" | "moveToEnemyBuilding" | "moveToOwnBuilding" | "chronoshiftToBuilding"; readonly building: BuildingType; readonly mode: BuildingSelection }
@@ -220,6 +225,7 @@ export type Order =
 
 /** 规则触发后执行的一个动作，使用 action 中的方法构造。 */
 export type Action =
+  | { readonly kind: "playVoxelAnimAt"; readonly animation: VoxelAnimType; readonly at: Waypoint }
   | { readonly kind: "setSpotlightBehavior"; readonly mode: 0|1|2|3 }
   | { readonly kind: "playAnimationAt"; readonly animation: AnimationType; readonly at: Waypoint }
   | { readonly kind: "explosionAt"; readonly weapon: WeaponType; readonly at: Waypoint }
@@ -1047,10 +1053,15 @@ export class MissionBuilder<S extends MapSchema, M extends MissionMode = Mission
   }
 
   /**
-   * 取得动画类型引用，不会创建资源。
-   * @param id map.generated.ts 中的 Animation 枚举成员。
+   * 取得体素动画类型引用，不会创建资源。
+   * @param id map.generated.ts 中的 VoxelAnim 枚举成员。
    * @remarks 请刷新类型取得当前地图和资源配置的目录；原生名称/注册序号由 Rust 编码。
    */
+  voxelAnim(id: NonNullable<S["voxelAnims"]>[number]): VoxelAnimType {
+    this.member(this.schema.voxelAnims ?? [], id, "voxelAnim");
+    return ref("voxelAnim", id);
+  }
+  /** 引用当前资源目录中的普通 SHP 动画类型。 */
   animation(id: NonNullable<S["animations"]>[number]): AnimationType {
     this.member(this.schema.animations ?? [], id, "animation");
     return ref("animation", id);
@@ -1466,6 +1477,12 @@ export const order = {
    * 无候选时保留原中心。仅单人可用，联机构建时报错。
    */
   scout: (): Order => ({ kind: "scout" }),
+  /** Script48：选择尚未侦察的 House 建筑并移动，抵达后标记；参数由引擎忽略，支持多人。 */
+  scoutHouses: (): Order => ({ kind: "scoutHouses" }),
+  /** Script32：无正在进行的闪电风暴时请求开始，时间为有符号逻辑帧，直接传给引擎；随后推进脚本。 */
+  startLightningStorm: (frames: number): Order => ({ kind: "startLightningStorm", frames }),
+  /** Script33：请求结束当前闪电风暴，随后推进脚本。 */
+  stopLightningStorm: (): Order => ({ kind: "stopLightningStorm" }),
   /** 将小队所属 House 的紧急策略设为状态 4 后推进，不重置策略时钟；AI 在时钟到期后出售建筑并让成员离队 Hunt，真人控制的 House 不走此策略更新。 */
   fireSale: (): Order => ({ kind: "fireSale" }),
   /** 镜头平移到小队当前 zone，速度档位为 0～4；脚本不等待镜头移动结束。 */
@@ -1618,7 +1635,9 @@ export const order = {
 export const action = {
   /** 设置附着建筑探照灯模式：0 关闭、1 往返扫描、2 绕建筑持续旋转、3 跟踪灯点附近的最近地面非友军。模式3无有效目标时会退回1。 */
   setSpotlightBehavior: (mode: 0|1|2|3): Action => ({ kind: "setSpotlightBehavior", mode }),
-  /** 在航点播放指定原生注册动画。 */
+  /** 动作43：在航点生成 VoxelAnimType；索引取自 VoxelAnims，不能传入普通 Animation。 */
+  playVoxelAnimAt: (animation: VoxelAnimType, at: Waypoint): Action => ({ kind: "playVoxelAnimAt", animation, at }),
+  /** 在航点播放指定原生注册 SHP 动画。 */
   playAnimationAt: (animation: AnimationType, at: Waypoint): Action => ({ kind: "playAnimationAt", animation, at }),
   /** 在航点引爆武器的 Damage/Warhead，造成范围伤害并按弹头选取动画；不创建飞行弹体。 */
   explosionAt: (weapon: WeaponType, at: Waypoint): Action => ({ kind: "explosionAt", weapon, at }),

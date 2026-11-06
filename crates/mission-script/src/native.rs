@@ -455,6 +455,9 @@ pub enum Order {
     FollowFriendlies,
     IdleAnimation { animation: u8 },
     Scout,
+    ScoutHouses,
+    StartLightningStorm { frames: i32 },
+    StopLightningStorm,
     FireSale,
     CenterCamera { velocity: i32 },
     AttackEnemyBuilding { building: Reference, mode: u8 },
@@ -741,6 +744,10 @@ pub enum Event {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Action {
+    PlayVoxelAnimAt {
+        animation: Reference,
+        at: Waypoint,
+    },
     SetSpotlightBehavior {
         mode: u8,
     },
@@ -1647,6 +1654,7 @@ pub fn registry_fingerprints(bytes: &[u8]) -> Result<BTreeMap<String, u64>> {
         "AircraftTypes",
         "SuperWeaponTypes",
         "Animations",
+        "VoxelAnims",
         "WeaponTypes",
         "ParticleSystems",
         "Warheads",

@@ -45,6 +45,8 @@ pub struct TerrainSubtile {
 }
 #[derive(Clone)]
 pub struct Catalog {
+    /// Per-InfantryType retained banks projected by the production Rules owner.
+    pub infantry_appearances: BTreeMap<String, crate::mission_resources::InfantryAppearance>,
     pub rules: IniFile,
     /// Active installation language table; shared by map-local catalog clones.
     strings: Option<Arc<CsfFile>>,
@@ -70,6 +72,7 @@ pub struct Catalog {
 impl Default for Catalog {
     fn default() -> Self {
         Self {
+            infantry_appearances: BTreeMap::new(),
             rules: IniFile::empty(),
             strings: None,
             object_names: BTreeMap::new(),
@@ -91,6 +94,26 @@ impl Default for Catalog {
     }
 }
 impl Catalog {
+    pub fn infantry_image(&self, id: &str) -> Option<&str> {
+        self.infantry_appearances
+            .get(&id.to_ascii_uppercase())
+            .map(|appearance| appearance.image.as_str())
+    }
+
+    /// First Ready image, resolved with the same signed native record and facing
+    /// conversion as the game. Rules owns INI rereads; the editor only projects it.
+    pub fn infantry_frame(&self, id: &str, facing: u8) -> Option<usize> {
+        let record = self
+            .infantry_appearances
+            .get(&id.to_ascii_uppercase())?
+            .sequences
+            .infantry_action(0)?;
+        usize::try_from(vera20k_core::sim::animation::resolve_shp_frame(
+            record, facing, 0,
+        ))
+        .ok()
+    }
+
     /// Display names never replace the type IDs used by authoring operations.
     pub fn object_name<'a>(&'a self, id: &'a str) -> &'a str {
         self.object_names
@@ -306,7 +329,14 @@ impl Catalog {
             ..Self::default()
         };
         catalog.read_registries();
-        if let Ok(registries) = crate::mission_resources::native_registries(manager) {
+        let theater_name = vera20k_core::map::theater::theater_names_and_extensions()
+            .find(|(_, extension)| *extension == theater.extension)
+            .map_or("TEMPERATE", |(name, _)| name);
+        let map = IniFile::from_str(&format!("[Map]\nTheater={theater_name}\n"));
+        if let Ok(registries) =
+            crate::mission_resources::scenario_registries(manager, &map, false, None)
+        {
+            catalog.infantry_appearances = registries.infantry_appearances;
             catalog.mission_country_indices = registries.countries;
             catalog.mission_country_names = registries.country_names;
             catalog.mission_type_orders = registries.type_orders;
@@ -343,7 +373,7 @@ impl Catalog {
         Arc::new(catalog)
     }
     fn read_registries(&mut self) {
-        for registry in ["Countries", "SuperWeaponTypes", "Warheads"] {
+        for registry in ["Countries", "SuperWeaponTypes", "Warheads", "VoxelAnims"] {
             self.mission_registries.insert(
                 registry.into(),
                 self.rules
@@ -424,6 +454,7 @@ impl Catalog {
             "Countries",
             "SuperWeaponTypes",
             "Warheads",
+            "VoxelAnims",
         ];
         let custom = map.section_names().iter().any(|s| {
             registries.iter().any(|r| r.eq_ignore_ascii_case(s))

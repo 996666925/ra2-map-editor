@@ -10,6 +10,15 @@ pub(super) fn encode(
     mode: MissionMode,
 ) -> Result<Vec<String>> {
     let row = match action {
+        Action::PlayVoxelAnimAt { animation, at } => action_row(
+            43,
+            Some(
+                catalog
+                    .resource_index(animation, ResourceKind::VoxelAnim)?
+                    .to_string(),
+            ),
+            Some(waypoint(at, catalog)?),
+        ),
         Action::SetSpotlightBehavior { mode } => {
             ensure!(*mode <= 3, "探照灯模式须为 0～3");
             action_row(52, Some(mode.to_string()), None)

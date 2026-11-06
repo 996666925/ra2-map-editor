@@ -172,6 +172,11 @@ pub(super) fn script(
                 );
                 (22, "0".into())
             }
+            // TeamScript VM action32 forwards the signed duration directly;
+            // action33 requests an end, and action48 ignores its argument.
+            Order::StartLightningStorm { frames } => (32, frames.to_string()),
+            Order::StopLightningStorm => (33, "0".into()),
+            Order::ScoutHouses => (48, "0".into()),
             Order::FireSale => (30, "0".into()),
             Order::CenterCamera { velocity } => {
                 ensure!((0..=4).contains(velocity), "镜头速度须为 0～4 原生档位");

@@ -9,10 +9,7 @@ use ra2_map_voxel::vxl_raster::{self, VxlRenderParams, VxlSprite};
 use std::{collections::HashMap, sync::Arc};
 use vera20k_core::{
     assets::{hva_file::HvaFile, pal_file::Palette, vpl_file::VplFile, vxl_file::VxlFile},
-    rules::{
-        art_data::BuildingAnimKind, infantry_sequence::parse_infantry_sequence_registry,
-        ini_parser::IniFile,
-    },
+    rules::art_data::BuildingAnimKind,
 };
 
 pub struct ObjectSprite {
@@ -35,12 +32,6 @@ pub(crate) fn load(
     catalog: &Catalog,
     library: &SpritePalette,
 ) -> HashMap<(String, String), ObjectSprite> {
-    let art_ini = install
-        .manager
-        .get_ref("artmd.ini")
-        .and_then(|b| IniFile::from_bytes(b).ok())
-        .unwrap_or_else(IniFile::empty);
-    let sequences = parse_infantry_sequence_registry(&art_ini);
     let mut result = HashMap::new();
     for (section, types) in &catalog.object_types {
         if section == "Animations" {
@@ -55,7 +46,14 @@ pub(crate) fn load(
                 .section_or_empty(id)
                 .read_name("Image", 256)
                 .unwrap_or(id);
-            let image_id = catalog.art.resolve_effective_image_id(id, rules_image);
+            let image_id = if section == "Infantry" {
+                catalog
+                    .infantry_image(id)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| catalog.art.resolve_effective_image_id(id, rules_image))
+            } else {
+                catalog.art.resolve_effective_image_id(id, rules_image)
+            };
             let art = catalog.art.get(&image_id);
             let mut facings = if preview.voxel {
                 match voxel_frames(
@@ -73,29 +71,48 @@ pub(crate) fn load(
             } else if let Some(base) = &preview.image {
                 let palette = object_palette(install, catalog, &image_id, section, id);
                 let mut frames = HashMap::new();
-                (0..32).map(|step| {
-                    let facing = step * 8;
-                    let frame = if section == "Infantry" {
-                        art.and_then(|a| a.sequence.as_ref())
-                            .and_then(|name| sequences.get(&name.to_ascii_uppercase()))
-                            .and_then(|seq| seq.entries.get("READY"))
-                            .and_then(|seq| usize::try_from(seq.start_frame + seq.facings * i32::from(vera20k_core::sim::animation::infantry_facing_slot(facing))).ok())
-                            .unwrap_or(base.info.index)
-                    } else if matches!(section.as_str(), "Units" | "Aircraft") {
-                        art.map_or(base.info.index, |a| {
-                            let stand = a.standing_frames.unwrap_or(u16::from(a.firing_frames.unwrap_or(0) > 0));
-                            let walk = a.walk_frames.unwrap_or(12);
-                            let slot = if a.shp_facings == 8 { (((u16::from(facing) + 16) / 32 + 1) & 7) as usize } else {0};
-                            if stand > 0 { usize::from(walk) * usize::from(a.shp_facings) + slot * usize::from(stand) }
-                            else { slot * usize::from(walk) }
-                        })
-                    } else { base.info.index };
-                    frames.entry(frame).or_insert_with(|| {
-                        decode_shp_frame(install, &base.info.name, &palette, frame).ok()
-                            .filter(|im| im.rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 0))
-                            .map(Arc::new).unwrap_or_else(|| base.clone())
-                    }).clone()
-                }).collect()
+                (0..32)
+                    .map(|step| {
+                        let facing = step * 8;
+                        let frame = if section == "Infantry" {
+                            catalog
+                                .infantry_frame(id, facing)
+                                .unwrap_or(base.info.index)
+                        } else if matches!(section.as_str(), "Units" | "Aircraft") {
+                            art.map_or(base.info.index, |a| {
+                                let stand = a
+                                    .standing_frames
+                                    .unwrap_or(u16::from(a.firing_frames.unwrap_or(0) > 0));
+                                let walk = a.walk_frames.unwrap_or(12);
+                                let slot = if a.shp_facings == 8 {
+                                    (((u16::from(facing) + 16) / 32 + 1) & 7) as usize
+                                } else {
+                                    0
+                                };
+                                if stand > 0 {
+                                    usize::from(walk) * usize::from(a.shp_facings)
+                                        + slot * usize::from(stand)
+                                } else {
+                                    slot * usize::from(walk)
+                                }
+                            })
+                        } else {
+                            base.info.index
+                        };
+                        frames
+                            .entry(frame)
+                            .or_insert_with(|| {
+                                decode_shp_frame(install, &base.info.name, &palette, frame)
+                                    .ok()
+                                    .filter(|im| {
+                                        im.rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 0)
+                                    })
+                                    .map(Arc::new)
+                                    .unwrap_or_else(|| base.clone())
+                            })
+                            .clone()
+                    })
+                    .collect()
             } else {
                 continue;
             };
@@ -326,32 +343,40 @@ pub(crate) fn voxel_frames(
         Vec::new()
     };
     let mut frames = Vec::new();
-    for step in 0..if all_facings { 32 } else { 1 } {
-        let params = VxlRenderParams {
+    let mut renderer = ra2_map_voxel::Renderer::new(vpl.as_ref());
+    let params: Vec<_> = (0..if all_facings { 32 } else { 1 })
+        .map(|step| VxlRenderParams {
             facing: step * 8,
             use_buffer: install.catalog.art.use_buffer(image),
             ..Default::default()
-        };
-        let body = vxl_raster::render_vxl(&model, hva.as_ref(), &params, vpl.as_ref());
-        let mut layers = vec![body];
-        let turret_offset = install
-            .catalog
-            .art
-            .get(image)
-            .map_or(0, |a| a.turret_offset);
-        let (pivot_x, pivot_y) = vxl_raster::turret_pivot_screen_offset_for_slope_state(
-            turret_offset,
-            params.facing,
-            0,
-            None,
-            1.,
-        );
-        layers.extend(parts.iter().map(|(model, hva)| {
-            let mut part = vxl_raster::render_vxl(model, hva.as_ref(), &params, vpl.as_ref());
+        })
+        .collect();
+    let mut layers: Vec<_> = renderer
+        .render_batch(&model, hva.as_ref(), &params, !parts.is_empty())
+        .into_iter()
+        .map(|body| vec![body])
+        .collect();
+    let turret_offset = install
+        .catalog
+        .art
+        .get(image)
+        .map_or(0, |a| a.turret_offset);
+    for (model, hva) in &parts {
+        let sprites = renderer.render_batch(model, hva.as_ref(), &params, true);
+        for ((mut part, params), layers) in sprites.into_iter().zip(&params).zip(&mut layers) {
+            let (pivot_x, pivot_y) = vxl_raster::turret_pivot_screen_offset_for_slope_state(
+                turret_offset,
+                params.facing,
+                0,
+                None,
+                1.,
+            );
             part.offset_x += pivot_x.round();
             part.offset_y += pivot_y.round();
-            part
-        }));
+            layers.push(part);
+        }
+    }
+    for (step, layers) in layers.into_iter().enumerate() {
         let sprite = merge_voxels(&layers);
         ensure!(
             sprite.palette_indices.iter().any(|i| *i != 0),
@@ -372,7 +397,7 @@ pub(crate) fn voxel_frames(
                 source: source.source_archive.into(),
                 palette: "unit/VPL".into(),
                 palette_source: String::new(),
-                index: usize::from(step),
+                index: step,
                 count: 32,
                 offset: [sprite.offset_x as i32, sprite.offset_y as i32],
                 width: sprite.width,

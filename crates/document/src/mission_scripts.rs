@@ -3,6 +3,21 @@ use super::{Opcode, ParameterKind as P, int, wp};
 use anyhow::{Result, ensure};
 use std::collections::BTreeMap;
 pub const OPCODES: &[Opcode] = &[
+    opcode!(
+        32,
+        "开始闪电风暴",
+        0,
+        [int(1, "持续时间", i32::MIN, i32::MAX, "逻辑帧")],
+        "无正在进行的风暴时请求开始；直接传递有符号时间，随后推进。"
+    ),
+    opcode!(33, "结束闪电风暴", 0, [], "请求结束当前风暴，随后推进。"),
+    opcode!(
+        48,
+        "侦察 House",
+        0,
+        [],
+        "选择尚未侦察的 House 建筑并移动，抵达后标记；忽略参数，支持多人。"
+    ),
     opcode!(10, "跟随友军", 0, [], "原生友军选择/跟随入口。"),
     opcode!(
         13,

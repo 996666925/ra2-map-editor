@@ -497,6 +497,16 @@ pub const EVENTS: &[Opcode] = &[
 ];
 pub const ACTIONS: &[Opcode] = &[
     opcode!(
+        43,
+        "航点体素动画",
+        0,
+        [
+            int(2, "体素动画序号", 0, i32::MAX, "VoxelAnimType 原生数组"),
+            wp(7, true)
+        ],
+        "读取 VoxelAnims 注册序号，不是 Animations；在航点生成体素碎片动画。"
+    ),
+    opcode!(
         52,
         "附着探照灯模式",
         0,

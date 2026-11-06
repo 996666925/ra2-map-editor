@@ -554,6 +554,7 @@ fn populate_resource_catalog(
             "buildings" => catalog.buildings.extend(order.iter().cloned()),
             "superWeapons" => catalog.super_weapons.extend(order.iter().cloned()),
             "animations" => catalog.animations.extend(order.iter().cloned()),
+            "voxelAnims" => catalog.voxel_anims.extend(order.iter().cloned()),
             "weapons" => catalog
                 .weapons
                 .extend(order.iter().filter(|id| !id.is_empty()).cloned()),
@@ -577,6 +578,8 @@ fn populate_resource_catalog(
     catalog.super_weapons.dedup();
     catalog.animations.sort();
     catalog.animations.dedup();
+    catalog.voxel_anims.sort();
+    catalog.voxel_anims.dedup();
     catalog.weapons.sort();
     catalog.weapons.dedup();
     catalog.particle_systems.sort();
@@ -1442,6 +1445,10 @@ export default defineMission({houses:['Neutral']},{id:'localized',player:'Neutra
             "Countries".into(),
             vec!["ZCOUNTRY".into(), "ACOUNTRY".into()],
         );
+        assets.mission_type_orders.insert(
+            "voxelAnims".into(),
+            vec!["Z_DEBRIS".into(), "A_DEBRIS".into()],
+        );
         let mut resources = ra2_map_assets::mission_resources::MissionResources::default();
         resources.choices.insert(
             "Sound".into(),
@@ -1456,6 +1463,25 @@ export default defineMission({houses:['Neutral']},{id:'localized',player:'Neutra
         assert_eq!(catalog.technos, ["BUILDING", "TANK"]);
         assert!(catalog.units.is_empty());
         assert_eq!(catalog.weapons, ["A_DAMAGE", "Z_DAMAGE"]);
+        assert_eq!(catalog.voxel_anims, ["A_DEBRIS", "Z_DEBRIS"]);
+        assert_eq!(
+            catalog
+                .resource_index(
+                    &ra2_map_mission_script::native::Reference {
+                        kind: "voxelAnim".into(),
+                        id: "A_DEBRIS".into(),
+                    },
+                    ResourceKind::VoxelAnim
+                )
+                .unwrap(),
+            1
+        );
+        assert!(
+            catalog
+                .typescript()
+                .unwrap()
+                .contains("export enum VoxelAnim")
+        );
         let weapon = ra2_map_mission_script::native::Reference {
             kind: "weapon".into(),
             id: "A_DAMAGE".into(),

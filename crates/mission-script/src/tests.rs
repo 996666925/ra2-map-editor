@@ -3693,3 +3693,113 @@ fn transpilation_skips_types_but_keeps_sdk_and_native_validation() {
         assert!(compiler.build(files).unwrap_err().to_string().contains("执行失败"));
     }).unwrap().join().unwrap();
 }
+
+#[test]
+fn new_engine_orders_and_voxel_action_compile_through_sdk_and_native_readers() {
+    use crate::catalog::ResourceKind;
+    let (mut doc, mut catalog) = fixture();
+    catalog.register(
+        ResourceKind::VoxelAnim,
+        vec!["Z_DEBRIS".into(), "A_DEBRIS".into()],
+    );
+    catalog.register(ResourceKind::Animation, vec!["A_DEBRIS".into()]);
+    let wp = catalog.enum_member("waypoints", "0").unwrap();
+    let source = r#"import {defineMission,MissionMode,event,action,order} from './sdk';
+import {map,VoxelAnim,Waypoint} from './map.generated';
+export default defineMission(map,{id:'new_handlers',mode:MissionMode.Multiplayer},m=>{
+ m.script('storm',[order.startLightningStorm(-1),order.stopLightningStorm(),order.scoutHouses()]);
+ m.rule('debris',{when:event.sinceScenarioStart(1),once:true,actions:[
+  action.playVoxelAnimAt(m.voxelAnim(VoxelAnim.A_DEBRIS),m.waypoint(Waypoint.WP))
+ ]});
+});"#
+        .replace("Waypoint.WP", &format!("Waypoint.{wp}"));
+    let plan = Compiler::new()
+        .unwrap()
+        .build(BTreeMap::from([
+            ("/mission.ts".into(), source),
+            ("/map.generated.ts".into(), catalog.typescript().unwrap()),
+        ]))
+        .unwrap();
+    prepare(&doc, &plan, &catalog)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    let bytes = doc.snapshot().bytes().unwrap();
+    let map = vera20k_core::map::map_file::load_from_bytes(bytes.clone()).unwrap();
+    let trigger = &mission::ids(&doc, Kind::Trigger)[0];
+    let action = &map.actions[trigger].entries()[0];
+    assert_eq!(action.kind, 43);
+    assert_eq!(action.literal_value(), Some(1));
+    assert_eq!(action.waypoint_index, Some(0));
+    let ini = vera20k_core::rules::ini_parser::IniFile::from_bytes(&bytes).unwrap();
+    let scripts = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
+        &vera20k_core::rules::ini_parser::IniFile::empty(),
+        &ini,
+        false,
+    );
+    assert_eq!(
+        scripts.scripts[0]
+            .actions
+            .iter()
+            .map(|a| (a.action_id, a.argument))
+            .collect::<Vec<_>>(),
+        [(32, -1), (33, 0), (48, 0)]
+    );
+    // Rust revalidates family and native ordinals even when TS branding is bypassed.
+    let mut forged = serde_json::to_value(&plan).unwrap();
+    forged["rules"][0]["actions"][0]["animation"]["kind"] = serde_json::json!("animation");
+    let forged: Mission = serde_json::from_value(forged).unwrap();
+    assert!(prepare(&fixture().0, &forged, &catalog).is_err());
+    let mut missing = catalog.clone();
+    missing.registry_order.remove("voxelAnims");
+    assert!(prepare(&fixture().0, &plan, &missing).is_err());
+}
+
+#[test]
+fn voxel_registry_changes_require_a_fresh_sdk_catalog() {
+    use crate::catalog::ResourceKind;
+    let (mut doc, mut catalog) = fixture();
+    doc.set_ini("VoxelAnims", "0", Some(b"Z_DEBRIS".to_vec()))
+        .unwrap();
+    doc.set_ini("VoxelAnims", "1", Some(b"A_DEBRIS".to_vec()))
+        .unwrap();
+    doc.commit("initial voxel registry");
+    catalog.register(
+        ResourceKind::VoxelAnim,
+        vec!["Z_DEBRIS".into(), "A_DEBRIS".into()],
+    );
+    catalog.type_projection = registry_fingerprints(&doc.snapshot().bytes().unwrap()).unwrap();
+    let mut mission = plan();
+    mission.rules[0].actions = vec![Action::PlayVoxelAnimAt {
+        animation: Reference {
+            kind: "voxelAnim".into(),
+            id: "A_DEBRIS".into(),
+        },
+        at: Waypoint {
+            kind: "waypoint".into(),
+            id: 0,
+        },
+    }];
+    assert!(prepare(&doc, &mission, &catalog).is_ok());
+    doc.set_ini("VoxelAnims", "0", Some(b"A_DEBRIS".to_vec()))
+        .unwrap();
+    doc.set_ini("VoxelAnims", "1", Some(b"Z_DEBRIS".to_vec()))
+        .unwrap();
+    doc.commit("reorder voxel registry");
+    let error = prepare(&doc, &mission, &catalog)
+        .err()
+        .expect("reject stale ordinals");
+    assert!(error.to_string().contains("地图类型注册表已变化"));
+    catalog.register(
+        ResourceKind::VoxelAnim,
+        vec!["A_DEBRIS".into(), "Z_DEBRIS".into()],
+    );
+    catalog.type_projection = registry_fingerprints(&doc.snapshot().bytes().unwrap()).unwrap();
+    prepare(&doc, &mission, &catalog)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    let trigger = &mission::ids(&doc, Kind::Trigger)[0];
+    let rows = mission::decode_list(&doc.ini_text("Actions", trigger), false).unwrap();
+    assert_eq!(rows[0][2], "0");
+}

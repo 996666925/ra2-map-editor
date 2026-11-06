@@ -163,7 +163,9 @@
 
 编辑器内置 Rust SWC 转译器，运行不需要 Node.js 或 Deno。**类型检查由外部代码编辑器完成**，“应用到地图”不执行 TypeScript 类型检查。带中文注释的引用枚举、API、示例与限制见 [任务脚本说明](../examples/missions/README.md)。
 
-在航点引爆武器可使用 `action.explosionAt(m.weapon(Weapon.Vulcan), at)`；先刷新类型并从 `map.generated.ts` 导入 `Weapon`。该动作读取武器伤害和弹头，直接造成范围伤害，不发射弹体。只需创建动画时使用 `playAnimationAt(m.animation(Animation.EXPLOSML), at)`。
+在航点引爆武器可使用 `action.explosionAt(m.weapon(Weapon.Vulcan), at)`；先刷新类型并从 `map.generated.ts` 导入 `Weapon`。该动作读取武器伤害和弹头，直接造成范围伤害，不发射弹体。只需创建动画时使用 `playAnimationAt(m.animation(Animation.EXPLOSML), at)`。体素碎片动画使用独立的 `action.playVoxelAnimAt(m.voxelAnim(VoxelAnim.TIRE), at)`；刷新类型后从 `map.generated.ts` 导入 `VoxelAnim`，其中成员来自当前规则的 `[VoxelAnims]`。
+
+小队行为支持 `order.startLightningStorm(frames)`、`order.stopLightningStorm()` 和 `order.scoutHouses()`。前两项请求开始或结束全局闪电风暴，开始时间按有符号逻辑帧传入引擎，随后推进脚本。`scoutHouses()` 选择 House 建筑并移动、抵达后记录已侦察，支持多人；它与仅单人可用的 `order.scout()`（按玩家迷雾选点）含义不同。
 
 小队气泡使用 `action.talkBubble(team, 1)`，可选图形编号1～3；全局只能显示一个，`clearTalkBubble()` 清除。小队必须已有活动实例，资源安装须提供 `talkbubl.shp` 和 `palette.pal`，也可通过 `m.asset()` 发布图形。气泡按墙钟超时，不用于显示自定义文本。
 

@@ -66,10 +66,18 @@ pub(crate) fn load(manager: &AssetManager) -> MissionResources {
     out
 }
 
-/// Fixed Country indices come from the same cold/reset Rules owner as game
-/// loading, including LANG and implicit identities. Raw registry row ordinals
-/// are not an index projection. Scenario-added identities are not inferred.
+/// Immutable presentation projection of one concrete InfantryType.
+#[derive(Clone)]
+pub struct InfantryAppearance {
+    pub image: String,
+    pub shp_loads: Vec<vera20k_core::rules::object_image::ObjectImageLoad>,
+    pub sequences: vera20k_core::rules::animation_sequence::SequenceSet,
+}
+
+/// Registries and appearance data from the same cold/reset Rules owner as game
+/// loading, including LANG, map passes and implicit identities.
 pub struct NativeRegistries {
+    pub infantry_appearances: BTreeMap<String, InfantryAppearance>,
     pub vehicle_templates: BTreeMap<String, BTreeMap<String, String>>,
     pub countries: BTreeMap<String, i32>,
     /// Exact production alias-before-ID lookup, folded only for matching.
@@ -77,6 +85,7 @@ pub struct NativeRegistries {
     pub type_orders: BTreeMap<String, Vec<String>>,
 }
 
+#[cfg(test)]
 pub(crate) fn native_registries(manager: &AssetManager) -> Result<NativeRegistries, String> {
     scenario_registries(manager, &IniFile::empty(), false, None)
 }
@@ -148,6 +157,27 @@ pub fn scenario_registries(
         .map(|id| rules.particle_system_type(id).name.clone())
         .collect();
     Ok(NativeRegistries {
+        infantry_appearances: rules
+            .all_objects()
+            .filter(|object| {
+                object.category == vera20k_core::rules::object_type::ObjectCategory::Infantry
+            })
+            .filter_map(|object| {
+                rules
+                    .animation_sequence_in_category(object.category, &object.id)
+                    .cloned()
+                    .map(|sequences| {
+                        (
+                            object.id.to_ascii_uppercase(),
+                            InfantryAppearance {
+                                image: object.image.clone(),
+                                shp_loads: object.shp_image_loads().to_vec(),
+                                sequences,
+                            },
+                        )
+                    })
+            })
+            .collect(),
         vehicle_templates: rules
             .vehicle_ids
             .iter()
@@ -174,6 +204,13 @@ pub fn scenario_registries(
             ("aircraft".into(), rules.aircraft_ids.clone()),
             ("superWeapons".into(), rules.super_weapon_order.clone()),
             ("animations".into(), animations),
+            (
+                "voxelAnims".into(),
+                rules
+                    .voxel_anim_types_iter()
+                    .map(|ty| ty.name.clone())
+                    .collect(),
+            ),
             ("weapons".into(), weapons),
             ("particleSystems".into(), particles),
         ]),
