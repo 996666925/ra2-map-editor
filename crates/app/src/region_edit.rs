@@ -1,5 +1,6 @@
 //! Region interaction and overlays; document transforms and placement rules live below app.
 use super::*;
+use crate::i18n::tr;
 use ra2_map_document::region::{self, Clipboard, RegionLayers};
 use ra2_map_scene::placement;
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
@@ -81,26 +82,26 @@ impl Editor {
             return;
         }
         if self.stroking {
-            self.status = "请先完成当前操作".into();
+            self.status = tr!("请先完成当前操作").into();
             return;
         }
         let result = (|| -> Result<()> {
             if matches!(action, Action::Clone) {
-                ensure!(self.selected.is_some(), "请先选择要克隆的对象");
+                ensure!(self.selected.is_some(), tr!("请先选择要克隆的对象"));
                 self.activate_tool(Tool::Clone);
                 return Ok(());
             }
             if matches!(action, Action::Paste) {
-                ensure!(self.region.clipboard.is_some(), "请先复制区域");
+                ensure!(self.region.clipboard.is_some(), tr!("请先复制区域"));
                 self.tool = Tool::Paste;
                 return Ok(());
             }
-            ensure!(!self.region.cells.is_empty(), "请先框选区域");
+            ensure!(!self.region.cells.is_empty(), tr!("请先框选区域"));
             if matches!(action, Action::Move) {
                 self.tool = Tool::RegionMove;
                 return Ok(());
             }
-            let doc = self.doc.as_mut().context("没有可编辑地图")?;
+            let doc = self.doc.as_mut().context(tr!("没有可编辑地图"))?;
             let clip = Clipboard::capture(
                 doc,
                 &self.region.cells,
@@ -133,20 +134,20 @@ impl Editor {
                 self.commit(
                     scene,
                     if matches!(action, Action::Cut) {
-                        "剪切区域"
+                        tr!("剪切区域")
                     } else {
-                        "删除区域"
+                        tr!("删除区域")
                     },
                 );
             }
-            self.status = format!(
-                "{} 格、{} 个对象{}",
-                clip.cells.len(),
-                clip.records.len(),
-                if matches!(action, Action::Copy | Action::Cut) {
-                    "已复制；Ctrl+V 后点击目标位置"
+            self.status = tr!(
+                "{arg0} 格、{arg1} 个对象{arg2}",
+                arg0 = clip.cells.len(),
+                arg1 = clip.records.len(),
+                arg2 = if matches!(action, Action::Copy | Action::Cut) {
+                    tr!("已复制；Ctrl+V 后点击目标位置")
                 } else {
-                    "已删除"
+                    tr!("已删除")
                 }
             );
             Ok(())
@@ -158,7 +159,7 @@ impl Editor {
         self.region.revision += 1;
     }
     fn paste_region(&mut self, scene: &MapScene, at: Cell, moving: bool) -> Result<()> {
-        let doc = self.doc.as_mut().context("没有可编辑地图")?;
+        let doc = self.doc.as_mut().context(tr!("没有可编辑地图"))?;
         let mut clip = if moving {
             Clipboard::capture(
                 doc,
@@ -172,7 +173,7 @@ impl Editor {
             self.region
                 .clipboard
                 .as_ref()
-                .context("请先复制区域")?
+                .context(tr!("请先复制区域"))?
                 .clone()
         };
         clip.layers.cell_tags &= self.task_labels;
@@ -222,14 +223,14 @@ impl Editor {
         self.commit(
             scene,
             if moving {
-                "移动区域"
+                tr!("移动区域")
             } else {
-                "粘贴区域"
+                tr!("粘贴区域")
             },
         );
         self.region.preview = None;
         self.region.revision += 1;
-        self.status = "区域操作完成，可整笔撤销".into();
+        self.status = tr!("区域操作完成，可整笔撤销").into();
         Ok(())
     }
     pub(super) fn region_pointer(
@@ -245,7 +246,7 @@ impl Editor {
                 && let Some(at) = at
                 && let Err(e) = self.paste_region(scene, at, self.tool == Tool::RegionMove)
             {
-                self.status = format!("未修改：{e:#}");
+                self.status = tr!("未修改：{e}", e = format!("{:#}", e));
             }
             return true;
         }
@@ -309,22 +310,22 @@ impl Editor {
         if self.region.drag.is_some() && (release || !down) {
             self.region.drag = None;
             self.stroking = false;
-            self.status = format!(
-                "已选 {} 格；Ctrl+C 复制，Ctrl+X 剪切，Delete 删除所选层",
-                self.region.cells.len()
+            self.status = tr!(
+                "已选 {arg0} 格；Ctrl+C 复制，Ctrl+X 剪切，Delete 删除所选层",
+                arg0 = self.region.cells.len()
             );
         }
         true
     }
     pub(super) fn region_options(&mut self, ui: &mut egui::Ui, scene: &MapScene) {
-        ui.label(format!("选区：{} 格", self.region.cells.len()));
+        ui.label(tr!("选区：{arg0} 格", arg0 = self.region.cells.len()));
         ui.horizontal_wrapped(|ui| {
             for (label, action) in [
-                ("复制", Action::Copy),
-                ("剪切", Action::Cut),
-                ("粘贴", Action::Paste),
-                ("移动", Action::Move),
-                ("删除", Action::Delete),
+                (tr!("复制"), Action::Copy),
+                (tr!("剪切"), Action::Cut),
+                (tr!("粘贴"), Action::Paste),
+                (tr!("移动"), Action::Move),
+                (tr!("删除"), Action::Delete),
             ] {
                 let enabled = !self.stroking
                     && if matches!(action, Action::Paste) {
@@ -334,9 +335,9 @@ impl Editor {
                     };
                 if ui
                     .add_enabled(enabled, egui::Button::new(label))
-                    .on_disabled_hover_text(
-                        "先框选区域；粘贴需要已复制的区域。拖动中请先松开鼠标。",
-                    )
+                    .on_disabled_hover_text(tr!(
+                        "先框选区域；粘贴需要已复制的区域。拖动中请先松开鼠标。"
+                    ))
                     .clicked()
                 {
                     self.region_action(scene, action);
@@ -347,38 +348,40 @@ impl Editor {
             }
         });
         if self.tool == Tool::Region {
-            ui.small("按住 Shift 添加选区，Alt 减选；松开后恢复下方选择方式。");
-            ui.checkbox(&mut self.region.custom, "自定义选区（拖动涂选）");
+            ui.small(tr!(
+                "按住 Shift 添加选区，Alt 减选；松开后恢复下方选择方式。"
+            ));
+            ui.checkbox(&mut self.region.custom, tr!("自定义选区（拖动涂选）"));
             egui::ComboBox::from_id_salt("selection-op")
                 .selected_text(match self.region.op {
-                    SelectionOp::Replace => "重新选择",
-                    SelectionOp::Add => "添加选区",
-                    SelectionOp::Subtract => "减去选区",
+                    SelectionOp::Replace => tr!("重新选择"),
+                    SelectionOp::Add => tr!("添加选区"),
+                    SelectionOp::Subtract => tr!("减去选区"),
                 })
                 .show_ui(ui, |ui| {
                     for (op, name) in [
-                        (SelectionOp::Replace, "重新选择"),
-                        (SelectionOp::Add, "添加选区"),
-                        (SelectionOp::Subtract, "减去选区"),
+                        (SelectionOp::Replace, tr!("重新选择")),
+                        (SelectionOp::Add, tr!("添加选区")),
+                        (SelectionOp::Subtract, tr!("减去选区")),
                     ] {
                         ui.selectable_value(&mut self.region.op, op, name);
                     }
                 });
         }
-        egui::CollapsingHeader::new("参与操作的数据层")
+        egui::CollapsingHeader::new(tr!("参与操作的数据层"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.region.layers.terrain, "地形与高度");
+                    ui.checkbox(&mut self.region.layers.terrain, tr!("地形与高度"));
                     ui.add_enabled(
                         self.layers[0],
-                        egui::Checkbox::new(&mut self.region.layers.overlays, "覆盖物 / 资源"),
+                        egui::Checkbox::new(&mut self.region.layers.overlays, tr!("覆盖物 / 资源")),
                     );
                 });
                 for (flags, names) in self.region.layers.objects.chunks_mut(2).zip([
-                    ["建筑", "车辆"],
-                    ["步兵", "飞机"],
-                    ["树木", "污迹"],
+                    [tr!("建筑"), tr!("车辆")],
+                    [tr!("步兵"), tr!("飞机")],
+                    [tr!("树木"), tr!("污迹")],
                 ]) {
                     ui.horizontal(|ui| {
                         for (flag, name) in flags.iter_mut().zip(names) {
@@ -390,36 +393,38 @@ impl Editor {
                     self.task_labels,
                     egui::Checkbox::new(
                         &mut self.region.layers.cell_tags,
-                        "格子标签（共享标签引用）",
+                        tr!("格子标签（共享标签引用）"),
                     ),
                 );
-                ui.small("标签层开启时，目的选区的格子标签会被剪贴板内容替换，包括空标签格。");
+                ui.small(tr!(
+                    "标签层开启时，目的选区的格子标签会被剪贴板内容替换，包括空标签格。"
+                ));
                 ui.add_enabled(
                     self.layers[2],
                     egui::Checkbox::new(
                         &mut self.region.layers.waypoints,
-                        "航点（复制时生成新编号）",
+                        tr!("航点（复制时生成新编号）"),
                     ),
                 );
             });
-        ui.small("隐藏图层不参与选区操作。对象按锚点归入选区。");
-        ui.checkbox(&mut self.allow_overlap, "允许对象重叠");
+        ui.small(tr!("隐藏图层不参与选区操作。对象按锚点归入选区。"));
+        ui.checkbox(&mut self.allow_overlap, tr!("允许对象重叠"));
         if let Some(clip) = &self.region.clipboard {
-            ui.small(format!(
-                "剪贴板：{} 格 / {} 个对象",
-                clip.cells.len(),
-                clip.records.len()
+            ui.small(tr!(
+                "剪贴板：{arg0} 格 / {arg1} 个对象",
+                arg0 = clip.cells.len(),
+                arg1 = clip.records.len()
             ));
         }
         if let Some(error) = self.region.preview.as_ref().and_then(|p| p.error.as_ref()) {
             ui.colored_label(Color32::LIGHT_RED, error);
         }
         if matches!(self.tool, Tool::Paste | Tool::RegionMove) {
-            ui.small("鼠标对齐选区的最小坐标角，点击放置；Esc 退出。");
+            ui.small(tr!("鼠标对齐选区的最小坐标角，点击放置；Esc 退出。"));
         }
     }
     fn make_preview(&self, scene: &MapScene, at: Cell) -> Result<PreviewGeometry> {
-        let doc = self.doc.as_ref().context("没有地图")?;
+        let doc = self.doc.as_ref().context(tr!("没有地图"))?;
         if matches!(self.tool, Tool::Paste | Tool::RegionMove) {
             let mut clip = if self.tool == Tool::RegionMove {
                 Clipboard::capture(
@@ -434,7 +439,7 @@ impl Editor {
                 self.region
                     .clipboard
                     .as_ref()
-                    .context("请先复制区域")?
+                    .context(tr!("请先复制区域"))?
                     .clone()
             };
             clip.layers.cell_tags &= self.task_labels;
@@ -503,8 +508,12 @@ impl Editor {
                 BTreeSet::new(),
             )
         } else {
-            let id = self.selected.context("请先选择对象")?;
-            let record = self.records.get(&id).context("对象已不存在")?.moved(at)?;
+            let id = self.selected.context(tr!("请先选择对象"))?;
+            let record = self
+                .records
+                .get(&id)
+                .context(tr!("对象已不存在"))?
+                .moved(at)?;
             (
                 record,
                 if self.tool == Tool::Move {
@@ -785,36 +794,36 @@ impl Editor {
     pub(super) fn import_region_clipboard(&mut self, text: &str) -> Result<()> {
         let json = text
             .strip_prefix(CLIPBOARD_PREFIX)
-            .context("剪贴板不是地图区域，请先复制区域")?;
-        let clip: Clipboard = serde_json::from_str(json).context("区域剪贴板格式无效")?;
+            .context(tr!("剪贴板不是地图区域，请先复制区域"))?;
+        let clip: Clipboard = serde_json::from_str(json).context(tr!("区域剪贴板格式无效"))?;
         ensure!(
             !clip.cells.is_empty() && clip.cells.len() <= usize::from(MAX_CELL_SIDE).pow(2),
-            "剪贴板区域大小无效"
+            tr!("剪贴板区域大小无效")
         );
         ensure!(
             clip.cells.iter().all(|c| c.at[0] < MAX_CELL_SIDE
                 && c.at[1] < MAX_CELL_SIDE
                 && c.terrain.is_none_or(|v| v.level <= 127)),
-            "剪贴板坐标或高度无效"
+            tr!("剪贴板坐标或高度无效")
         );
         ensure!(
             clip.cells.iter().all(|c| c.cell_tag.as_ref().is_none_or(
                 |v| v.len() <= 480 && !v.iter().any(|b| matches!(b, b'\r' | b'\n' | 0 | b';'))
             )),
-            "剪贴板格子标签无效"
+            tr!("剪贴板格子标签无效")
         );
         ensure!(
             clip.records.iter().all(
                 |(_, r)| region::OBJECT_SECTIONS.contains(&r.section.as_str())
                     || r.section == "Waypoints"
             ),
-            "剪贴板对象分类无效"
+            tr!("剪贴板对象分类无效")
         );
         ensure!(
             self.doc
                 .as_ref()
                 .is_some_and(|doc| doc.resource_profile == clip.resource_profile),
-            "剪贴板来自不同 Mod 或旧版未知来源，请在当前资源中重新复制"
+            tr!("剪贴板来自不同 Mod 或旧版未知来源，请在当前资源中重新复制")
         );
         self.region.clipboard = Some(clip);
         self.region.preview = None;

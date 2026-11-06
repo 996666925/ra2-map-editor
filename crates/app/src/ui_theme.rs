@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, RichText, Stroke, Vec2};
 use egui::class::HasClasses as _;
 use egui::theme::{DefaultStyle, StyleProvider};
@@ -378,22 +379,35 @@ pub fn button(
     width: f32,
     selected: bool,
 ) -> egui::Response {
+    // These buttons paint their own labels, so egui cannot size them for us.
+    // Allow translated text to grow instead of clipping it at Chinese widths.
+    let width = if text.is_empty() {
+        width
+    } else {
+        width.max(
+            45. + ui
+                .painter()
+                .layout_no_wrap(text.to_owned(), FontId::proportional(12.), TEXT)
+                .size()
+                .x,
+        )
+    };
     let name = if text.is_empty() {
         match kind {
-            Icon::Undo => "撤销",
-            Icon::Redo => "重做",
-            Icon::Select => "选择",
-            Icon::Terrain => "地形",
-            Icon::Ore => "矿石",
-            Icon::Gem => "宝石",
-            Icon::Erase => "擦除",
-            Icon::Building => "建筑",
-            Icon::Flag => "航点",
-            Icon::Move => "移动",
-            Icon::Pick => "吸管",
-            Icon::Folder => "打开",
-            Icon::Save => "保存",
-            Icon::Play => "试玩",
+            Icon::Undo => tr!("撤销"),
+            Icon::Redo => tr!("重做"),
+            Icon::Select => tr!("选择"),
+            Icon::Terrain => tr!("地形"),
+            Icon::Ore => tr!("矿石"),
+            Icon::Gem => tr!("宝石"),
+            Icon::Erase => tr!("擦除"),
+            Icon::Building => tr!("建筑"),
+            Icon::Flag => tr!("航点"),
+            Icon::Move => tr!("移动"),
+            Icon::Pick => tr!("吸管"),
+            Icon::Folder => tr!("打开"),
+            Icon::Save => tr!("保存"),
+            Icon::Play => tr!("试玩"),
         }
     } else {
         text

@@ -1,5 +1,6 @@
 //! Direct tool entry points shared by the workbench and terrain workspace.
 use super::*;
+use crate::i18n::tr;
 use crate::ui_theme::{self as theme, Icon};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -90,7 +91,10 @@ impl Editor {
         self.object_brush.cancel();
         self.terrain_mode = mode;
         self.ui_state.terrain_page = TerrainPage::for_mode(mode);
-        self.status = format!("{}；在左侧调整参数，Esc 取消当前操作。", mode.name());
+        self.status = tr!(
+            "{arg0}；在左侧调整参数，Esc 取消当前操作。",
+            arg0 = crate::i18n::text(mode.name())
+        );
     }
 
     /// Selecting a fill material keeps rectangular ground painting active.
@@ -112,18 +116,18 @@ impl Editor {
     pub(crate) fn quick_tools(&mut self, ui: &mut egui::Ui) {
         ui.add_enabled_ui(self.doc.is_some() && !self.stroking, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new("工具").color(theme::MUTED));
+                ui.label(egui::RichText::new(tr!("工具")).color(theme::MUTED));
                 for (tool, icon, label) in [
-                    (Tool::Select, Icon::Select, "选择"),
-                    (Tool::Region, Icon::Select, "框选"),
-                    (Tool::Move, Icon::Move, "移动"),
-                    (Tool::Terrain, Icon::Terrain, "地形"),
-                    (Tool::Pick, Icon::Pick, "吸管"),
-                    (Tool::Place, Icon::Building, "对象"),
-                    (Tool::Ore, Icon::Ore, "矿石"),
-                    (Tool::Gems, Icon::Gem, "宝石"),
-                    (Tool::Waypoint, Icon::Flag, "航点"),
-                    (Tool::Erase, Icon::Erase, "擦除"),
+                    (Tool::Select, Icon::Select, tr!("选择")),
+                    (Tool::Region, Icon::Select, tr!("框选")),
+                    (Tool::Move, Icon::Move, tr!("移动")),
+                    (Tool::Terrain, Icon::Terrain, tr!("地形")),
+                    (Tool::Pick, Icon::Pick, tr!("吸管")),
+                    (Tool::Place, Icon::Building, tr!("对象")),
+                    (Tool::Ore, Icon::Ore, tr!("矿石")),
+                    (Tool::Gems, Icon::Gem, tr!("宝石")),
+                    (Tool::Waypoint, Icon::Flag, tr!("航点")),
+                    (Tool::Erase, Icon::Erase, tr!("擦除")),
                 ] {
                     if theme::button(ui, icon, label, 72., self.tool == tool)
                         .on_hover_text(format!(
@@ -139,23 +143,23 @@ impl Editor {
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new("地形").color(theme::MUTED));
+                ui.label(egui::RichText::new(tr!("地形")).color(theme::MUTED));
                 for (mode, label) in [
-                    (TerrainMode::Subtile, "画笔"),
-                    (TerrainMode::Fill, "铺地 G"),
-                    (TerrainMode::CliffOutline, "围合悬崖 C"),
-                    (TerrainMode::CliffFront, "悬崖线"),
-                    (TerrainMode::Plateau, "高台 H"),
-                    (TerrainMode::RampEntrance, "坡道"),
-                    (TerrainMode::WaterOutline, "水域"),
-                    (TerrainMode::Road, "道路"),
+                    (TerrainMode::Subtile, tr!("画笔")),
+                    (TerrainMode::Fill, tr!("铺地 G")),
+                    (TerrainMode::CliffOutline, tr!("围合悬崖 C")),
+                    (TerrainMode::CliffFront, tr!("悬崖线")),
+                    (TerrainMode::Plateau, tr!("高台 H")),
+                    (TerrainMode::RampEntrance, tr!("坡道")),
+                    (TerrainMode::WaterOutline, tr!("水域")),
+                    (TerrainMode::Road, tr!("道路")),
                 ] {
                     if ui
                         .add(
                             egui::Button::new(label)
                                 .selected(self.tool == Tool::Terrain && self.terrain_mode == mode),
                         )
-                        .on_hover_text(mode.name())
+                        .on_hover_text(crate::i18n::text(mode.name()))
                         .clicked()
                     {
                         self.activate_terrain_mode(mode);
@@ -168,10 +172,10 @@ impl Editor {
     pub(super) fn terrain_tools(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             for (page, label) in [
-                (TerrainPage::Ground, "地表"),
-                (TerrainPage::Cliffs, "悬崖"),
-                (TerrainPage::Water, "水岸"),
-                (TerrainPage::Roads, "道路 / 桥"),
+                (TerrainPage::Ground, tr!("地表")),
+                (TerrainPage::Cliffs, tr!("悬崖")),
+                (TerrainPage::Water, tr!("水岸")),
+                (TerrainPage::Roads, tr!("道路 / 桥")),
             ] {
                 ui.selectable_value(&mut self.ui_state.terrain_page, page, label);
             }
@@ -183,7 +187,7 @@ impl Editor {
                 TerrainMode::Subtile | TerrainMode::Template | TerrainMode::Fill
             )
         {
-            egui::CollapsingHeader::new("画笔、填充与高度工具")
+            egui::CollapsingHeader::new(tr!("画笔、填充与高度工具"))
                 .show(ui, |ui| self.terrain_mode_buttons(ui));
         } else {
             self.terrain_mode_buttons(ui);
@@ -199,11 +203,11 @@ impl Editor {
                         if ui
                             .add_sized(
                                 [width, 28.],
-                                egui::Button::new(label).selected(
+                                egui::Button::new(crate::i18n::text(label)).wrap().selected(
                                     self.tool == Tool::Terrain && self.terrain_mode == mode,
                                 ),
                             )
-                            .on_hover_text(mode.name())
+                            .on_hover_text(crate::i18n::text(mode.name()))
                             .clicked()
                         {
                             self.activate_terrain_mode(mode);

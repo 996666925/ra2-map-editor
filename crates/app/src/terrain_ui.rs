@@ -1,5 +1,6 @@
 //! Terrain authoring palette. Only cached resource data is accessed on the UI thread.
 use super::*;
+use crate::i18n::tr;
 use crate::ui_theme as theme;
 use egui::{RichText, TextureHandle};
 use ra2_map_assets::terrain_library::TerrainCategory;
@@ -123,7 +124,7 @@ impl Editor {
                     .flatten()
                     .any(|s| s.height > 0)
             })
-            .context("缺少多层悬崖预览")?;
+            .context(tr!("缺少多层悬崖预览"))?;
         self.tool = Tool::Terrain;
         self.terrain_mode = TerrainMode::Template;
         self.template_level = Some(2);
@@ -143,17 +144,17 @@ impl Editor {
         } else {
             BTreeSet::new()
         };
-        egui::CollapsingHeader::new("分类与模板选项").show(ui, |ui| {
+        egui::CollapsingHeader::new(tr!("分类与模板选项")).show(ui, |ui| {
             egui::ComboBox::from_id_salt("terrain-category")
                 .width(ui.available_width())
                 .selected_text(
                     self.ui_state
                         .terrain_category
-                        .map_or("全部地形", TerrainCategory::name),
+                        .map_or(tr!("全部地形"), TerrainCategory::name),
                 )
                 .show_ui(ui, |ui| {
                     let old = self.ui_state.terrain_category;
-                    ui.selectable_value(&mut self.ui_state.terrain_category, None, "全部地形");
+                    ui.selectable_value(&mut self.ui_state.terrain_category, None, tr!("全部地形"));
                     for category in TerrainCategory::ALL {
                         if (!filling || category == TerrainCategory::Ground)
                             && scene
@@ -165,7 +166,7 @@ impl Editor {
                             ui.selectable_value(
                                 &mut self.ui_state.terrain_category,
                                 Some(category),
-                                category.name(),
+                                crate::i18n::text(category.name()),
                             );
                         }
                     }
@@ -193,10 +194,10 @@ impl Editor {
                         .and_then(|id| groups.get(&id))
                         .copied()
                         .map(crate::labels::terrain)
-                        .unwrap_or_else(|| "全部地形组".into()),
+                        .unwrap_or_else(|| tr!("全部地形组").into()),
                 )
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.ui_state.terrain_group, None, "全部地形组");
+                    ui.selectable_value(&mut self.ui_state.terrain_group, None, tr!("全部地形组"));
                     for (id, name) in &groups {
                         ui.selectable_value(
                             &mut self.ui_state.terrain_group,
@@ -208,9 +209,13 @@ impl Editor {
                 });
             ui.add_enabled_ui(!filling, |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.ui_state.terrain_subtiles, false, "完整地形");
-                    ui.selectable_value(&mut self.ui_state.terrain_subtiles, true, "子块");
-                    ui.checkbox(&mut self.ui_state.terrain_variants, "变体");
+                    ui.selectable_value(
+                        &mut self.ui_state.terrain_subtiles,
+                        false,
+                        tr!("完整地形"),
+                    );
+                    ui.selectable_value(&mut self.ui_state.terrain_subtiles, true, tr!("子块"));
+                    ui.checkbox(&mut self.ui_state.terrain_variants, tr!("变体"));
                 });
             });
         });
@@ -228,19 +233,19 @@ impl Editor {
                 ra2_map_scene::fill_tools::material(scene, &scene.brushes[index]).is_ok()
             });
         }
-        ui.small(format!(
-            "{} 个{}",
-            matching.len(),
-            if filling {
-                "可平铺地表"
+        ui.small(tr!(
+            "{arg0} 个{arg1}",
+            arg0 = matching.len(),
+            arg1 = if filling {
+                tr!("可平铺地表")
             } else if subtiles {
-                "子块"
+                tr!("子块")
             } else {
-                "完整模板"
+                tr!("完整模板")
             }
         ));
         if matching.is_empty() {
-            ui.label("没有匹配的地形；可清空搜索或切换地形组。");
+            ui.label(tr!("没有匹配的地形；可清空搜索或切换地形组。"));
         }
         let columns = (ui.available_width() / 98.).floor().max(1.) as usize;
         let width = (ui.available_width() - 8. * (columns - 1) as f32) / columns as f32;
@@ -339,19 +344,19 @@ impl Editor {
                             let hint = format!(
                                 "{}\n{}\n{}",
                                 crate::labels::terrain_brush(&brush.label),
-                                t.map(|t| format!(
-                                    "{}×{} · {} 个有效子块",
-                                    t.width,
-                                    t.height,
-                                    t.cells.iter().flatten().count()
+                                t.map(|t| tr!(
+                                    "{arg0}×{arg1} · {arg2} 个有效子块",
+                                    arg0 = t.width,
+                                    arg1 = t.height,
+                                    arg2 = t.cells.iter().flatten().count()
                                 ))
                                 .unwrap_or_default(),
                                 if filling {
-                                    "点击选择填充素材，保持填充工具"
+                                    tr!("点击选择填充素材，保持填充工具")
                                 } else if subtiles {
-                                    "点击使用子块画笔"
+                                    tr!("点击使用子块画笔")
                                 } else {
-                                    "点击放置完整地形；上方可调整同组模板、锚点与基准高度"
+                                    tr!("点击放置完整地形；上方可调整同组模板、锚点与基准高度")
                                 }
                             );
                             if response.on_hover_text(hint).clicked() {
@@ -383,7 +388,7 @@ impl Editor {
         if let Some(group) = group {
             ui.label(format!(
                 "{} · {}",
-                group.category.name(),
+                crate::i18n::text(group.category.name()),
                 crate::labels::terrain(&group.name)
             ))
             .on_hover_text(&group.name);
@@ -394,14 +399,14 @@ impl Editor {
             {
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(pos > 0, egui::Button::new("◀ 上一块"))
+                        .add_enabled(pos > 0, egui::Button::new(tr!("◀ 上一块")))
                         .clicked()
                     {
                         self.brush = siblings[pos - 1];
                     }
                     ui.small(format!("{}/{}", pos + 1, siblings.len()));
                     if ui
-                        .add_enabled(pos + 1 < siblings.len(), egui::Button::new("下一块 ▶"))
+                        .add_enabled(pos + 1 < siblings.len(), egui::Button::new(tr!("下一块 ▶")))
                         .clicked()
                     {
                         self.brush = siblings[pos + 1];
@@ -415,33 +420,33 @@ impl Editor {
         };
         theme::field(
             ui,
-            "模板尺寸",
-            format!(
-                "{}×{} · {} 子块",
-                t.width,
-                t.height,
-                t.cells.iter().flatten().count()
+            tr!("模板尺寸"),
+            tr!(
+                "{arg0}×{arg1} · {arg2} 子块",
+                arg0 = t.width,
+                arg1 = t.height,
+                arg2 = t.cells.iter().flatten().count()
             ),
         );
         let heights: Vec<_> = t.cells.iter().flatten().map(|s| s.height).collect();
         theme::field(
             ui,
-            "相对高度",
-            format!(
-                "{}～{}",
-                heights.iter().min().unwrap_or(&0),
-                heights.iter().max().unwrap_or(&0)
+            tr!("相对高度"),
+            tr!(
+                "{min}～{max}",
+                min = heights.iter().min().unwrap_or(&0),
+                max = heights.iter().max().unwrap_or(&0)
             ),
         );
         let mut fixed = self.template_level.is_some();
-        if ui.checkbox(&mut fixed, "指定模板基准高度").changed() {
+        if ui.checkbox(&mut fixed, tr!("指定模板基准高度")).changed() {
             self.template_level = fixed.then_some(0);
         }
         if let Some(level) = &mut self.template_level {
-            ui.add(egui::Slider::new(level, 0..=127).text("基准高度"));
-            ui.small("各子块高度 = 基准高度 + 模板相对高度。");
+            ui.add(egui::Slider::new(level, 0..=127).text(tr!("基准高度")));
+            ui.small(tr!("各子块高度 = 基准高度 + 模板相对高度。"));
         } else {
-            ui.small("高度跟随鼠标下的格子；所选锚点与该格等高。");
+            ui.small(tr!("高度跟随鼠标下的格子；所选锚点与该格等高。"));
         }
         if let Some(texture) = template_texture(&mut self.ui_state, ui.ctx(), scene, key) {
             let size = texture.size_vec2();
@@ -450,9 +455,11 @@ impl Editor {
                 .min(2.);
             ui.add(egui::Image::new(&texture).fit_to_exact_size(size * scale));
         }
-        ui.small("点击下方菱形选择对齐鼠标的子块：");
+        ui.small(tr!("点击下方菱形选择对齐鼠标的子块："));
         if group.is_some_and(|g| g.category == TerrainCategory::Cliff) {
-            ui.small("悬崖模板默认以最低子块对齐；也可点击高侧子块接续已有高台。");
+            ui.small(tr!(
+                "悬崖模板默认以最低子块对齐；也可点击高侧子块接续已有高台。"
+            ));
         }
         let scale = ((ui.available_width() - 8.) / (f32::from(t.width + t.height) * 30.)).min(0.75);
         let size = egui::vec2(
@@ -511,12 +518,18 @@ impl Editor {
                 self.brush = index;
             }
         }
-        ui.small("数字为相对高度，亮色为锚点。绿色轮廓可放置，红色提示原因。");
+        ui.small(tr!(
+            "数字为相对高度，亮色为锚点。绿色轮廓可放置，红色提示原因。"
+        ));
         if key.variant != 0 {
-            ui.small("变体仅供预览；地图保存基础地形编号，实际外观由游戏选择。");
+            ui.small(tr!(
+                "变体仅供预览；地图保存基础地形编号，实际外观由游戏选择。"
+            ));
         }
         if group.is_some_and(|g| g.category == TerrainCategory::Bridge) {
-            ui.small("此处仅放置地形模板；请用“桥梁工具”联动生成桥头和桥面覆盖物。");
+            ui.small(tr!(
+                "此处仅放置地形模板；请用“桥梁工具”联动生成桥头和桥面覆盖物。"
+            ));
         }
     }
 }

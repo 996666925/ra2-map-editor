@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::tr;
 use crate::ui_theme::{self as theme, Icon};
 use egui::{RichText, TextureHandle};
 
@@ -56,8 +57,8 @@ impl Editor {
     }
     pub fn document_actions(&mut self, ui: &mut egui::Ui, scene: &MapScene) {
         ui.add_enabled_ui(self.doc.is_some() && !self.saving && !self.stroking, |ui| {
-            if theme::button(ui, Icon::Save, "保存", 73., false)
-                .on_hover_text("保存当前地图  Ctrl+S")
+            if theme::button(ui, Icon::Save, tr!("保存"), 73., false)
+                .on_hover_text(tr!("保存当前地图  Ctrl+S"))
                 .clicked()
             {
                 self.save_requested = Some(false);
@@ -78,11 +79,14 @@ impl Editor {
             |ui| {
                 if theme::button(ui, Icon::Undo, "", 34., false)
                     .on_hover_text(if self.stroking {
-                        "取消当前一笔  Ctrl+Z / Esc".into()
+                        tr!("取消当前一笔  Ctrl+Z / Esc").into()
                     } else if self.object_properties_dirty() {
-                        "取消当前属性输入  Ctrl+Z".into()
+                        tr!("取消当前属性输入  Ctrl+Z").into()
                     } else {
-                        format!("撤销  Ctrl+Z\n{}", undo.unwrap_or_default())
+                        tr!(
+                            "撤销  Ctrl+Z\n{arg0}",
+                            arg0 = crate::i18n::text(&undo.unwrap_or_default())
+                        )
                     })
                     .clicked()
                 {
@@ -92,7 +96,10 @@ impl Editor {
         );
         ui.add_enabled_ui(redo.is_some(), |ui| {
             if theme::button(ui, Icon::Redo, "", 34., false)
-                .on_hover_text(format!("重做  Ctrl+Y\n{}", redo.unwrap_or_default()))
+                .on_hover_text(tr!(
+                    "重做  Ctrl+Y\n{arg0}",
+                    arg0 = crate::i18n::text(&redo.unwrap_or_default())
+                ))
                 .clicked()
             {
                 self.history(true, scene);
@@ -100,17 +107,17 @@ impl Editor {
         });
     }
     pub fn toolbox(&mut self, ui: &mut egui::Ui, scene: Option<&MapScene>) {
-        theme::section(ui, "创作面板", "");
+        theme::section(ui, tr!("创作面板"), "");
         ui.scope(|ui| {
             ui.spacing_mut().button_padding.x = 4.;
             ui.spacing_mut().item_spacing.x = 3.;
             ui.horizontal_wrapped(|ui| {
                 for (index, name) in [
-                    (0, "地形"),
-                    (1, "对象"),
-                    (2, "航点"),
-                    (3, "覆盖物"),
-                    (4, "动画"),
+                    (0, tr!("地形")),
+                    (1, tr!("对象")),
+                    (2, tr!("航点")),
+                    (3, tr!("覆盖物")),
+                    (4, tr!("动画")),
                 ] {
                     ui.selectable_value(&mut self.ui_state.tab, index, name);
                 }
@@ -121,8 +128,8 @@ impl Editor {
         }
         let Some(scene) = scene else {
             ui.add_space(24.);
-            ui.label(RichText::new("先打开一张地图").color(theme::MUTED));
-            ui.small("地形素材与对象目录将在这里显示。");
+            ui.label(RichText::new(tr!("先打开一张地图")).color(theme::MUTED));
+            ui.small(tr!("地形素材与对象目录将在这里显示。"));
             return;
         };
         if self.tool != Tool::Select {
@@ -134,8 +141,11 @@ impl Editor {
                         TerrainMode::Subtile | TerrainMode::Template | TerrainMode::Fill
                     )
                 {
-                    egui::CollapsingHeader::new(format!("{} · 设置", self.terrain_mode.name()))
-                        .show(ui, |ui| self.tool_options(ui, scene));
+                    egui::CollapsingHeader::new(tr!(
+                        "{arg0} · 设置",
+                        arg0 = crate::i18n::text(self.terrain_mode.name())
+                    ))
+                    .show(ui, |ui| self.tool_options(ui, scene));
                 } else {
                     self.tool_options(ui, scene);
                 }
@@ -146,21 +156,21 @@ impl Editor {
             && self.tool == Tool::Terrain
             && (self.terrain_mode.planned() || self.terrain_mode.edits_height())
         {
-            ui.small("此工具自动选用当前环境的地形，无需挑选素材。");
+            ui.small(tr!("此工具自动选用当前环境的地形，无需挑选素材。"));
             if ui
-                .add_enabled(!self.stroking, egui::Button::new("手工拼贴地形…"))
-                .on_hover_text("切换到完整模板模式，自行选择悬崖、坡面等素材")
+                .add_enabled(!self.stroking, egui::Button::new(tr!("手工拼贴地形…")))
+                .on_hover_text(tr!("切换到完整模板模式，自行选择悬崖、坡面等素材"))
                 .clicked()
             {
                 self.activate_terrain_mode(TerrainMode::Template);
             }
             return;
         }
-        theme::section(ui, "素材库", "");
+        theme::section(ui, tr!("素材库"), "");
         if self.ui_state.tab != 2 {
             ui.add(
                 egui::TextEdit::singleline(&mut self.ui_state.filters[self.ui_state.tab as usize])
-                    .hint_text("筛选名称或编号…")
+                    .hint_text(tr!("筛选名称或编号…"))
                     .desired_width(f32::INFINITY),
             );
         }
@@ -177,12 +187,12 @@ impl Editor {
                         .selected_text(category(&self.section))
                         .show_ui(ui, |ui| {
                             for (id, label) in [
-                                ("Structures", "建筑"),
-                                ("Units", "车辆"),
-                                ("Infantry", "步兵"),
-                                ("Aircraft", "飞机"),
-                                ("Terrain", "树木 / 地形对象"),
-                                ("Smudge", "弹坑 / 污迹"),
+                                ("Structures", tr!("建筑")),
+                                ("Units", tr!("车辆")),
+                                ("Infantry", tr!("步兵")),
+                                ("Aircraft", tr!("飞机")),
+                                ("Terrain", tr!("树木 / 地形对象")),
+                                ("Smudge", tr!("弹坑 / 污迹")),
                             ] {
                                 ui.selectable_value(&mut self.section, id.into(), label);
                             }
@@ -210,12 +220,16 @@ impl Editor {
                         .is_none_or(|p| p.image.is_none())
                 });
                 ui.label(
-                    RichText::new(format!("{} / {} 个对象", matching.len(), types.len()))
-                        .color(theme::MUTED)
-                        .size(11.),
+                    RichText::new(tr!(
+                        "{arg0} / {arg1} 个对象",
+                        arg0 = matching.len(),
+                        arg1 = types.len()
+                    ))
+                    .color(theme::MUTED)
+                    .size(11.),
                 );
                 if animations {
-                    ui.small("动画预览；游戏中的生成由规则或触发器控制。");
+                    ui.small(tr!("动画预览；游戏中的生成由规则或触发器控制。"));
                 }
                 egui::ScrollArea::vertical()
                     .id_salt("object-palette")
@@ -239,7 +253,7 @@ impl Editor {
                                 .sprites
                                 .get(section, id)
                                 .map(|p| p.detail.as_str())
-                                .unwrap_or("无图像");
+                                .unwrap_or(tr!("无图像"));
                             ui.horizontal(|ui| {
                                 theme::thumbnail(ui, texture.as_ref(), detail);
                                 if ui
@@ -282,7 +296,7 @@ impl Editor {
                     });
             }
             3 => {
-                ui.small("墙、桥、箱子及其他覆盖物；每格一个类型。");
+                ui.small(tr!("墙、桥、箱子及其他覆盖物；每格一个类型。"));
                 let entries: Vec<_> = scene
                     .catalog
                     .overlays
@@ -290,10 +304,10 @@ impl Editor {
                     .enumerate()
                     .filter(|(_, id)| scene.catalog.object_matches(id, &filter))
                     .collect();
-                ui.small(format!(
-                    "{} / {} 个覆盖物",
-                    entries.len(),
-                    scene.catalog.overlays.len()
+                ui.small(tr!(
+                    "{arg0} / {arg1} 个覆盖物",
+                    arg0 = entries.len(),
+                    arg1 = scene.catalog.overlays.len()
                 ));
                 egui::ScrollArea::vertical()
                     .id_salt("overlay-palette")
@@ -312,7 +326,7 @@ impl Editor {
                                 .sprites
                                 .get("Overlay", id)
                                 .map(|p| p.detail.as_str())
-                                .unwrap_or("无图像");
+                                .unwrap_or(tr!("无图像"));
                             ui.horizontal(|ui| {
                                 theme::thumbnail(ui, texture.as_ref(), detail);
                                 let response = ui
@@ -345,7 +359,11 @@ impl Editor {
                     });
             }
             _ => {
-                ui.label(RichText::new("遭遇战起点").color(theme::MUTED).size(11.));
+                ui.label(
+                    RichText::new(tr!("遭遇战起点"))
+                        .color(theme::MUTED)
+                        .size(11.),
+                );
                 egui::ScrollArea::vertical()
                     .id_salt("player-start-palette")
                     .max_height(110.)
@@ -367,7 +385,7 @@ impl Editor {
                         })
                     });
                 ui.add_space(8.);
-                ui.label(RichText::new("地图航点").color(theme::MUTED).size(11.));
+                ui.label(RichText::new(tr!("地图航点")).color(theme::MUTED).size(11.));
                 let entries: Vec<_> = self
                     .records
                     .iter()
@@ -383,9 +401,11 @@ impl Editor {
                             if ui
                                 .add_sized(
                                     [ui.available_width(), 28.],
-                                    egui::Button::new(format!(
-                                        "航点 {key}     {}, {}",
-                                        cell[0], cell[1]
+                                    egui::Button::new(tr!(
+                                        "航点 {key}     {arg0}, {arg1}",
+                                        key = key,
+                                        arg0 = cell[0],
+                                        arg1 = cell[1]
                                     ))
                                     .selected(self.selected == Some(*id)),
                                 )
@@ -403,7 +423,7 @@ impl Editor {
         theme::section(
             ui,
             if self.tool == Tool::Terrain {
-                self.terrain_mode.name()
+                crate::i18n::text(self.terrain_mode.name())
             } else {
                 self.tool.name()
             },
@@ -418,7 +438,7 @@ impl Editor {
                         .as_ref()
                         .err()
                         .map(String::as_str)
-                        .unwrap_or("当前地图仅支持查看"),
+                        .unwrap_or(tr!("当前地图仅支持查看")),
                 )
                 .color(theme::MUTED),
             );
@@ -430,8 +450,8 @@ impl Editor {
                     || self.terrain_mode.planned()))
         {
             ui.add_space(4.);
-            ui.label(RichText::new("笔刷大小").color(theme::MUTED).size(11.));
-            ui.add(egui::Slider::new(&mut self.radius, 1..=5).text("格"));
+            ui.label(RichText::new(tr!("笔刷大小")).color(theme::MUTED).size(11.));
+            ui.add(egui::Slider::new(&mut self.radius, 1..=5).text(tr!("格")));
         }
         match self.tool {
             Tool::Terrain => {
@@ -448,56 +468,70 @@ impl Editor {
                 }
                 ui.add_space(6.);
                 if !self.terrain_mode.planned() {
-                    ui.checkbox(&mut self.auto_lat, "自动地表过渡（LAT）");
+                    ui.checkbox(&mut self.auto_lat, tr!("自动地表过渡（LAT）"));
                 }
                 if self.terrain_mode == TerrainMode::Bridge {
                     egui::ComboBox::from_id_salt("bridge-kind")
-                        .selected_text(self.bridge_kind.name())
+                        .selected_text(crate::i18n::text(self.bridge_kind.name()))
                         .width(ui.available_width())
                         .show_ui(ui, |ui| {
                             for kind in ra2_map_scene::bridge_tools::BridgeKind::ALL {
-                                ui.selectable_value(&mut self.bridge_kind, kind, kind.name());
+                                ui.selectable_value(
+                                    &mut self.bridge_kind,
+                                    kind,
+                                    crate::i18n::text(kind.name()),
+                                );
                             }
                         });
                     if self.bridge_kind.high() {
-                        ui.small("从一侧高地或悬崖拖到另一侧，端点自动贴合崖边。两岸等高，桥下低 4 层；可跨低地或水面。");
+                        ui.small(tr!("从一侧高地或悬崖拖到另一侧，端点自动贴合崖边。两岸等高，桥下低 4 层；可跨低地或水面。"));
                     } else {
-                        ui.small("按住左键从一岸拖到另一岸，桥面预览随鼠标变长。未接岸时显示红色预览，接齐同高陆地后变绿，松开放置。");
+                        ui.small(tr!("按住左键从一岸拖到另一岸，桥面预览随鼠标变长。未接岸时显示红色预览，接齐同高陆地后变绿，松开放置。"));
                     }
-                    ui.small("拖动自动吸附两个地图轴向；桥头附近需留出足够宽的平坦通路。");
-                    ui.small(
-                        "自动放置桥面；高桥同时替换桥头。绿色可放置，红色说明原因，Esc 取消。",
-                    );
+                    ui.small(tr!(
+                        "拖动自动吸附两个地图轴向；桥头附近需留出足够宽的平坦通路。"
+                    ));
+                    ui.small(tr!(
+                        "自动放置桥面；高桥同时替换桥头。绿色可放置，红色说明原因，Esc 取消。"
+                    ));
                 } else if self.terrain_mode.planned() {
                     self.plateau_options(ui, scene);
                 } else if self.terrain_mode.edits_height() {
-                    ui.checkbox(&mut self.smooth_heights, "自动生成连续坡面");
+                    ui.checkbox(&mut self.smooth_heights, tr!("自动生成连续坡面"));
                     if self.terrain_mode == TerrainMode::Flatten {
                         ui.add(
                             egui::Slider::new(
                                 &mut self.flatten_level,
                                 0..=if self.smooth_heights { 12 } else { 127 },
                             )
-                            .text("目标高度"),
+                            .text(tr!("目标高度")),
                         );
                     }
-                    ui.small("拖动选择区域，释放后整笔塑形。每格每笔只升降一次。");
+                    ui.small(tr!("拖动选择区域，释放后整笔塑形。每格每笔只升降一次。"));
                 } else if self.terrain_mode == TerrainMode::Template {
                     self.terrain_template_options(ui, scene);
                 } else if self.terrain_mode == TerrainMode::Fill {
-                    ui.small("左键拖框铺地，单击铺一格；松手提交，Esc 或右键取消。");
-                    ui.small("保留每格高度；绿色为铺地范围，橙色为保留的坡道、悬崖、道路和水岸。");
-                    ui.small("自动 LAT 会修补边缘，浅蓝色标出范围外的过渡调整。");
+                    ui.small(tr!("左键拖框铺地，单击铺一格；松手提交，Esc 或右键取消。"));
+                    ui.small(tr!(
+                        "保留每格高度；绿色为铺地范围，橙色为保留的坡道、悬崖、道路和水岸。"
+                    ));
+                    ui.small(tr!("自动 LAT 会修补边缘，浅蓝色标出范围外的过渡调整。"));
                 } else {
-                    ui.small("拖动连续绘制，保留原有高度。");
+                    ui.small(tr!("拖动连续绘制，保留原有高度。"));
                 }
                 if !self.terrain_mode.planned() && self.terrain_mode != TerrainMode::Fill {
-                    ui.small("按住 Shift 锁定地图轴向；松开恢复自由绘制，拖动中也可按下。");
+                    ui.small(tr!(
+                        "按住 Shift 锁定地图轴向；松开恢复自由绘制，拖动中也可按下。"
+                    ));
                 }
             }
             Tool::Ore | Tool::Gems => {
                 ui.add_space(4.);
-                ui.label(RichText::new("矿石储量阶段").color(theme::MUTED).size(11.));
+                ui.label(
+                    RichText::new(tr!("矿石储量阶段"))
+                        .color(theme::MUTED)
+                        .size(11.),
+                );
                 ui.add(egui::Slider::new(&mut self.overlay_frame, 0..=11));
             }
             Tool::Overlay => {
@@ -506,8 +540,8 @@ impl Editor {
                     .overlays
                     .get(self.overlay_id as usize)
                     .map(String::as_str)
-                    .unwrap_or("未知");
-                theme::field(ui, "覆盖物", scene.catalog.object_label(id));
+                    .unwrap_or(tr!("未知"));
+                theme::field(ui, tr!("覆盖物"), scene.catalog.object_label(id));
                 let count = scene
                     .sprites
                     .get("Overlay", id)
@@ -516,66 +550,70 @@ impl Editor {
                     .clamp(1, 256);
                 ui.add(
                     egui::Slider::new(&mut self.overlay_frame, 0..=(count - 1) as u8)
-                        .text("帧 / 连接阶段"),
+                        .text(tr!("帧 / 连接阶段")),
                 );
-                ui.checkbox(&mut self.auto_walls, "自动连接同类墙体");
-                ui.small("拖动放置；桥梁连接帧需手动选择。");
+                ui.checkbox(&mut self.auto_walls, tr!("自动连接同类墙体"));
+                ui.small(tr!("拖动放置；桥梁连接帧需手动选择。"));
             }
             Tool::Region | Tool::Paste | Tool::RegionMove => {
                 self.region_options(ui, scene);
             }
             Tool::Clone => {
-                ui.checkbox(&mut self.allow_overlap, "允许对象重叠");
-                ui.small("点击目标位置克隆完整属性，Esc 退出。");
+                ui.checkbox(&mut self.allow_overlap, tr!("允许对象重叠"));
+                ui.small(tr!("点击目标位置克隆完整属性，Esc 退出。"));
             }
             Tool::Place => {
-                theme::field(ui, "分类", category(&self.section));
-                theme::field(ui, "类型", scene.catalog.object_label(&self.type_id));
-                ui.label(RichText::new("所属方").size(11.).color(theme::MUTED));
+                theme::field(ui, tr!("分类"), category(&self.section));
+                theme::field(ui, tr!("类型"), scene.catalog.object_label(&self.type_id));
+                ui.label(RichText::new(tr!("所属方")).size(11.).color(theme::MUTED));
                 let houses = self.houses(scene);
                 Self::house_picker(ui, "placement-owner", &mut self.owner, &houses);
                 if self.section == "Infantry" {
-                    ui.add(egui::Slider::new(&mut self.infantry_subcell, 0..=4).text("子格"));
+                    ui.add(egui::Slider::new(&mut self.infantry_subcell, 0..=4).text(tr!("子格")));
                 }
-                ui.checkbox(&mut self.allow_overlap, "允许对象重叠");
-                ui.small("轮廓显示实际占地；红色表示越界、占用或高低不平。");
-                ui.small("按住左键拖动连刷，同一笔按占地去重；不可放置的位置自动跳过。");
-                ui.small("按住 Shift 锁定地图轴向；松开恢复自由连刷，拖动中也可按下。");
-                ui.small("松手提交，Esc / 右键取消整笔，Ctrl+Z 整笔撤销。");
+                ui.checkbox(&mut self.allow_overlap, tr!("允许对象重叠"));
+                ui.small(tr!("轮廓显示实际占地；红色表示越界、占用或高低不平。"));
+                ui.small(tr!(
+                    "按住左键拖动连刷，同一笔按占地去重；不可放置的位置自动跳过。"
+                ));
+                ui.small(tr!(
+                    "按住 Shift 锁定地图轴向；松开恢复自由连刷，拖动中也可按下。"
+                ));
+                ui.small(tr!("松手提交，Esc / 右键取消整笔，Ctrl+Z 整笔撤销。"));
             }
             Tool::Waypoint => {
                 ui.add(
                     egui::DragValue::new(&mut self.waypoint)
                         .range(0..=701)
-                        .prefix("航点编号  "),
+                        .prefix(tr!("航点编号  ")),
                 );
-                ui.small("点击地图设置航点位置。0～7 用于出生点；9～30 人地图还使用扩展编号。可在“设置 → 地图信息”中增减数量。");
+                ui.small(tr!("点击地图设置航点位置。0～7 用于出生点；9～30 人地图还使用扩展编号。可在“设置 → 地图信息”中增减数量。"));
             }
             Tool::Move => {
-                ui.checkbox(&mut self.allow_overlap, "允许对象重叠");
-                ui.small("先选择对象，再点击地图上的目标位置。");
+                ui.checkbox(&mut self.allow_overlap, tr!("允许对象重叠"));
+                ui.small(tr!("先选择对象，再点击地图上的目标位置。"));
             }
             Tool::Select => {
-                ui.small("点击格子检查地形，点击对象图像编辑属性。");
+                ui.small(tr!("点击格子检查地形，点击对象图像编辑属性。"));
             }
             Tool::Pick => {
-                ui.small("点击地图吸取地形，并切换到地形画笔。");
+                ui.small(tr!("点击地图吸取地形，并切换到地形画笔。"));
             }
             Tool::Erase => {
-                ui.checkbox(&mut self.auto_walls, "自动重连剩余墙体");
-                ui.small("拖动清除格子中的矿石或其他覆盖物。");
+                ui.checkbox(&mut self.auto_walls, tr!("自动重连剩余墙体"));
+                ui.small(tr!("拖动清除格子中的矿石或其他覆盖物。"));
             }
         }
     }
 }
 fn category(section: &str) -> &str {
     match section {
-        "Structures" => "建筑",
-        "Units" => "车辆",
-        "Infantry" => "步兵",
-        "Aircraft" => "飞机",
-        "Terrain" => "树木 / 地形对象",
-        "Smudge" => "弹坑 / 污迹",
+        "Structures" => tr!("建筑"),
+        "Units" => tr!("车辆"),
+        "Infantry" => tr!("步兵"),
+        "Aircraft" => tr!("飞机"),
+        "Terrain" => tr!("树木 / 地形对象"),
+        "Smudge" => tr!("弹坑 / 污迹"),
         _ => section,
     }
 }

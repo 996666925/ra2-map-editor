@@ -1,5 +1,6 @@
 //! Shared tool commands, cancellation and guidance for buttons and shortcuts.
 use crate::editing::{Editor, Tool};
+use crate::i18n::tr;
 use crate::map::MapScene;
 use eframe::egui;
 use ra2_map_scene::terrain_tools::TerrainMode;
@@ -25,19 +26,23 @@ pub(crate) const TERRAIN_KEYS: [(egui::Key, TerrainMode, &str); 3] = [
 impl Tool {
     pub(crate) fn hint(self) -> &'static str {
         match self {
-            Self::Select => "单击选择格子或对象；M 移动，Ctrl+D 克隆，Delete 删除",
-            Self::Region => "拖动框选；Shift 添加，Alt 减选；Ctrl+C/X/V 复制、剪切、粘贴",
-            Self::Paste => "单击放置区域，可连续粘贴；Esc 或右键退出",
-            Self::RegionMove => "单击目标位置移动整个区域；Esc 或右键取消",
-            Self::Clone => "单击克隆完整对象，可连续放置；Esc 或右键退出",
-            Self::Move => "单击目标位置移动所选对象；Esc 或右键取消",
-            Self::Place => "单击放置，拖动连刷；按住 Shift 锁定地图轴向，松手提交，Esc 或右键取消",
-            Self::Pick => "单击吸取地形，随后回到地形画笔",
-            Self::Waypoint => "单击设置当前航点；编号已存在时会移动该航点",
-            Self::Erase => "拖动擦除覆盖物与资源；按住 Shift 锁定地图轴向，Ctrl+Z 撤销整笔",
-            Self::Terrain => "选择地形模式后绘制；画笔按住 Shift 锁定地图轴向，松开提交，Esc 取消",
+            Self::Select => tr!("单击选择格子或对象；M 移动，Ctrl+D 克隆，Delete 删除"),
+            Self::Region => tr!("拖动框选；Shift 添加，Alt 减选；Ctrl+C/X/V 复制、剪切、粘贴"),
+            Self::Paste => tr!("单击放置区域，可连续粘贴；Esc 或右键退出"),
+            Self::RegionMove => tr!("单击目标位置移动整个区域；Esc 或右键取消"),
+            Self::Clone => tr!("单击克隆完整对象，可连续放置；Esc 或右键退出"),
+            Self::Move => tr!("单击目标位置移动所选对象；Esc 或右键取消"),
+            Self::Place => {
+                tr!("单击放置，拖动连刷；按住 Shift 锁定地图轴向，松手提交，Esc 或右键取消")
+            }
+            Self::Pick => tr!("单击吸取地形，随后回到地形画笔"),
+            Self::Waypoint => tr!("单击设置当前航点；编号已存在时会移动该航点"),
+            Self::Erase => tr!("拖动擦除覆盖物与资源；按住 Shift 锁定地图轴向，Ctrl+Z 撤销整笔"),
+            Self::Terrain => {
+                tr!("选择地形模式后绘制；画笔按住 Shift 锁定地图轴向，松开提交，Esc 取消")
+            }
             Self::Ore | Self::Gems | Self::Overlay => {
-                "拖动绘制；按住 Shift 锁定地图轴向，[ / ] 调整笔刷，松开提交，Esc 取消"
+                tr!("拖动绘制；按住 Shift 锁定地图轴向，[ / ] 调整笔刷，松开提交，Esc 取消")
             }
         }
     }
@@ -55,7 +60,7 @@ impl Editor {
             return;
         }
         if matches!(tool, Tool::Move | Tool::Clone) && self.selected.is_none() {
-            self.status = "请先单击选择对象或航点。".into();
+            self.status = tr!("请先单击选择对象或航点。").into();
             return;
         }
         if tool == Tool::Clone
@@ -64,20 +69,20 @@ impl Editor {
                 .and_then(|id| self.records.get(&id))
                 .is_some_and(|r| r.section == "Waypoints")
         {
-            self.status = "航点请使用航点工具新建，或随区域复制。".into();
+            self.status = tr!("航点请使用航点工具新建，或随区域复制。").into();
             return;
         }
         if tool == Tool::Paste && self.region.clipboard.is_none() {
-            self.status = "请先框选区域，再按 Ctrl+C 复制。".into();
+            self.status = tr!("请先框选区域，再按 Ctrl+C 复制。").into();
             return;
         }
         if tool == Tool::RegionMove && self.region.cells.is_empty() {
-            self.status = "请先框选需要移动的区域。".into();
+            self.status = tr!("请先框选需要移动的区域。").into();
             return;
         }
         if matches!(tool, Tool::Move | Tool::Clone | Tool::Place) && self.object_properties_dirty()
         {
-            self.status = "请先完成或取消当前对象的属性输入。".into();
+            self.status = tr!("请先完成或取消当前对象的属性输入。").into();
             return;
         }
         self.tool = tool;
@@ -111,7 +116,7 @@ impl Editor {
         self.brush_segment = None;
         self.stroke_cells.clear();
         self.cache(scene);
-        self.status = "已取消当前操作；之前完成的修改已保留。".into();
+        self.status = tr!("已取消当前操作；之前完成的修改已保留。").into();
         true
     }
 
@@ -125,7 +130,7 @@ impl Editor {
         self.region.cancel();
         self.feedback.clear();
         self.tool = Tool::Select;
-        self.status = "已返回选择工具。".into();
+        self.status = tr!("已返回选择工具。").into();
     }
 
     pub(crate) fn tool_shortcuts(&mut self, ctx: &egui::Context) {
@@ -176,13 +181,13 @@ impl Editor {
     }
 
     pub(crate) fn context_actions(&mut self, ui: &mut egui::Ui, scene: &MapScene) {
-        if ui.button("选择工具   V").clicked() {
+        if ui.button(tr!("选择工具   V")).clicked() {
             self.activate_tool(Tool::Select);
             ui.close();
         }
         for (tool, label) in [
-            (Tool::Move, "移动所选对象   M"),
-            (Tool::Clone, "克隆所选对象   Ctrl+D"),
+            (Tool::Move, tr!("移动所选对象   M")),
+            (Tool::Clone, tr!("克隆所选对象   Ctrl+D")),
         ] {
             let available = self
                 .selected
@@ -199,7 +204,7 @@ impl Editor {
         if ui
             .add_enabled(
                 self.selected.is_some(),
-                egui::Button::new("删除所选对象 / 航点"),
+                egui::Button::new(tr!("删除所选对象 / 航点")),
             )
             .clicked()
         {
@@ -210,22 +215,22 @@ impl Editor {
         for (action, label, available) in [
             (
                 super::region_edit::Action::Copy,
-                "复制所选区域   Ctrl+C",
+                tr!("复制所选区域   Ctrl+C"),
                 !self.region.cells.is_empty(),
             ),
             (
                 super::region_edit::Action::Cut,
-                "剪切所选区域   Ctrl+X",
+                tr!("剪切所选区域   Ctrl+X"),
                 !self.region.cells.is_empty(),
             ),
             (
                 super::region_edit::Action::Move,
-                "移动所选区域",
+                tr!("移动所选区域"),
                 !self.region.cells.is_empty(),
             ),
             (
                 super::region_edit::Action::Paste,
-                "粘贴已复制区域   Ctrl+V",
+                tr!("粘贴已复制区域   Ctrl+V"),
                 self.region.clipboard.is_some(),
             ),
         ] {

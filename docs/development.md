@@ -28,9 +28,12 @@
 cargo test --locked --workspace
 cargo clippy --locked --workspace --no-deps --all-targets -- -D warnings
 ./tools/format_workspace.ps1 -Check
+python tools/check_i18n.py
 ```
 
 格式化时去掉 `-Check`。使用该脚本可只处理编辑器 workspace，避免 `cargo fmt --all` 遍历本地引擎依赖。
+
+界面本地化、消息编写和新增语言的步骤见 [语言资源说明](../crates/app/locales/README.md)。语言切换、持久化、翻译占位符与中英文布局测试包含在应用测试中。
 
 ## UI 交互录像
 

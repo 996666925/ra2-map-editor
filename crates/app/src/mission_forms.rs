@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::tr;
 use mission::schema::{self, ParameterKind as P};
 
 #[derive(Clone)]
@@ -19,12 +20,13 @@ pub(super) fn parameter(
 ) -> bool {
     let mut pick = false;
     ui.horizontal_wrapped(|ui| {
-        ui.label(p.label);
+        ui.label(crate::i18n::text(p.label));
         let mut choices = Vec::new();
         let mut resource_choices = None;
         match p.kind {
             P::Integer { min, max, unit } => {
-                ui.small(format!("{min}～{max} {unit}"));
+                let unit = crate::i18n::text(unit);
+                ui.small(format!("{min}–{max} {unit}"));
             }
             P::Reference(kind) => {
                 choices = scene
@@ -37,7 +39,7 @@ pub(super) fn parameter(
                             if fixed {
                                 scene.mission_definitions.source.as_str()
                             } else {
-                                "地图"
+                                tr!("地图")
                             }
                         );
                         if kind == Kind::Global {
@@ -62,7 +64,7 @@ pub(super) fn parameter(
                         Some((token.clone(), format!("{} · {token}", r.type_id())))
                     })
                     .collect();
-                pick = ui.small_button("从地图选取").clicked();
+                pick = ui.small_button(tr!("从地图选取")).clicked();
             }
             P::Type(section) => {
                 choices = scene
@@ -81,7 +83,7 @@ pub(super) fn parameter(
                     .flat_map(|(_, ids)| ids.iter())
                     .map(|id| (id.clone(), scene.catalog.object_label(id).into_owned()))
                     .collect();
-                pick = ui.small_button("从地图选对象").clicked();
+                pick = ui.small_button(tr!("从地图选对象")).clicked();
             }
             P::Country => {
                 if let Some(countries) = scene.catalog.rules.section("Countries") {
@@ -93,8 +95,8 @@ pub(super) fn parameter(
                         .collect();
                 }
                 choices.extend([
-                    ("-1".into(), "-1 · 事件任意国家 / 动作无目标".into()),
-                    ("8997".into(), "8997 · 动作保留所属方".into()),
+                    ("-1".into(), tr!("-1 · 事件任意国家 / 动作无目标").into()),
+                    ("8997".into(), tr!("8997 · 动作保留所属方").into()),
                 ]);
             }
             P::Csf | P::Sound | P::Eva | P::Theme => {
@@ -109,7 +111,7 @@ pub(super) fn parameter(
                 }
             }
             P::Cell128 => {
-                pick = ui.small_button("从地图选格子").clicked();
+                pick = ui.small_button(tr!("从地图选格子")).clicked();
             }
         }
         let choices = resource_choices.unwrap_or(&choices);
@@ -118,12 +120,12 @@ pub(super) fn parameter(
             ui.make_persistent_id(("parameter", p.index)),
             value,
             choices,
-            p.label,
+            crate::i18n::text(p.label),
             155.,
         );
         if !choices.is_empty() {
             egui::ComboBox::from_id_salt(p.index)
-                .selected_text("选择…")
+                .selected_text(tr!("选择…"))
                 .width(90.)
                 .height(220.)
                 .show_ui(ui, |ui| {
@@ -133,10 +135,10 @@ pub(super) fn parameter(
                     let mut filter = ui.data_mut(|d| d.get_temp::<String>(id).unwrap_or_default());
                     ui.add(
                         egui::TextEdit::singleline(&mut filter)
-                            .hint_text("搜索名称或编号…")
+                            .hint_text(tr!("搜索名称或编号…"))
                             .desired_width(f32::INFINITY),
                     )
-                    .accessible_name(format!("搜索{}", p.label));
+                    .accessible_name(tr!("搜索{arg0}", arg0 = crate::i18n::text(p.label)));
                     let lower = filter.to_lowercase();
                     for (token, label) in choices
                         .iter()
@@ -159,11 +161,21 @@ pub(super) fn parameter(
         if !valid {
             ui.colored_label(
                 egui::Color32::YELLOW,
-                "当前规则目录中没有此类型（原文仍可保存）",
+                tr!("当前规则目录中没有此类型（原文仍可保存）"),
             );
         }
     }
     if let Some(error) = schema::parameter_error(doc, p.kind, value) {
+        let error = if let P::Integer { min, max, unit } = p.kind {
+            tr!(
+                "须为 {min}～{max} 的整数（{unit}）",
+                min = min,
+                max = max,
+                unit = crate::i18n::text(unit)
+            )
+        } else {
+            crate::i18n::text(&error).to_owned()
+        };
         ui.colored_label(egui::Color32::LIGHT_RED, error);
     }
     pick
@@ -190,10 +202,10 @@ pub(super) fn slots(
         ui.push_id(&key, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.strong(format!("{}", index + 1));
-                if ui.small_button("插入").clicked() {
+                if ui.small_button(tr!("插入")).clicked() {
                     edit = Some(Edit::Insert(index));
                 }
-                if ui.small_button("复制").clicked() {
+                if ui.small_button(tr!("复制")).clicked() {
                     edit = Some(Edit::Copy(index));
                 }
                 if ui.small_button("↑").clicked() {
@@ -202,7 +214,7 @@ pub(super) fn slots(
                 if ui.small_button("↓").clicked() {
                     edit = Some(Edit::Move(index, index + 1));
                 }
-                if ui.small_button("删除").clicked() {
+                if ui.small_button(tr!("删除")).clicked() {
                     edit = Some(Edit::Remove(index));
                 }
             });
@@ -214,8 +226,8 @@ pub(super) fn slots(
                     egui::ComboBox::from_id_salt("opcode")
                         .selected_text(
                             scripts::opcode(fields[0].parse().unwrap_or(-1)).map_or_else(
-                                || format!("原始动作 {}", fields[0]),
-                                |s| format!("{} {}", s.id, s.name),
+                                || tr!("原始动作 {arg0}", arg0 = fields[0]),
+                                |s| format!("{} {}", s.id, crate::i18n::text(s.name)),
                             ),
                         )
                         .show_ui(ui, |ui| {
@@ -223,7 +235,7 @@ pub(super) fn slots(
                                 if ui
                                     .selectable_label(
                                         fields[0] == spec.id.to_string(),
-                                        format!("{} {}", spec.id, spec.name),
+                                        format!("{} {}", spec.id, crate::i18n::text(spec.name)),
                                     )
                                     .clicked()
                                 {
@@ -232,7 +244,7 @@ pub(super) fn slots(
                             }
                         });
                     if let Some(spec) = scripts::opcode(fields[0].parse().unwrap_or(-1)) {
-                        ui.small(spec.hint);
+                        ui.small(crate::i18n::text(spec.hint));
                         for p in spec.parameters {
                             if parameter(ui, *p, &mut fields[p.index], doc, scene) {
                                 *pick = Some(Pick {
@@ -247,11 +259,11 @@ pub(super) fn slots(
                 } else {
                     let mut count = fields[0].parse::<i32>().unwrap_or(1);
                     ui.horizontal(|ui| {
-                        ui.label("数量");
+                        ui.label(tr!("数量"));
                         if crate::form_edit::number(
                             ui,
                             egui::DragValue::new(&mut count).range(1..=i32::MAX),
-                            "数量",
+                            tr!("数量"),
                         )
                         .changed()
                         {
@@ -260,7 +272,7 @@ pub(super) fn slots(
                     });
                     let p = schema::Parameter {
                         index: 1,
-                        label: "成员类型",
+                        label: tr!("成员类型"),
                         kind: P::Type("Foot"),
                     };
                     if parameter(ui, p, &mut fields[1], doc, scene) {
@@ -276,8 +288,9 @@ pub(super) fn slots(
                     *value = fields.join(",");
                 }
             }
-            egui::CollapsingHeader::new("原始行").show(ui, |ui| {
-                ui.text_edit_singleline(value).accessible_name("原始行");
+            egui::CollapsingHeader::new(tr!("原始行")).show(ui, |ui| {
+                ui.text_edit_singleline(value)
+                    .accessible_name(tr!("原始行"));
             });
             ui.separator();
         });
@@ -286,7 +299,7 @@ pub(super) fn slots(
     if ui
         .add_enabled(
             len < if script { 50 } else { 6 },
-            egui::Button::new("＋列表行"),
+            egui::Button::new(tr!("＋列表行")),
         )
         .clicked()
     {

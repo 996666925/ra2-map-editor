@@ -1,4 +1,5 @@
 //! State-keyed authoring labels. Kept out of published previews and map bytes.
+use crate::i18n::tr;
 use crate::{
     camera::MapCamera,
     document::{Cell, MapDocument},
@@ -35,7 +36,7 @@ impl MissionOverlay {
                         at,
                         kind: Kind::CellTag,
                         id,
-                        label: format!("格子标签 {}", String::from_utf8_lossy(&value)),
+                        label: tr!("格子标签 {arg0}", arg0 = String::from_utf8_lossy(&value)),
                     });
                 }
             }
@@ -55,10 +56,11 @@ impl MissionOverlay {
                         at,
                         kind: Kind::Tag,
                         id: tag.clone(),
-                        label: format!(
-                            "{} {} · 标签 {tag}",
-                            crate::labels::field(&record.section),
-                            record.key
+                        label: tr!(
+                            "{arg0} {arg1} · 标签 {tag}",
+                            arg0 = crate::labels::field(&record.section),
+                            arg1 = record.key,
+                            tag = tag
                         ),
                     });
                 }

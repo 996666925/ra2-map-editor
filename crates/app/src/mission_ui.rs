@@ -1,4 +1,5 @@
 //! Completed mission edits use the document's shared history automatically.
+use crate::i18n::tr;
 use crate::{editing::Editor, map::MapScene};
 use eframe::egui;
 use ra2_map_document::{
@@ -85,13 +86,13 @@ impl MissionUi {
         }
         self.open = true;
         self.message =
-            "任务输入尚未完成或有无效值。请完成输入，或取消本次输入，再打开、新建或关闭地图。"
+            tr!("任务输入尚未完成或有无效值。请完成输入，或取消本次输入，再打开、新建或关闭地图。")
                 .into();
         false
     }
     pub(crate) fn navigate(&mut self, editor: &Editor, kind: Kind, id: String) {
         if self.dirty() {
-            self.message = "请先完成或取消当前任务输入。".into();
+            self.message = tr!("请先完成或取消当前任务输入。").into();
             self.open = true;
             return;
         }
@@ -162,7 +163,7 @@ impl MissionUi {
             match self.apply_edit(editor, scene) {
                 Ok(()) => self.edit_error.clear(),
                 Err(error) => {
-                    self.edit_error = format!("尚未生效：{error:#}");
+                    self.edit_error = tr!("尚未生效：{error}", error = format!("{:#}", error));
                     self.open = true;
                 }
             }
@@ -174,10 +175,10 @@ impl MissionUi {
         let doc = editor
             .doc
             .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("没有地图"))?;
+            .ok_or_else(|| anyhow::anyhow!(tr!("没有地图")))?;
         anyhow::ensure!(
             self.document == doc.id && self.state == doc.state_id,
-            "文档已变化，请取消本次输入后重新编辑"
+            tr!("文档已变化，请取消本次输入后重新编辑")
         );
         let changes = draft_changes(&self.original, &self.draft);
         // A newly added empty field is only a UI placeholder. Keep it visible
@@ -202,7 +203,7 @@ impl MissionUi {
             .map(|(k, v)| (k.clone(), String::from_utf8_lossy(v).into_owned()))
             .chain(placeholders)
             .collect();
-        self.message = "修改已自动生效，可撤销、保存或试玩。".into();
+        self.message = tr!("修改已自动生效，可撤销、保存或试玩。").into();
         Ok(())
     }
     fn dirty(&self) -> bool {
@@ -222,7 +223,7 @@ impl MissionUi {
         };
         let Some(doc) = &editor.doc else { return };
         if (doc.id, doc.state_id) != (self.document, self.state) {
-            self.message = "文档已变化，请重新载入后拾取。".into();
+            self.message = tr!("文档已变化，请重新载入后拾取。").into();
             self.pick = None;
             return;
         }
@@ -244,7 +245,7 @@ impl MissionUi {
                                 None
                             }
                         })
-                        .ok_or_else(|| anyhow::anyhow!("请点击唯一航点或航点标记"))?;
+                        .ok_or_else(|| anyhow::anyhow!(tr!("请点击唯一航点或航点标记")))?;
                     Ok(if letters {
                         mission::schema::waypoint_token(r.key.parse()?)?
                     } else {
@@ -267,19 +268,19 @@ impl MissionUi {
                                 None
                             }
                         })
-                        .ok_or_else(|| anyhow::anyhow!("请点击唯一对象或对象标记"))?;
+                        .ok_or_else(|| anyhow::anyhow!(tr!("请点击唯一对象或对象标记")))?;
                     anyhow::ensure!(
                         section != "Foot"
                             || matches!(r.section.as_str(), "Infantry" | "Units" | "Aircraft"),
-                        "特遣部队成员须为步兵、车辆或飞机"
+                        tr!("特遣部队成员须为步兵、车辆或飞机")
                     );
                     Ok(r.type_id())
                 }
                 mission::schema::ParameterKind::Cell128 => {
-                    anyhow::ensure!(at[0] < 128, "旧格子参数横坐标须小于 128");
+                    anyhow::ensure!(at[0] < 128, tr!("旧格子参数横坐标须小于 128"));
                     Ok((u32::from(at[1]) * 128 + u32::from(at[0])).to_string())
                 }
-                _ => anyhow::bail!("此参数不支持画布拾取"),
+                _ => anyhow::bail!(tr!("此参数不支持画布拾取")),
             }
         })();
         match result {
@@ -303,7 +304,7 @@ impl MissionUi {
                     }
                 }
                 self.pick = None;
-                self.message = "已选取参数，返回表单后自动生效。".into();
+                self.message = tr!("已选取参数，返回表单后自动生效。").into();
             }
             Err(e) => self.message = format!("{e:#}"),
         }
@@ -345,41 +346,48 @@ impl MissionUi {
             return None;
         }
         if self.pick.is_some() {
-            crate::ui_theme::window(ctx, "任务参数拾取", "mission-pick", egui::vec2(460., 180.))
-                .show(ctx, |ui| {
-                    ui.label("在地图点击航点标记、对象或目标格；选取后自动生效，Esc 取消拾取。");
-                    if ui.button("取消拾取").clicked()
-                        || ctx.input(|i| i.key_pressed(egui::Key::Escape))
-                    {
-                        self.pick = None;
-                    }
-                });
+            crate::ui_theme::window(
+                ctx,
+                tr!("任务参数拾取"),
+                "mission-pick",
+                egui::vec2(460., 180.),
+            )
+            .show(ctx, |ui| {
+                ui.label(tr!(
+                    "在地图点击航点标记、对象或目标格；选取后自动生效，Esc 取消拾取。"
+                ));
+                if ui.button(tr!("取消拾取")).clicked()
+                    || ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                {
+                    self.pick = None;
+                }
+            });
             return None;
         }
         let mut open = true;
         let mut jump = None;
-        crate::ui_theme::window(ctx, "任务制作", "mission-authoring", egui::vec2(1000., 690.))
+        crate::ui_theme::window(ctx, tr!("任务制作"), "mission-authoring", egui::vec2(1000., 690.))
             .open(&mut open).resizable(true)
             .show(ctx,|ui| {
                 ui.horizontal_wrapped(|ui| {
-                    for kind in Kind::ALL {if ui.add_enabled(!self.dirty(),egui::Button::new(kind.label()).selected(self.kind==kind)).clicked(){self.kind=kind;self.selected=mission::ids(editor.doc.as_ref().unwrap(),kind).first().cloned().unwrap_or_default();self.message.clear();self.load(editor);}}
+                    for kind in Kind::ALL {if ui.add_enabled(!self.dirty(),egui::Button::new(crate::i18n::text(kind.label())).selected(self.kind==kind)).clicked(){self.kind=kind;self.selected=mission::ids(editor.doc.as_ref().unwrap(),kind).first().cloned().unwrap_or_default();self.message.clear();self.load(editor);}}
                 });
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(!editor.stroking&&!self.dirty(),egui::Button::new("添加最小任务示例")).on_hover_text("将当前地图设置为单人任务，添加两个所属方、增援小队、局部变量和触发器：2 秒后增援并置位 → 宣告胜利。保留原有内容，可整笔撤销。").clicked(){
+                    if ui.add_enabled(!editor.stroking&&!self.dirty(),egui::Button::new(tr!("添加最小任务示例"))).on_hover_text(tr!("将当前地图设置为单人任务，添加两个所属方、增援小队、局部变量和触发器：2 秒后增援并置位 → 宣告胜利。保留原有内容，可整笔撤销。")).clicked(){
                         let result=mission::seed(editor.doc.as_mut().unwrap());
                         match result {Ok(id)=>{editor.commit(scene,"创建最小任务示例");self.kind=Kind::Trigger;self.selected=id;self.message="已添加：经过时间 → 小队增援 / 设置局部变量 → 宣告胜利。可修改事件时间、动作和脚本后试玩。".into();self.load(editor);},Err(e)=>self.message=format!("{e:#}")}
                     }
-                    if ui.add_enabled(!self.dirty()&&!editor.stroking,egui::Button::new("撤销")).clicked(){editor.history(false,scene);self.load(editor);}
-                    if ui.add_enabled(!self.dirty()&&!editor.stroking,egui::Button::new("重做")).clicked(){editor.history(true,scene);self.load(editor);}
-                    if ui.button("任务试玩…").clicked(){editor.play_options.mission=true;self.message="已切换为单人任务试玩；关闭此窗后点击顶栏“试玩”配置难度并启动。".into();}
-                    if ui.add_enabled(!self.dirty(),egui::Button::new("战役与发布…")).clicked(){self.campaign.open=true;}
+                    if ui.add_enabled(!self.dirty()&&!editor.stroking,egui::Button::new(tr!("撤销"))).clicked(){editor.history(false,scene);self.load(editor);}
+                    if ui.add_enabled(!self.dirty()&&!editor.stroking,egui::Button::new(tr!("重做"))).clicked(){editor.history(true,scene);self.load(editor);}
+                    if ui.button(tr!("任务试玩…")).clicked(){editor.play_options.mission=true;self.message=tr!("已切换为单人任务试玩；关闭此窗后点击顶栏“试玩”配置难度并启动。").into();}
+                    if ui.add_enabled(!self.dirty(),egui::Button::new(tr!("战役与发布…"))).clicked(){self.campaign.open=true;}
                 });
                 if !self.message.is_empty(){ui.label(&self.message);}
                 ui.separator();
                 egui::ScrollArea::vertical().id_salt("mission-body").auto_shrink([false, false]).max_height((ui.available_height()-45.).max(120.)).show(ui,|ui| {
                     if ui.available_width() < 900. {
-                        egui::CollapsingHeader::new(format!("记录列表 · {}", self.selected))
+                        egui::CollapsingHeader::new(tr!("记录列表 · {arg0}", arg0 = self.selected))
                             .id_salt("mission-record-list").default_open(self.selected.is_empty())
                             .show(ui, |ui| self.record_list(ui, editor, scene, cell));
                         ui.separator();
@@ -392,29 +400,29 @@ impl MissionUi {
                             ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 0.), egui::Layout::top_down(egui::Align::Min), |ui| self.record_form(ui, editor, scene, cell));
                         });
                     }
-                    ui.separator();ui.label("引用导航（点击跳转；对象/格子引用可定位地图）");
+                    ui.separator();ui.label(tr!("引用导航（点击跳转；对象/格子引用可定位地图）"));
                     let report=self.audit.get(editor.doc.as_ref().unwrap(), &scene.mission_definitions);
                     let current=(self.kind,self.selected.clone());
                     for r in report.references.iter().filter(|r|r.from==current||r.to==current) {
                         let target=if r.from==(self.kind,self.selected.clone()){&r.to}else{&r.from};
                         let fixed = scene.mission_definitions.contains(target.0,&target.1) && !mission::ids(editor.doc.as_ref().unwrap(),target.0).iter().any(|id| mission::same_id(target.0,id,&target.1));
-                        let source=if fixed {scene.mission_definitions.source.as_str()}else{"地图"};
-                        if ui.add_enabled(!self.dirty(),egui::Link::new(format!("{} {} / {} → {} {} · {source}",r.from.0.label(),r.from.1,r.field,r.to.0.label(),r.to.1))).clicked(){if r.cell.is_some(){jump=r.cell;}else if fixed {self.message=format!("{} {} 来自 {source}，固定定义只读，可在地图新建同 ID 覆盖。",target.0.label(),target.1);}else{self.kind=target.0;self.selected=mission::ids(editor.doc.as_ref().unwrap(),target.0).into_iter().find(|id|mission::same_id(target.0,id,&target.1)).unwrap_or_else(||target.1.clone());self.load(editor);}}
+                        let source=if fixed {scene.mission_definitions.source.as_str()}else{tr!("地图")};
+                        if ui.add_enabled(!self.dirty(),egui::Link::new(format!("{} {} / {} → {} {} · {source}",crate::i18n::text(r.from.0.label()),r.from.1,r.field,crate::i18n::text(r.to.0.label()),r.to.1))).clicked(){if r.cell.is_some(){jump=r.cell;}else if fixed {self.message=tr!("{arg0} {arg1} 来自 {source}，固定定义只读，可在地图新建同 ID 覆盖。", arg0 = crate::i18n::text(target.0.label()), arg1 = target.1, source = source);}else{self.kind=target.0;self.selected=mission::ids(editor.doc.as_ref().unwrap(),target.0).into_iter().find(|id|mission::same_id(target.0,id,&target.1)).unwrap_or_else(||target.1.clone());self.load(editor);}}
                     }
-                    ui.separator();egui::CollapsingHeader::new("引用与能力诊断").default_open(true).show(ui,|ui| {
+                    ui.separator();egui::CollapsingHeader::new(tr!("引用与能力诊断")).default_open(true).show(ui,|ui| {
                         let count=|severity|report.diagnostics.iter().filter(|d|d.severity==severity).count();
-                        ui.label(format!("{} 项错误 · {} 项警告 · {} 项能力提示", count(mission::Severity::Error),count(mission::Severity::Warning),count(mission::Severity::Capability)));
+                        ui.label(tr!("{arg0} 项错误 · {arg1} 项警告 · {arg2} 项能力提示", arg0 = count(mission::Severity::Error), arg1 = count(mission::Severity::Warning), arg2 = count(mission::Severity::Capability)));
                         for diagnostic in &report.diagnostics {
                             let issue=&diagnostic.issue;
                             let color=match diagnostic.severity {mission::Severity::Error=>egui::Color32::LIGHT_RED,mission::Severity::Warning=>egui::Color32::YELLOW,mission::Severity::Capability=>egui::Color32::LIGHT_BLUE};
-                            if ui.add_enabled(!self.dirty(),egui::Link::new(egui::RichText::new(format!("[{}] {} {} / {}：{}",diagnostic.severity.label(),issue.kind.label(),issue.id,diagnostic.field,issue.message)).color(color))).clicked(){
+                            if ui.add_enabled(!self.dirty(),egui::Link::new(egui::RichText::new(tr!("[{severity}] {kind} {id} / {field}：{message}", severity = crate::i18n::text(diagnostic.severity.label()), kind = crate::i18n::text(issue.kind.label()), id = issue.id, field = diagnostic.field, message = issue.message)).color(color))).clicked(){
                                 if issue.id.starts_with('@') {jump=issue.cell;} else {self.kind=issue.kind;self.selected=issue.id.clone();self.load(editor);self.field_target=Some(diagnostic.field.clone());if issue.cell.is_some(){jump=issue.cell;}}
                             }
                         }
                     });
                 });
-                if !scene.mission_resources.errors.is_empty(){ui.collapsing("未读取的任务资源目录",|ui|{for error in &scene.mission_resources.errors{ui.small(error);}});}
-                ui.small("能力提示依据固定的 VERA20k 源码；未知参数可保留/编辑原文，未列入清单不代表引擎拒绝。");
+                if !scene.mission_resources.errors.is_empty(){ui.collapsing(tr!("未读取的任务资源目录"),|ui|{for error in &scene.mission_resources.errors{ui.small(error);}});}
+                ui.small(tr!("能力提示依据固定的 VERA20k 源码；未知参数可保留/编辑原文，未列入清单不代表引擎拒绝。"));
             });
         self.finish_edit(ctx, editor, scene);
         if !self.edit_error.is_empty() && !open {
@@ -443,11 +451,11 @@ impl MissionUi {
         } else {
             mission::ids(doc, self.kind)
         };
-        crate::ui_theme::section(ui, "记录列表", "");
+        crate::ui_theme::section(ui, tr!("记录列表"), "");
         ui.add(
             egui::TextEdit::singleline(&mut self.filter)
                 .desired_width(f32::INFINITY)
-                .hint_text("查找 ID…"),
+                .hint_text(tr!("查找 ID…")),
         );
         for id in &ids {
             if !id.to_lowercase().contains(&self.filter.to_lowercase()) {
@@ -474,13 +482,16 @@ impl MissionUi {
         if !matches!(self.kind, Kind::Basic | Kind::Global) {
             ui.separator();
             ui.label(if self.kind == Kind::CellTag {
-                "新标签使用当前选中格坐标"
+                tr!("新标签使用当前选中格坐标")
             } else {
-                "新建 ID"
+                tr!("新建 ID")
             });
             ui.add(egui::TextEdit::singleline(&mut self.new_id).desired_width(f32::INFINITY));
             if ui
-                .add_enabled(!editor.stroking && !self.dirty(), egui::Button::new("新建"))
+                .add_enabled(
+                    !editor.stroking && !self.dirty(),
+                    egui::Button::new(tr!("新建")),
+                )
                 .clicked()
             {
                 let doc = editor.doc.as_mut().unwrap();
@@ -514,9 +525,13 @@ impl MissionUi {
     ) {
         ui.style_mut().spacing.text_edit_width = ui.available_width().min(220.);
 
-        ui.heading(format!("{}  {}", self.kind.label(), self.selected));
+        ui.heading(format!(
+            "{}  {}",
+            crate::i18n::text(self.kind.label()),
+            self.selected
+        ));
         if self.selected.is_empty() {
-            ui.label("选择或新建一条记录。");
+            ui.label(tr!("选择或新建一条记录。"));
             return;
         }
         if self.kind == Kind::AiTrigger
@@ -532,14 +547,17 @@ impl MissionUi {
                 .iter()
                 .find(|(id, _)| mission::same_id(Kind::AiTrigger, id, &self.selected))
         {
-            ui.label(format!("固定定义 · {}", scene.mission_definitions.source));
-            ui.collapsing("查看固定电脑触发器", |ui| {
+            ui.label(tr!(
+                "固定定义 · {arg0}",
+                arg0 = scene.mission_definitions.source
+            ));
+            ui.collapsing(tr!("查看固定电脑触发器"), |ui| {
                 ui.label(raw);
             });
             if ui
                 .add_enabled(
                     !self.dirty() && !editor.stroking,
-                    egui::Button::new("复制固定定义为地图覆盖"),
+                    egui::Button::new(tr!("复制固定定义为地图覆盖")),
                 )
                 .clicked()
             {
@@ -558,13 +576,13 @@ impl MissionUi {
             }
         }
         if self.kind == Kind::House {
-            ui.small(
-                "初始资金使用原生地图资金单位（每单位 100）；盟友列表为单向关系。ID 不自动改名。",
-            );
+            ui.small(tr!(
+                "初始资金使用原生地图资金单位（每单位 100）；盟友列表为单向关系。ID 不自动改名。"
+            ));
             if ui
                 .add_enabled(
                     !self.dirty() && !editor.stroking,
-                    egui::Button::new("图形编辑基地节点…"),
+                    egui::Button::new(tr!("图形编辑基地节点…")),
                 )
                 .clicked()
             {
@@ -573,33 +591,39 @@ impl MissionUi {
             }
         }
         if self.kind == Kind::Global {
-            ui.label("固定编号 0～49；此处只保存编辑注释，不写运行时初值。新战役全部清零；续关继承，重试/重开恢复进入本关时的状态。全局 0 还控制下一关与分支关卡的选择。");
+            ui.label(tr!("固定编号 0～49；此处只保存编辑注释，不写运行时初值。新战役全部清零；续关继承，重试/重开恢复进入本关时的状态。全局 0 还控制下一关与分支关卡的选择。"));
         }
         if self.kind == Kind::TaskForce {
-            ui.small("0～5：数量,类型 ID；分组保留原生数值。");
+            ui.small(tr!("0～5：数量,类型 ID；分组保留原生数值。"));
         }
         if self.kind == Kind::Script {
-            ui.small("0～49：动作 ID,整数参数。例如 3,0 表示移动到航点 0；未知动作按原值保留。");
+            ui.small(tr!(
+                "0～49：动作 ID,整数参数。例如 3,0 表示移动到航点 0；未知动作按原值保留。"
+            ));
         }
         if self.kind == Kind::Tag {
-            ui.small("重复方式：0 一次、1 等待全部关联对象、2 重复；标签绑定触发器，格子和对象绑定标签。");
+            ui.small(tr!(
+                "重复方式：0 一次、1 等待全部关联对象、2 重复；标签绑定触发器，格子和对象绑定标签。"
+            ));
         }
         let stale = editor.doc.as_ref().unwrap().state_id != self.state;
         if stale {
             ui.colored_label(
                 egui::Color32::YELLOW,
-                "文档已变化，请取消本次输入后重新编辑。",
+                tr!("文档已变化，请取消本次输入后重新编辑。"),
             );
         }
-        ui.small("修改自动生效；文本按回车或移开焦点，数值拖动松手后生效。使用撤销恢复上次修改。");
+        ui.small(tr!(
+            "修改自动生效；文本按回车或移开焦点，数值拖动松手后生效。使用撤销恢复上次修改。"
+        ));
         if !self.edit_error.is_empty() {
             ui.colored_label(egui::Color32::YELLOW, &self.edit_error);
         }
         ui.horizontal_wrapped(|ui| {
             let cancel = ui.button(if self.dirty() {
-                "取消本次输入"
+                tr!("取消本次输入")
             } else {
-                "重新载入"
+                tr!("重新载入")
             });
             self.completion.cancel_button(&cancel);
             if cancel.clicked() {
@@ -609,7 +633,7 @@ impl MissionUi {
                 && ui
                     .add_enabled(
                         !editor.stroking && !self.dirty(),
-                        egui::Button::new("删除记录"),
+                        egui::Button::new(tr!("删除记录")),
                     )
                     .clicked()
             {
@@ -637,13 +661,13 @@ impl MissionUi {
                 | Kind::AiTrigger
         ) {
             ui.horizontal_wrapped(|ui| {
-                ui.label("目标 ID");
+                ui.label(tr!("目标 ID"));
                 ui.text_edit_singleline(&mut self.rename_id);
-                ui.checkbox(&mut self.clone_dependencies, "复制本地图依赖");
+                ui.checkbox(&mut self.clone_dependencies, tr!("复制本地图依赖"));
                 if ui
                     .add_enabled(
                         !self.dirty() && !editor.stroking,
-                        egui::Button::new("复制记录"),
+                        egui::Button::new(tr!("复制记录")),
                     )
                     .clicked()
                 {
@@ -657,9 +681,9 @@ impl MissionUi {
                         Ok(records) => {
                             editor.commit(scene, "复制任务图");
                             self.selected = self.rename_id.clone();
-                            self.message = format!(
-                                "已复制 {} 条定义；地图对象与格子仍绑定原任务图。",
-                                records.len()
+                            self.message = tr!(
+                                "已复制 {arg0} 条定义；地图对象与格子仍绑定原任务图。",
+                                arg0 = records.len()
                             );
                             self.load(editor);
                         }
@@ -669,7 +693,7 @@ impl MissionUi {
                 if ui
                     .add_enabled(
                         !self.dirty() && !editor.stroking,
-                        egui::Button::new("重命名并迁移引用"),
+                        egui::Button::new(tr!("重命名并迁移引用")),
                     )
                     .clicked()
                 {
@@ -682,14 +706,14 @@ impl MissionUi {
                         Ok(()) => {
                             editor.commit(scene, "重命名任务记录并迁移引用");
                             self.selected = self.rename_id.clone();
-                            self.message = "已迁移跨表、格子与对象引用，可整笔撤销。".into();
+                            self.message = tr!("已迁移跨表、格子与对象引用，可整笔撤销。").into();
                             self.load(editor);
                         }
                         Err(e) => self.message = format!("{e:#}"),
                     }
                 }
             });
-            ui.small("复制和重命名使用上方目标 ID。依赖包含地图内触发器、标签、小队、脚本和特遣部队；所属方、变量和固定任务定义共享。");
+            ui.small(tr!("复制和重命名使用上方目标 ID。依赖包含地图内触发器、标签、小队、脚本和特遣部队；所属方、变量和固定任务定义共享。"));
         }
         if matches!(self.kind, Kind::Script | Kind::TaskForce) {
             forms::slots(
@@ -717,11 +741,11 @@ impl MissionUi {
             let locate = self.field_target.as_ref() == Some(&key);
             let field = ui.push_id(&key, |ui| {
                 if locate {
-                    ui.colored_label(egui::Color32::YELLOW, format!("诊断字段：{key}"));
+                    ui.colored_label(egui::Color32::YELLOW, tr!("诊断字段：{key}", key = key));
                 }
                 let value = self.draft.get_mut(&key).unwrap();
                 if self.kind == Kind::Global {
-                    ui.label("编辑注释");
+                    ui.label(tr!("编辑注释"));
                     ui.text_edit_singleline(value);
                 } else if self.kind == Kind::Basic
                     && super::campaign_ui::basic_field(ui, &key, value, scene)
@@ -747,12 +771,12 @@ impl MissionUi {
                         &[
                             "House",
                             "链接 Trigger",
-                            "名称",
-                            "禁用 (0/1)",
-                            "简单",
-                            "普通",
-                            "困难",
-                            "占领转移",
+                            tr!("名称"),
+                            tr!("禁用 (0/1)"),
+                            tr!("简单"),
+                            tr!("普通"),
+                            tr!("困难"),
+                            tr!("占领转移"),
                         ],
                         editor.doc.as_ref().unwrap(),
                         &scene.mission_definitions,
@@ -761,7 +785,7 @@ impl MissionUi {
                     csv_form(
                         ui,
                         value,
-                        &["重复方式", "名称", "Trigger"],
+                        &[tr!("重复方式"), tr!("名称"), "Trigger"],
                         editor.doc.as_ref().unwrap(),
                         &scene.mission_definitions,
                     );
@@ -769,7 +793,7 @@ impl MissionUi {
                     if self.kind == Kind::Team && key == "Waypoint" {
                         let p = mission::schema::Parameter {
                             index: 0,
-                            label: "起始航点",
+                            label: tr!("起始航点"),
                             kind: mission::schema::ParameterKind::Waypoint { letters: true },
                         };
                         if forms::parameter(ui, p, value, editor.doc.as_ref().unwrap(), scene) {
@@ -802,25 +826,31 @@ impl MissionUi {
         if self.kind.section_definition() {
             ui.horizontal_wrapped(|ui| {
                 ui.text_edit_singleline(&mut self.new_key)
-                    .accessible_name("新字段名称");
-                if ui.button("添加字段").clicked() && !self.new_key.is_empty() {
+                    .accessible_name(tr!("新字段名称"));
+                if ui.button(tr!("添加字段")).clicked() && !self.new_key.is_empty() {
                     self.draft.entry(self.new_key.clone()).or_default();
                     self.new_key.clear();
                 }
             });
-            ui.small("清空字段并结束输入会删除该字段；未改动字段和未知字节保持原样。");
+            ui.small(tr!(
+                "清空字段并结束输入会删除该字段；未改动字段和未知字节保持原样。"
+            ));
         }
         if self.dirty() {
-            ui.small("正在编辑；完成或取消本次输入后可切换记录。");
+            ui.small(tr!("正在编辑；完成或取消本次输入后可切换记录。"));
         }
         if self.kind == Kind::Tag {
             if let Some(at) = cell
                 && ui
                     .add_enabled(
                         !self.dirty() && !editor.stroking,
-                        egui::Button::new(format!("绑定当前格 {},{}", at[0], at[1])),
+                        egui::Button::new(tr!(
+                            "绑定当前格 {arg0},{arg1}",
+                            arg0 = at[0],
+                            arg1 = at[1]
+                        )),
                     )
-                    .on_disabled_hover_text("请先完成或取消当前任务输入，并完成当前一笔。")
+                    .on_disabled_hover_text(tr!("请先完成或取消当前任务输入，并完成当前一笔。"))
                     .clicked()
             {
                 match mission::bind_cell(editor.doc.as_mut().unwrap(), at, &self.selected) {
@@ -835,9 +865,11 @@ impl MissionUi {
                 && ui
                     .add_enabled(
                         !self.dirty() && !editor.stroking && !editor.object_properties_dirty(),
-                        egui::Button::new("绑定当前选中对象"),
+                        egui::Button::new(tr!("绑定当前选中对象")),
                     )
-                    .on_disabled_hover_text("请先完成或取消当前任务和属性输入，并完成当前一笔。")
+                    .on_disabled_hover_text(tr!(
+                        "请先完成或取消当前任务和属性输入，并完成当前一笔。"
+                    ))
                     .clicked()
             {
                 let doc = editor.doc.as_mut().unwrap();
@@ -846,12 +878,12 @@ impl MissionUi {
                         .records()
                         .get(&id)
                         .cloned()
-                        .ok_or_else(|| anyhow::anyhow!("对象不存在"))?;
+                        .ok_or_else(|| anyhow::anyhow!(tr!("对象不存在")))?;
                     let col = match r.section.as_str() {
                         "Structures" => 6,
                         "Infantry" => 8,
                         "Units" | "Aircraft" => 7,
-                        _ => anyhow::bail!("该对象不支持 Tag"),
+                        _ => anyhow::bail!(tr!("该对象不支持 Tag")),
                     };
                     doc.set(
                         crate::document::Target::Record(id),
@@ -892,7 +924,7 @@ fn reference_input(
             let source = if external {
                 definitions.source.as_str()
             } else {
-                "地图"
+                tr!("地图")
             };
             (id.clone(), format!("{id} · {source}"))
         })
@@ -907,7 +939,7 @@ fn reference_input(
     );
     if kind.is_some() {
         egui::ComboBox::from_id_salt(key)
-            .selected_text("选择")
+            .selected_text(tr!("选择"))
             .width(70.)
             .show_ui(ui, |ui| {
                 for (id, label) in &choices {
@@ -942,8 +974,9 @@ fn csv_form(
     if changed {
         *value = fields.join(",");
     }
-    egui::CollapsingHeader::new("原始 CSV").show(ui, |ui| {
-        ui.text_edit_singleline(value).accessible_name("原始 CSV");
+    egui::CollapsingHeader::new(tr!("原始 CSV")).show(ui, |ui| {
+        ui.text_edit_singleline(value)
+            .accessible_name(tr!("原始 CSV"));
     });
 }
 fn list_editor(
@@ -956,9 +989,9 @@ fn list_editor(
 ) {
     let event = key == "Events";
     ui.strong(if event {
-        "事件列表"
+        tr!("事件列表")
     } else {
-        "动作列表"
+        tr!("动作列表")
     });
     if let Ok(mut rows) = mission::decode_list(value, event) {
         let before = rows.clone();
@@ -980,8 +1013,8 @@ fn list_editor(
                                 .iter()
                                 .find(|s| s.id.to_string() == row[0])
                                 .map_or_else(
-                                    || format!("原始 ID {}", row[0]),
-                                    |s| format!("{} {}", s.id, s.name),
+                                    || tr!("原始 ID {arg0}", arg0 = row[0]),
+                                    |s| format!("{} {}", s.id, crate::i18n::text(s.name)),
                                 ),
                         )
                         .show_ui(ui, |ui| {
@@ -989,7 +1022,7 @@ fn list_editor(
                                 if ui
                                     .selectable_label(
                                         row[0] == spec.id.to_string(),
-                                        format!("{} {}", spec.id, spec.name),
+                                        format!("{} {}", spec.id, crate::i18n::text(spec.name)),
                                     )
                                     .clicked()
                                 {
@@ -1003,7 +1036,7 @@ fn list_editor(
                     if ui.small_button("↓").clicked() {
                         movement = Some((i, i + 1));
                     }
-                    if ui.small_button("复制").clicked() {
+                    if ui.small_button(tr!("复制")).clicked() {
                         copy = Some(i);
                     }
                     if ui.small_button("×").clicked() {
@@ -1012,7 +1045,7 @@ fn list_editor(
                 });
                 if let Some(spec) = mission::schema::opcode(event, row[0].parse().unwrap_or(-1)) {
                     if row[1].parse::<i32>().ok() == Some(spec.parameter_type) {
-                        ui.small(spec.hint);
+                        ui.small(crate::i18n::text(spec.hint));
                         for p in spec.parameters {
                             if let Some(v) = row.get_mut(p.index)
                                 && forms::parameter(ui, *p, v, doc, scene)
@@ -1026,17 +1059,17 @@ fn list_editor(
                             }
                         }
                     } else {
-                        ui.small(
-                            "参数类型与已核对 schema 不同，保留原文；重新选择动作会采用标准类型。",
-                        );
+                        ui.small(tr!(
+                            "参数类型与已核对 schema 不同，保留原文；重新选择动作会采用标准类型。"
+                        ));
                     }
                 }
-                egui::CollapsingHeader::new("全部原始字段").show(ui, |ui| {
+                egui::CollapsingHeader::new(tr!("全部原始字段")).show(ui, |ui| {
                     for (col, v) in row.iter_mut().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.label(format!("字段 {col}"));
+                            ui.label(tr!("字段 {col}", col = col));
                             ui.text_edit_singleline(v)
-                                .accessible_name(format!("字段 {col}"));
+                                .accessible_name(tr!("字段 {col}", col = col));
                         });
                     }
                 });
@@ -1059,7 +1092,11 @@ fn list_editor(
         if ui
             .add_enabled(
                 rows.len() < 40,
-                egui::Button::new(if event { "＋事件" } else { "＋动作" }),
+                egui::Button::new(if event {
+                    tr!("＋事件")
+                } else {
+                    tr!("＋动作")
+                }),
             )
             .clicked()
         {
@@ -1069,11 +1106,11 @@ fn list_editor(
             *value = mission::encode_list(&rows);
         }
     } else {
-        ui.small("存在扩展或无法识别的字段，保留原文。");
+        ui.small(tr!("存在扩展或无法识别的字段，保留原文。"));
     }
-    egui::CollapsingHeader::new("原文（含数量字段）").show(ui, |ui| {
+    egui::CollapsingHeader::new(tr!("原文（含数量字段）")).show(ui, |ui| {
         ui.text_edit_singleline(value)
-            .accessible_name("原文（含数量字段）");
+            .accessible_name(tr!("原文（含数量字段）"));
     });
 }
 /// Include removed slots and recover legacy tokens moved between list keys.

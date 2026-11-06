@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, atomic::Ordering};
 use std::time::{Duration, Instant};
@@ -45,6 +46,7 @@ impl Default for Camera {
 }
 
 pub struct EditorApp {
+    ctx: egui::Context,
     map: crate::map_view::MapView,
     show_map: bool,
     selection: AssetSelection,
@@ -74,6 +76,14 @@ impl EditorApp {
     ) -> Result<Self> {
         install_font(&cc.egui_ctx, options.font)?;
         crate::ui_theme::install(&cc.egui_ctx);
+        crate::i18n::restore(
+            &cc.egui_ctx,
+            if options.smoke_output.is_none() {
+                cc.storage
+            } else {
+                None
+            },
+        );
         let gpu = cc.wgpu_render_state.clone().context("P0 需要 wgpu 后端")?;
         log::info!(
             "GPU: {:?}, target: {:?}",
@@ -111,6 +121,7 @@ impl EditorApp {
         let show_map =
             initial_map.is_some() || options.new_map.is_some() || options.smoke_output.is_none();
         let mut app = Self {
+            ctx: cc.egui_ctx.clone(),
             map: crate::map_view::MapView::new(
                 cc.egui_ctx.clone(),
                 gpu.clone(),
@@ -345,80 +356,91 @@ impl EditorApp {
     }
 
     fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.heading("资源目录");
+        ui.heading(tr!("资源目录"));
         let path_response = ui.add(
             egui::TextEdit::singleline(&mut self.directory_text)
                 .desired_width(f32::INFINITY)
-                .hint_text("游戏安装目录…"),
+                .hint_text(tr!("游戏安装目录…")),
         );
         let enter = path_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         ui.horizontal(|ui| {
-            if ui.button("选择目录…").clicked()
+            if ui.button(tr!("选择目录…")).clicked()
                 && let Some(directory) = rfd::FileDialog::new()
-                    .set_title("选择尤里的复仇游戏目录")
+                    .set_title(tr!("选择尤里的复仇游戏目录"))
                     .pick_folder()
             {
                 self.directory_text = directory.to_string_lossy().into_owned();
                 self.load(true);
             }
-            if ui.button("加载 / 重载").clicked() || enter {
+            if ui.button(tr!("加载 / 重载")).clicked() || enter {
                 self.load(true);
             }
         });
-        ui.label("地图环境：温带");
+        ui.label(tr!("地图环境：温带"));
         ui.separator();
-        ui.heading("地形 TMP");
+        ui.heading(tr!("地形 TMP"));
         ui.add(
             egui::TextEdit::singleline(&mut self.selection.tmp_name)
                 .desired_width(f32::INFINITY)
-                .hint_text("例如 clear01.tem"),
+                .hint_text(tr!("例如 clear01.tem")),
         );
         ui.horizontal(|ui| {
-            ui.label("子块");
+            ui.label(tr!("子块"));
             ui.add(egui::DragValue::new(&mut self.selection.sub_tile).range(0..=65535));
         });
-        ui.heading("精灵 SHP");
+        ui.heading(tr!("精灵 SHP"));
         ui.add(
             egui::TextEdit::singleline(&mut self.selection.shp_name)
                 .desired_width(f32::INFINITY)
-                .hint_text("例如 gi.shp"),
+                .hint_text(tr!("例如 gi.shp")),
         );
         ui.horizontal(|ui| {
-            ui.label("帧");
+            ui.label(tr!("帧"));
             ui.add(egui::DragValue::new(&mut self.selection.frame).range(0..=65535));
         });
-        if ui.add(crate::ui_theme::primary("预览所选资源")).clicked() {
+        if ui
+            .add(crate::ui_theme::primary(tr!("预览所选资源")))
+            .clicked()
+        {
             self.load(false);
         }
-        ui.small("精灵使用 unittem.pal 调色板；当前适合预览步兵和建筑。显示选中帧的裁剪区域。");
+        ui.small(tr!(
+            "精灵使用 unittem.pal 调色板；当前适合预览步兵和建筑。显示选中帧的裁剪区域。"
+        ));
         ui.separator();
         if self.loading {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("正在读取资源…");
+                ui.label(tr!("正在读取资源…"));
             });
         }
         if let Some(error) = &self.error {
             ui.colored_label(egui::Color32::LIGHT_RED, error);
         }
         if let Some(loaded) = &self.loaded {
-            ui.label(format!("已挂载 {} 个归档", loaded.assets.archive_count));
-            ui.label(format!("{} 个地形索引槽位", loaded.assets.tileset_slots));
+            ui.label(tr!(
+                "已挂载 {arg0} 个归档",
+                arg0 = loaded.assets.archive_count
+            ));
+            ui.label(tr!(
+                "{arg0} 个地形索引槽位",
+                arg0 = loaded.assets.tileset_slots
+            ));
         }
         if !ui.fonts_mut(|fonts| fonts.has_glyphs(&egui::FontId::proportional(13.), "地图编辑器"))
         {
             ui.colored_label(
                 egui::Color32::YELLOW,
-                "未找到中文字体，可通过 --font 指定字体文件。",
+                tr!("未找到中文字体，可通过 --font 指定字体文件。"),
             );
         }
         ui.separator();
-        ui.label("拖动平移 · 滚轮缩放 · 双击适应视图");
-        ui.collapsing("图形设备", |ui| {
+        ui.label(tr!("拖动平移 · 滚轮缩放 · 双击适应视图"));
+        ui.collapsing(tr!("图形设备"), |ui| {
             let info = self.gpu.adapter.get_info();
             ui.label(info.name);
             ui.label(format!("{:?} / {:?}", info.backend, self.gpu.target_format));
-            ui.small("主界面与两个预览共用图形设备；wgpu 30.0.1");
+            ui.small(tr!("主界面与两个预览共用图形设备；wgpu 30.0.1"));
         });
     }
 }
@@ -431,6 +453,7 @@ impl eframe::App for EditorApp {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let _language = crate::i18n::enter(crate::i18n::selected(ctx));
         self.poll_loader();
         self.map.poll(ctx);
         let dropped = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()));
@@ -460,6 +483,7 @@ impl eframe::App for EditorApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let _language = crate::i18n::enter(crate::i18n::selected(ui.ctx()));
         use crate::ui_theme as theme;
         self.map
             .settings_windows(ui.ctx(), &mut self.directory_text, frame);
@@ -478,24 +502,26 @@ impl eframe::App for EditorApp {
                     theme::icon(ui.painter(), logo, theme::Icon::Terrain, theme::BACKGROUND);
                     ui.add_space(2.);
                     ui.label(
-                        egui::RichText::new("尤里的复仇地图编辑器")
+                        egui::RichText::new(tr!("尤里的复仇地图编辑器"))
                             .size(16.)
                             .strong(),
                     );
                     ui.add_space(10.);
                     if ui
-                        .add_sized(
-                            [82., 28.],
-                            egui::Button::new("地图编辑").selected(self.show_map),
+                        .add(
+                            egui::Button::new(tr!("地图编辑"))
+                                .selected(self.show_map)
+                                .min_size(egui::vec2(82., 28.)),
                         )
                         .clicked()
                     {
                         self.show_map = true;
                     }
                     if ui
-                        .add_sized(
-                            [82., 28.],
-                            egui::Button::new("资源预览").selected(!self.show_map),
+                        .add(
+                            egui::Button::new(tr!("资源预览"))
+                                .selected(!self.show_map)
+                                .min_size(egui::vec2(82., 28.)),
                         )
                         .clicked()
                     {
@@ -506,7 +532,7 @@ impl eframe::App for EditorApp {
                     }
                     theme::right_to_left(ui, |ui| {
                         ui.label(
-                            egui::RichText::new("尤里的复仇  /  VERA20k")
+                            egui::RichText::new(tr!("尤里的复仇  /  VERA20k"))
                                 .size(11.)
                                 .color(theme::MUTED),
                         );
@@ -582,7 +608,7 @@ impl eframe::App for EditorApp {
                     ui.columns(2, |columns| {
                         image_panel(
                             &mut columns[0],
-                            "地形",
+                            tr!("地形"),
                             &loaded.assets.tile,
                             &loaded.tile,
                             &self.renderer,
@@ -591,7 +617,7 @@ impl eframe::App for EditorApp {
                         );
                         image_panel(
                             &mut columns[1],
-                            "精灵",
+                            tr!("精灵"),
                             &loaded.assets.sprite,
                             &loaded.sprite,
                             &self.renderer,
@@ -602,9 +628,9 @@ impl eframe::App for EditorApp {
                 } else {
                     ui.centered_and_justified(|ui| {
                         ui.label(if self.loading {
-                            "正在加载真实游戏资源…"
+                            tr!("正在加载真实游戏资源…")
                         } else {
-                            "选择游戏目录，预览 TMP 地形与 SHP 精灵。"
+                            tr!("选择游戏目录，预览 TMP 地形与 SHP 精灵。")
                         });
                     });
                 }
@@ -619,6 +645,7 @@ impl eframe::App for EditorApp {
             self.selection.directory = PathBuf::from(self.directory_text.trim());
             eframe::set_value(storage, "asset-selection", &self.selection);
             self.map.editor.save_playtest_settings(storage);
+            crate::i18n::save(&self.ctx, storage);
         }
     }
 }
@@ -632,33 +659,33 @@ fn image_panel(
     queue: &wgpu::Queue,
     camera: &mut Camera,
 ) {
-    crate::ui_theme::section(ui, title, "资源预览");
+    crate::ui_theme::section(ui, title, tr!("资源预览"));
     ui.add(egui::Label::new(egui::RichText::new(&image.info.name).strong().size(16.)).truncate())
         .on_hover_text(&image.info.name);
     ui.label(
-        egui::RichText::new(format!(
-            "{} × {}  ·  索引 {} / {}  ·  偏移 {}, {}",
-            image.info.width,
-            image.info.height,
-            image.info.index,
-            image.info.count.saturating_sub(1),
-            image.info.offset[0],
-            image.info.offset[1]
+        egui::RichText::new(tr!(
+            "{arg0} × {arg1}  ·  索引 {arg2} / {arg3}  ·  偏移 {arg4}, {arg5}",
+            arg0 = image.info.width,
+            arg1 = image.info.height,
+            arg2 = image.info.index,
+            arg3 = image.info.count.saturating_sub(1),
+            arg4 = image.info.offset[0],
+            arg5 = image.info.offset[1]
         ))
         .size(11.)
         .color(crate::ui_theme::MUTED),
     );
-    egui::CollapsingHeader::new("来源与调色板")
+    egui::CollapsingHeader::new(tr!("来源与调色板"))
         .id_salt(("asset-origin", title))
         .show(ui, |ui| {
-            ui.add(egui::Label::new(format!("来源：{}", image.info.source)).truncate())
+            ui.add(egui::Label::new(tr!("来源：{arg0}", arg0 = image.info.source)).truncate())
                 .on_hover_text(&image.info.source);
-            ui.add(egui::Label::new(format!("调色板：{}", image.info.palette)).truncate())
+            ui.add(egui::Label::new(tr!("调色板：{arg0}", arg0 = image.info.palette)).truncate())
                 .on_hover_text(&image.info.palette_source);
         });
     let reset = ui
         .horizontal(|ui| {
-            let reset = ui.button("适应视图").clicked();
+            let reset = ui.button(tr!("适应视图")).clicked();
             if ui.button("1:1").clicked() {
                 camera.zoom = 1.0 / ui.ctx().pixels_per_point();
                 camera.pan = egui::Vec2::ZERO;

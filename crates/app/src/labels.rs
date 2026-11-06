@@ -3,7 +3,7 @@ use std::borrow::Cow;
 
 /// Keep unfamiliar extension fields readable under their original name.
 pub(crate) fn field(key: &str) -> &str {
-    match key {
+    crate::i18n::text(match key {
         "Name" => "名称",
         "Author" => "作者",
         "Player" => "玩家所属方",
@@ -95,12 +95,15 @@ pub(crate) fn field(key: &str) -> &str {
         "Level" | "IonLevel" | "DominatorLevel" => "每层高度亮度补偿",
         "DominatorAmbientChangeRate" => "心灵控制器光照过渡间隔",
         "NukeAmbientChangeRate" => "核爆光照过渡间隔",
-        _ => key,
-    }
+        _ => return key,
+    })
 }
 
 /// Translate known terrain words without guessing names supplied by mods.
 pub(crate) fn terrain(name: &str) -> Cow<'_, str> {
+    if crate::i18n::selected_language() != crate::i18n::Language::Chinese {
+        return Cow::Borrowed(name);
+    }
     let mut translated = String::new();
     for word in name.split_whitespace() {
         let lower = word.to_ascii_lowercase();

@@ -1,4 +1,5 @@
 //! Base-plan overlay and a canvas gesture; a drag commits once on release.
+use crate::i18n::tr;
 use crate::{camera::MapCamera, document::Cell, editing::Editor, map::MapScene};
 use eframe::egui::{self, Color32};
 use ra2_map_document::{
@@ -52,7 +53,7 @@ impl BaseNodesUi {
     pub fn cancel_drag(&mut self) -> bool {
         let cancelled = self.drag.take().is_some();
         if cancelled {
-            self.message = "已取消节点拖动。".into();
+            self.message = tr!("已取消节点拖动。").into();
         }
         cancelled
     }
@@ -66,7 +67,7 @@ impl BaseNodesUi {
         match result {
             Ok(()) => {
                 editor.commit(scene, name);
-                self.message = format!("{name}，可撤销。");
+                self.message = tr!("{name}，可撤销。", name = name);
             }
             Err(e) => self.message = format!("{e:#}"),
         }
@@ -74,7 +75,7 @@ impl BaseNodesUi {
     pub fn panel(&mut self, ctx: &egui::Context, editor: &mut Editor, scene: &MapScene) {
         crate::ui_theme::window(
             ctx,
-            "基地节点图形编辑",
+            tr!("基地节点图形编辑"),
             "base-nodes-canvas",
             egui::vec2(450., 520.),
         )
@@ -88,14 +89,20 @@ impl BaseNodesUi {
                 self.stop();
                 return;
             }
-            ui.label(format!("所属方：{}", self.house));
-            ui.label("点击空格创建节点；拖动节点移动。Esc 取消本次拖动，再按退出。中键/右键平移。");
+            ui.label(tr!("所属方：{arg0}", arg0 = self.house));
+            ui.label(tr!(
+                "点击空格创建节点；拖动节点移动。Esc 取消本次拖动，再按退出。中键/右键平移。"
+            ));
             egui::ComboBox::from_id_salt("base-building")
                 .selected_text(scene.catalog.object_label(&self.building))
                 .show_ui(ui, |ui| {
                     if let Some(types) = scene.catalog.object_types.get("Structures") {
                         for id in types {
-                            ui.selectable_value(&mut self.building, id.clone(), scene.catalog.object_label(id));
+                            ui.selectable_value(
+                                &mut self.building,
+                                id.clone(),
+                                scene.catalog.object_label(id),
+                            );
                         }
                     }
                 });
@@ -103,7 +110,7 @@ impl BaseNodesUi {
                 Ok(nodes) => nodes,
                 Err(e) => {
                     ui.colored_label(Color32::YELLOW, format!("{e:#}"));
-                    if ui.button("返回任务面板").clicked() {
+                    if ui.button(tr!("返回任务面板")).clicked() {
                         self.stop();
                     }
                     return;
@@ -114,21 +121,21 @@ impl BaseNodesUi {
             }
             ui.add_enabled_ui(self.drag.is_none(), |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("撤销").clicked() {
+                    if ui.button(tr!("撤销")).clicked() {
                         editor.history(false, scene);
                         self.selected = None;
                     }
-                    if ui.button("重做").clicked() {
+                    if ui.button(tr!("重做")).clicked() {
                         editor.history(true, scene);
                         self.selected = None;
                     }
-                    if ui.button("从本方建筑补齐节点").clicked() {
+                    if ui.button(tr!("从本方建筑补齐节点")).clicked() {
                         let result = base_nodes::import_structures(
                             editor.doc.as_mut().unwrap(),
                             &self.house,
                         )
                         .map(|_| ());
-                        self.finish(result, editor, scene, "补齐基地节点");
+                        self.finish(result, editor, scene, tr!("补齐基地节点"));
                     }
                 });
                 let mut percent = editor
@@ -139,25 +146,28 @@ impl BaseNodesUi {
                     .parse::<i32>()
                     .unwrap_or(0);
                 ui.horizontal(|ui| {
-                    ui.label(crate::labels::field("PercentBuilt")).on_hover_text("PercentBuilt");
-                    if crate::form_edit::number(ui,
-                            egui::DragValue::new(&mut percent)
-                                .range(0..=100)
-                                .suffix(" %"),
-                            "初始建成比例")
-                        .changed()
+                    ui.label(crate::labels::field("PercentBuilt"))
+                        .on_hover_text("PercentBuilt");
+                    if crate::form_edit::number(
+                        ui,
+                        egui::DragValue::new(&mut percent)
+                            .range(0..=100)
+                            .suffix(" %"),
+                        tr!("初始建成比例"),
+                    )
+                    .changed()
                     {
                         let result = editor.doc.as_mut().unwrap().set_ini(
                             &self.house,
                             "PercentBuilt",
                             Some(percent.to_string().into_bytes()),
                         );
-                        self.finish(result, editor, scene, "修改基地初始建成比例");
+                        self.finish(result, editor, scene, tr!("修改基地初始建成比例"));
                     }
                 });
-                ui.small(
-                    "节点只规划 AI 建造位置，不直接放置建筑；建造仍需施工场、资金和 AI 生产启用。",
-                );
+                ui.small(tr!(
+                    "节点只规划 AI 建造位置，不直接放置建筑；建造仍需施工场、资金和 AI 生产启用。"
+                ));
                 egui::ScrollArea::vertical()
                     .id_salt("base-plan-list")
                     .max_height(190.)
@@ -168,7 +178,9 @@ impl BaseNodesUi {
                                     self.selected == Some(i),
                                     format!(
                                         "{i:03} · {} · {},{}",
-                                        scene.catalog.object_label(&node.building), node.cell[0], node.cell[1]
+                                        scene.catalog.object_label(&node.building),
+                                        node.cell[0],
+                                        node.cell[1]
                                     ),
                                 )
                                 .clicked()
@@ -184,7 +196,7 @@ impl BaseNodesUi {
                             {
                                 ui.colored_label(
                                     Color32::LIGHT_RED,
-                                    "此建筑类型未在当前规则中注册",
+                                    tr!("此建筑类型未在当前规则中注册"),
                                 );
                             }
                         }
@@ -192,8 +204,8 @@ impl BaseNodesUi {
                 if let Some(i) = self.selected.filter(|&i| i < nodes.len()) {
                     ui.horizontal(|ui| {
                         for (label, to, enabled) in [
-                            ("前移", i.saturating_sub(1), i > 0),
-                            ("后移", i + 1, i + 1 < nodes.len()),
+                            (tr!("前移"), i.saturating_sub(1), i > 0),
+                            (tr!("后移"), i + 1, i + 1 < nodes.len()),
                         ] {
                             if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
                                 let result = base_nodes::reorder(
@@ -205,16 +217,16 @@ impl BaseNodesUi {
                                 if result.is_ok() {
                                     self.selected = Some(to);
                                 }
-                                self.finish(result, editor, scene, "调整基地节点顺序");
+                                self.finish(result, editor, scene, tr!("调整基地节点顺序"));
                             }
                         }
-                        if ui.button("删除节点").clicked() {
+                        if ui.button(tr!("删除节点")).clicked() {
                             let result =
                                 base_nodes::remove(editor.doc.as_mut().unwrap(), &self.house, i);
                             if result.is_ok() {
                                 self.selected = None;
                             }
-                            self.finish(result, editor, scene, "删除基地节点");
+                            self.finish(result, editor, scene, tr!("删除基地节点"));
                         }
                     });
                     let doc = editor.doc.as_ref().unwrap();
@@ -224,26 +236,32 @@ impl BaseNodesUi {
                             .fields()
                             .get(8)
                             .is_some_and(|v| v == "1");
-                        if ui.checkbox(&mut rebuild, "对应现有建筑：AI 重建")
-                            .on_hover_text("保存建筑记录中的标志；实际重建还取决于基地计划和所属方的生产条件。")
-                            .changed() {
+                        if ui
+                            .checkbox(&mut rebuild, tr!("对应现有建筑：AI 重建"))
+                            .on_hover_text(tr!(
+                                "保存建筑记录中的标志；实际重建还取决于基地计划和所属方的生产条件。"
+                            ))
+                            .changed()
+                        {
                             let result = base_nodes::set_rebuild(
                                 editor.doc.as_mut().unwrap(),
                                 &self.house,
                                 i,
                                 rebuild,
                             );
-                            self.finish(result, editor, scene, "修改建筑 AI 重建");
+                            self.finish(result, editor, scene, tr!("修改建筑 AI 重建"));
                         }
                     } else {
-                        ui.small("此节点没有唯一匹配的现有建筑；移动/删除节点不会移动/删除建筑。");
+                        ui.small(tr!(
+                            "此节点没有唯一匹配的现有建筑；移动/删除节点不会移动/删除建筑。"
+                        ));
                     }
                 }
             });
             if !self.message.is_empty() {
                 ui.label(&self.message);
             }
-            if ui.button("返回任务面板").clicked() {
+            if ui.button(tr!("返回任务面板")).clicked() {
                 self.stop();
             }
         });
@@ -349,7 +367,7 @@ impl BaseNodesUi {
         }
         if self.drag.as_ref().is_some_and(|d| d.key != key) {
             self.drag = None;
-            self.message = "文档已变化，已取消节点拖动。".into();
+            self.message = tr!("文档已变化，已取消节点拖动。").into();
             return;
         }
         if enabled
@@ -382,7 +400,7 @@ impl BaseNodesUi {
             && let Some(drag) = self.drag.take()
         {
             if !enabled || drag.at.is_none() {
-                self.message = "未在有效地图格释放，节点未修改。".into();
+                self.message = tr!("未在有效地图格释放，节点未修改。").into();
                 return;
             }
             let at = drag.at.unwrap();
@@ -402,9 +420,9 @@ impl BaseNodesUi {
                 )
                 .map(|i| self.selected = Some(i))
             } else {
-                Err(anyhow::anyhow!("请选择已注册的建筑类型"))
+                Err(anyhow::anyhow!(tr!("请选择已注册的建筑类型")))
             };
-            self.finish(result, editor, scene, "编辑基地节点");
+            self.finish(result, editor, scene, tr!("编辑基地节点"));
         }
     }
 }

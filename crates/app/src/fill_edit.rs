@@ -1,5 +1,6 @@
 //! Deferred rectangular ground painting and an exact preview of the plan.
 use super::*;
+use crate::i18n::tr;
 use ra2_map_scene::{
     cliff_tools::rectangle,
     fill_tools::{self, FillPlan},
@@ -61,7 +62,7 @@ impl FillEdit {
             let result = scene
                 .brushes
                 .get(key.brush)
-                .context("请选择填充地表")
+                .context(tr!("请选择填充地表"))
                 .and_then(|brush| {
                     fill_tools::plan(doc, scene, brush, rectangle(key.start, key.end), key.lat)
                 })
@@ -129,10 +130,10 @@ impl Editor {
                         Ok(cells) => {
                             self.feedback = cells.into_iter().collect();
                             self.commit(scene, TerrainMode::Fill.name());
-                            self.status = format!(
-                                "框选铺地 · {} 格修改 · 保留 {} 格结构地形",
-                                self.feedback.len(),
-                                plan.skipped.len()
+                            self.status = tr!(
+                                "框选铺地 · {arg0} 格修改 · 保留 {arg1} 格结构地形",
+                                arg0 = self.feedback.len(),
+                                arg1 = plan.skipped.len()
                             );
                         }
                         Err(e) => self.abort_stroke(scene, e),
@@ -266,10 +267,11 @@ impl Editor {
                     start[1].abs_diff(at[1]) + 1
                 );
                 (
-                    format!(
-                        "{dimensions} · 铺地 {} 格 · 保留 {} 格；松手应用 / Esc 取消",
-                        plan.cells.len(),
-                        plan.skipped.len()
+                    tr!(
+                        "{dimensions} · 铺地 {arg0} 格 · 保留 {arg1} 格；松手应用 / Esc 取消",
+                        dimensions = dimensions,
+                        arg0 = plan.cells.len(),
+                        arg1 = plan.skipped.len()
                     ),
                     if plan.cells.is_empty() {
                         Color32::from_rgb(245, 180, 70)

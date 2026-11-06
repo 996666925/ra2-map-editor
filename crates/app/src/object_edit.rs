@@ -1,5 +1,6 @@
 //! Object forms patch selected CSV columns and preserve every other byte.
 use super::*;
+use crate::i18n::tr;
 use ra2_map_document::object_properties::{self, Kind};
 use ra2_map_document::startup_owner;
 
@@ -8,7 +9,7 @@ impl Editor {
         if !self.object_properties_dirty() {
             return true;
         }
-        self.status = "请先完成属性输入；无效值需修正或取消本次输入。".into();
+        self.status = tr!("请先完成属性输入；无效值需修正或取消本次输入。").into();
         false
     }
     pub(crate) fn object_properties_dirty(&self) -> bool {
@@ -39,7 +40,7 @@ impl Editor {
     }
     pub(crate) fn select_from_canvas(&mut self, id: Option<u64>) -> bool {
         if self.selected != id && self.object_properties_dirty() {
-            self.status = "请先完成属性输入；无效值需修正或取消本次输入。".into();
+            self.status = tr!("请先完成属性输入；无效值需修正或取消本次输入。").into();
             return false;
         }
         if self.selected != id {
@@ -88,8 +89,10 @@ impl Editor {
                 .and_then(|id| self.records.get(&id).cloned().map(|r| (id, r)))
         {
             match self.apply_object_properties(scene, &record, id) {
-                Ok(()) => self.status = "属性已自动生效，可撤销。".into(),
-                Err(error) => self.property_error = format!("尚未生效：{error:#}"),
+                Ok(()) => self.status = tr!("属性已自动生效，可撤销。").into(),
+                Err(error) => {
+                    self.property_error = tr!("尚未生效：{error}", error = format!("{:#}", error))
+                }
             }
         }
         self.property_completion.observe(ctx);
@@ -132,7 +135,7 @@ impl Editor {
                 }
             })
             .response
-            .accessible_name("所属方");
+            .accessible_name(tr!("所属方"));
         let choices: Vec<_> = houses
             .iter()
             .map(|house| (house.clone(), house.clone()))
@@ -142,7 +145,7 @@ impl Editor {
             ui.make_persistent_id((id, "text")),
             value,
             &choices,
-            "所属方 ID",
+            tr!("所属方 ID"),
             ui.available_width(),
         );
     }
@@ -159,7 +162,7 @@ impl Editor {
                     .object_types
                     .get(&r.section)
                     .is_some_and(|types| types.contains(&self.property_type)),
-                "对象类型不在当前目录中"
+                tr!("对象类型不在当前目录中")
             );
         }
         let old = r.fields();
@@ -180,7 +183,7 @@ impl Editor {
                             .property_owner
                             .bytes()
                             .all(|b| b.is_ascii_alphanumeric() || b == b'_')),
-                "所属方必须是 ASCII ID"
+                tr!("所属方必须是 ASCII ID")
             );
             for (index, value) in [
                 (0, self.property_owner.clone()),
@@ -200,15 +203,22 @@ impl Editor {
                 {
                     match field.kind {
                         Kind::Number(min, max) => {
-                            let n = value.parse::<i32>().context("属性必须为整数")?;
-                            ensure!((min..=max).contains(&n), "{} 超出范围", field.name);
+                            let n = value.parse::<i32>().context(tr!("属性必须为整数"))?;
+                            ensure!(
+                                (min..=max).contains(&n),
+                                "{}",
+                                tr!("{arg0} 超出范围", arg0 = crate::i18n::text(field.name))
+                            );
                         }
                         Kind::Flag => {
-                            ensure!(matches!(value.as_str(), "0" | "1"), "布尔标志须为 0 或 1")
+                            ensure!(
+                                matches!(value.as_str(), "0" | "1"),
+                                tr!("布尔标志须为 0 或 1")
+                            )
                         }
                         Kind::Text => {
                             if field.index == 6 && r.section != "Structures" {
-                                ensure!(value.eq_ignore_ascii_case("None") || vera20k_core::rules::mission_data::MissionType::from_map_name(value).is_some(),"初始任务名称无效");
+                                ensure!(value.eq_ignore_ascii_case("None") || vera20k_core::rules::mission_data::MissionType::from_map_name(value).is_some(),tr!("初始任务名称无效"));
                             }
                         }
                     }
@@ -217,7 +227,7 @@ impl Editor {
             }
         }
         let changed = r.patched(&edits)?;
-        let doc = self.doc.as_mut().context("没有地图")?;
+        let doc = self.doc.as_mut().context(tr!("没有地图"))?;
         let geometry_changed = edits.iter().any(|(index, _)| {
             *index == type_index
                 || (r.section == "Infantry" && matches!(index, 5 | 11))
@@ -255,20 +265,22 @@ impl Editor {
         let type_id = r.type_id();
         crate::ui_theme::field(
             ui,
-            "对象类型",
+            tr!("对象类型"),
             if r.section == "Waypoints" {
                 std::borrow::Cow::Borrowed(type_id.as_str())
             } else {
                 scene.catalog.object_label(&type_id)
             },
         );
-        crate::ui_theme::field(ui, "记录编号", &r.key);
+        crate::ui_theme::field(ui, tr!("记录编号"), &r.key);
         if let Some(at) = r.cell() {
-            crate::ui_theme::field(ui, "坐标", format!("{}, {}", at[0], at[1]));
+            crate::ui_theme::field(ui, tr!("坐标"), format!("{}, {}", at[0], at[1]));
         }
         if r.section != "Waypoints" {
-            ui.small("修改自动生效；文本按回车或移开焦点，数值拖动松手后生效。Ctrl+Z 撤销。");
-            ui.label("类型");
+            ui.small(tr!(
+                "修改自动生效；文本按回车或移开焦点，数值拖动松手后生效。Ctrl+Z 撤销。"
+            ));
+            ui.label(tr!("类型"));
             let types: Vec<_> = scene
                 .catalog
                 .object_types
@@ -282,30 +294,30 @@ impl Editor {
                 ui.make_persistent_id("object-type"),
                 &mut self.property_type,
                 &types,
-                "对象类型 ID",
+                tr!("对象类型 ID"),
                 ui.available_width(),
             );
             ui.small(scene.catalog.object_name(&self.property_type));
             if !matches!(r.section.as_str(), "Terrain" | "Smudge") {
                 let houses = self.houses(scene);
-                ui.label("所属方");
+                ui.label(tr!("所属方"));
                 ui.add_enabled_ui(self.property_startup_owner.is_none(), |ui| {
                     Self::house_picker(ui, "object-owner", &mut self.property_owner, &houses);
                 });
                 if let Some(doc) = &self.doc {
-                    ui.label("开局交给");
+                    ui.label(tr!("开局交给"));
                     ui.add_enabled_ui(startup_owner::available(doc, &r), |ui| {
                         egui::ComboBox::from_id_salt("object-startup-owner")
                             .selected_text(self.property_startup_owner.map_or_else(
-                                || "保持所属方".into(),
-                                |slot| format!("航点 {slot} 的玩家"),
+                                || tr!("保持所属方").into(),
+                                |slot| tr!("航点 {slot} 的玩家", slot = slot),
                             ))
                             .width(ui.available_width())
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut self.property_startup_owner,
                                     None,
-                                    "保持所属方",
+                                    tr!("保持所属方"),
                                 );
                                 for slot in 0..ra2_map_document::new_map::MAX_PLAYERS {
                                     if self.records.values().any(|r| {
@@ -314,23 +326,23 @@ impl Editor {
                                         ui.selectable_value(
                                             &mut self.property_startup_owner,
                                             Some(slot),
-                                            format!("航点 {slot} 的玩家"),
+                                            tr!("航点 {slot} 的玩家", slot = slot),
                                         );
                                     }
                                 }
                             })
                             .response
-                            .accessible_name("开局交给");
+                            .accessible_name(tr!("开局交给"));
                     });
                     if startup_owner::available(doc, &r) {
-                        ui.small("开局由中立方转交给该起点的玩家或电脑；无人使用时保持中立。支持航点 0～29；扩展起点需配置地图出生点数量。");
+                        ui.small(tr!("开局由中立方转交给该起点的玩家或电脑；无人使用时保持中立。支持航点 0～29；扩展起点需配置地图出生点数量。"));
                     } else {
-                        ui.small("对象已有关联标签，请通过任务触发器设置开局归属。");
+                        ui.small(tr!("对象已有关联标签，请通过任务触发器设置开局归属。"));
                     }
                 }
-                ui.add(egui::Slider::new(&mut self.property_health, 0..=256).text("生命"));
-                ui.add(egui::Slider::new(&mut self.property_facing, 0..=255).text("朝向"));
-                egui::CollapsingHeader::new("分类属性")
+                ui.add(egui::Slider::new(&mut self.property_health, 0..=256).text(tr!("生命")));
+                ui.add(egui::Slider::new(&mut self.property_facing, 0..=255).text(tr!("朝向")));
+                egui::CollapsingHeader::new(tr!("分类属性"))
                     .default_open(true)
                     .show(ui, |ui| {
                         for field in object_properties::fields(&r.section) {
@@ -340,7 +352,7 @@ impl Editor {
                                     .as_ref()
                                     .is_some_and(|doc| startup_owner::get(doc, &r).is_some())
                             {
-                                ui.label("关联标签：由开局归属自动管理");
+                                ui.label(tr!("关联标签：由开局归属自动管理"));
                                 continue;
                             }
                             let Some(value) = self.property_extra.get_mut(&field.index) else {
@@ -349,7 +361,10 @@ impl Editor {
                             match field.kind {
                                 Kind::Flag => {
                                     let mut enabled = value.parse::<i32>().is_ok_and(|n| n != 0);
-                                    if ui.checkbox(&mut enabled, field.name).changed() {
+                                    if ui
+                                        .checkbox(&mut enabled, crate::i18n::text(field.name))
+                                        .changed()
+                                    {
                                         *value = if enabled { "1" } else { "0" }.into();
                                     }
                                 }
@@ -359,8 +374,8 @@ impl Editor {
                                         ui,
                                         egui::DragValue::new(&mut n)
                                             .range(min..=max)
-                                            .prefix(format!("{}  ", field.name)),
-                                        field.name,
+                                            .prefix(format!("{}  ", crate::i18n::text(field.name))),
+                                        crate::i18n::text(field.name),
                                     )
                                     .changed()
                                     {
@@ -368,20 +383,21 @@ impl Editor {
                                     }
                                 }
                                 Kind::Text => {
-                                    ui.label(field.name);
-                                    ui.text_edit_singleline(value).accessible_name(field.name);
+                                    ui.label(crate::i18n::text(field.name));
+                                    ui.text_edit_singleline(value)
+                                        .accessible_name(crate::i18n::text(field.name));
                                 }
                             }
                         }
                     });
             }
-            ui.checkbox(&mut self.allow_overlap, "允许对象重叠");
+            ui.checkbox(&mut self.allow_overlap, tr!("允许对象重叠"));
             self.finish_property_edit(ui.ctx(), scene);
             if !self.property_error.is_empty() {
                 ui.colored_label(crate::ui_theme::ACCENT, &self.property_error);
             }
             if self.object_properties_dirty() {
-                let cancel = ui.button("取消本次输入");
+                let cancel = ui.button(tr!("取消本次输入"));
                 self.property_completion.cancel_button(&cancel);
                 if cancel.clicked() {
                     self.select(Some(id));
@@ -390,15 +406,15 @@ impl Editor {
             if ui
                 .add_enabled(
                     !self.object_properties_dirty(),
-                    egui::Button::new("克隆对象  Ctrl+D"),
+                    egui::Button::new(tr!("克隆对象  Ctrl+D")),
                 )
-                .on_disabled_hover_text("请先完成或取消当前属性输入。")
+                .on_disabled_hover_text(tr!("请先完成或取消当前属性输入。"))
                 .clicked()
             {
                 self.tool = Tool::Clone;
             }
         }
-        if ui.button("删除选中对象 / 航点").clicked() {
+        if ui.button(tr!("删除选中对象 / 航点")).clicked() {
             self.delete(scene);
         }
     }

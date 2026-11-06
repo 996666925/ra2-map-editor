@@ -1,4 +1,5 @@
 //! Authoring tools and map object appearances with selection overlays.
+use crate::i18n::tr;
 use crate::{
     document::{Cell, MapDocument, Record, Target, Value, cell_line},
     editor_io::{Done, EditorIo, Expected, Job, PlayProcess, RecoveryEntry, RecoveryMeta, Stamp},
@@ -38,20 +39,20 @@ pub(crate) mod tests;
 impl Tool {
     pub fn name(self) -> &'static str {
         match self {
-            Self::Select => "选择",
-            Self::Region => "区域选择",
-            Self::Paste => "粘贴区域",
-            Self::RegionMove => "移动区域",
-            Self::Clone => "克隆对象",
-            Self::Terrain => "地形",
-            Self::Ore => "矿石",
-            Self::Gems => "宝石",
-            Self::Overlay => "覆盖物",
-            Self::Erase => "擦除覆盖物",
-            Self::Place => "放置对象",
-            Self::Move => "移动选中对象",
-            Self::Waypoint => "起点 / 航点",
-            Self::Pick => "吸取地形",
+            Self::Select => tr!("选择"),
+            Self::Region => tr!("区域选择"),
+            Self::Paste => tr!("粘贴区域"),
+            Self::RegionMove => tr!("移动区域"),
+            Self::Clone => tr!("克隆对象"),
+            Self::Terrain => tr!("地形"),
+            Self::Ore => tr!("矿石"),
+            Self::Gems => tr!("宝石"),
+            Self::Overlay => tr!("覆盖物"),
+            Self::Erase => tr!("擦除覆盖物"),
+            Self::Place => tr!("放置对象"),
+            Self::Move => tr!("移动选中对象"),
+            Self::Waypoint => tr!("起点 / 航点"),
+            Self::Pick => tr!("吸取地形"),
         }
     }
     fn brush(self) -> bool {
@@ -329,7 +330,7 @@ impl Editor {
         self.feedback.clear();
         self.refresh = true;
         self.last_edit = Instant::now();
-        self.status = "已恢复快照；请确认后保存。恢复不包含崩溃前的撤销历史。".into();
+        self.status = tr!("已恢复快照；请确认后保存。恢复不包含崩溃前的撤销历史。").into();
     }
     pub(crate) fn mark_new(&mut self) {
         if let Some(doc) = &mut self.doc {
@@ -338,7 +339,7 @@ impl Editor {
         self.target = None;
         self.expected = None;
         self.last_edit = Instant::now();
-        self.status = "已新建地图；Ctrl+S 选择保存位置。".into();
+        self.status = tr!("已新建地图；Ctrl+S 选择保存位置。").into();
     }
     pub fn cache(&mut self, scene: &MapScene) {
         self.region.invalidate_preview();
@@ -386,13 +387,18 @@ impl Editor {
                 Done::Export { path, result } => {
                     self.exporting = false;
                     self.status = match result {
-                        Ok(size) => format!("已导出 {}×{}：{}", size[0], size[1], path.display()),
-                        Err(e) => format!("导出失败：{e:#}"),
+                        Ok(size) => tr!(
+                            "已导出 {arg0}×{arg1}：{arg2}",
+                            arg0 = size[0],
+                            arg1 = size[1],
+                            arg2 = path.display()
+                        ),
+                        Err(e) => tr!("导出失败：{e}", e = format!("{:#}", e)),
                     };
                 }
                 Done::Scan(result) => match result {
                     Ok(entries) => self.recoveries = entries,
-                    Err(e) => self.status = format!("扫描恢复快照失败：{e:#}"),
+                    Err(e) => self.status = tr!("扫描恢复快照失败：{e}", e = format!("{:#}", e)),
                 },
                 Done::Save {
                     document,
@@ -411,17 +417,17 @@ impl Editor {
                                 self.document_name = path.display().to_string();
                                 self.expected = Some(saved.stamp);
                                 self.saved = true;
-                                self.status = format!(
-                                    "已保存：{}{}",
-                                    path.display(),
-                                    if doc.dirty() {
-                                        "（仍有较新的修改）"
+                                self.status = tr!(
+                                    "已保存：{arg0}{arg1}",
+                                    arg0 = path.display(),
+                                    arg1 = if doc.dirty() {
+                                        tr!("（仍有较新的修改）")
                                     } else {
                                         ""
                                     }
                                 );
                                 if let Some(warning) = saved.warning {
-                                    self.status.push_str(&format!("；{warning}"));
+                                    self.status.push_str(&tr!("；{warning}", warning = warning));
                                 }
                                 self.last_recovery = None;
                                 if let Some(path) = &self.recovery {
@@ -429,7 +435,7 @@ impl Editor {
                                 }
                             }
                         }
-                        Err(e) => self.status = format!("保存失败：{e:#}"),
+                        Err(e) => self.status = tr!("保存失败：{e}", e = format!("{:#}", e)),
                     }
                 }
                 Done::Recover {
@@ -452,28 +458,29 @@ impl Editor {
                             }
                         }
                         Err(e) => {
-                            self.status = format!("自动恢复快照失败：{e:#}");
+                            self.status = tr!("自动恢复快照失败：{e}", e = format!("{:#}", e));
                             self.last_edit = Instant::now();
                         }
                     }
                 }
                 Done::Restore { path, result } => match result {
                     Ok((base, meta)) => self.restored = Some((base, meta, path)),
-                    Err(e) => self.status = format!("恢复失败：{e:#}"),
+                    Err(e) => self.status = tr!("恢复失败：{e}", e = format!("{:#}", e)),
                 },
                 Done::Discard(result) => {
                     if let Err(e) = result {
-                        self.status = format!("删除恢复快照失败：{e:#}");
+                        self.status = tr!("删除恢复快照失败：{e}", e = format!("{:#}", e));
                     }
                 }
                 Done::Play(result) => {
                     self.launching = false;
                     match result {
                         Ok(process) => {
-                            self.status = format!("试玩已启动；日志：{}", process.folder.display());
+                            self.status =
+                                tr!("试玩已启动；日志：{arg0}", arg0 = process.folder.display());
                             self.process = Some(process);
                         }
-                        Err(e) => self.status = format!("试玩失败：{e:#}"),
+                        Err(e) => self.status = tr!("试玩失败：{e}", e = format!("{:#}", e)),
                     }
                 }
             }
@@ -481,10 +488,14 @@ impl Editor {
         if let Some(process) = &mut self.process {
             match process.child.try_wait() {
                 Ok(Some(code)) => {
-                    self.status = format!("试玩退出 {code}；日志：{}", process.folder.display());
+                    self.status = tr!(
+                        "试玩退出 {code}；日志：{arg0}",
+                        code = code,
+                        arg0 = process.folder.display()
+                    );
                     self.process = None;
                 }
-                Err(e) => self.status = format!("读取试玩进程状态失败：{e}"),
+                Err(e) => self.status = tr!("读取试玩进程状态失败：{e}", e = e),
                 Ok(None) => {}
             }
         }
@@ -537,7 +548,7 @@ impl Editor {
         let ask = as_new || self.target.is_none();
         let path = if ask {
             rfd::FileDialog::new()
-                .add_filter("YR 地图", &["yrm", "map"])
+                .add_filter(tr!("YR 地图"), &["yrm", "map"])
                 .set_file_name(
                     self.target
                         .as_ref()
@@ -565,7 +576,7 @@ impl Editor {
                 Ok(()) => {
                     self.saving = true;
                     self.saved = false;
-                    self.status = "正在后台校验并保存…".into();
+                    self.status = tr!("正在后台校验并保存…").into();
                 }
                 Err(e) => self.status = e.to_string(),
             }
@@ -620,7 +631,7 @@ impl Editor {
         self.tool_shortcuts(ctx);
         if self.stroking {
             if delete {
-                self.status = "请先完成或取消当前一笔，再删除选择。".into();
+                self.status = tr!("请先完成或取消当前一笔，再删除选择。").into();
             }
             return;
         }
@@ -678,7 +689,7 @@ impl Editor {
         }
         if self.object_properties_dirty() {
             self.select(self.selected);
-            self.status = "已取消当前属性输入；地图历史未改变。".into();
+            self.status = tr!("已取消当前属性输入；地图历史未改变。").into();
             return;
         }
         self.plateau.cancel();
@@ -708,13 +719,16 @@ impl Editor {
                     self.changed(scene);
                 }
                 self.select(self.selected);
-                self.status = format!(
-                    "已{}：{}",
-                    if redo { "重做" } else { "撤销" },
-                    name.unwrap_or_default()
+                self.status = tr!(
+                    "已{arg0}：{arg1}",
+                    arg0 = if redo { tr!("重做") } else { tr!("撤销") },
+                    arg1 = name.unwrap_or_default()
                 );
             } else {
-                self.status = format!("没有可{}的操作。", if redo { "重做" } else { "撤销" });
+                self.status = tr!(
+                    "没有可{arg0}的操作。",
+                    arg0 = if redo { tr!("重做") } else { tr!("撤销") }
+                );
             }
         }
     }
@@ -758,7 +772,7 @@ impl Editor {
             return;
         }
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("PNG 图像", &["png"])
+            .add_filter(tr!("PNG 图像"), &["png"])
             .set_file_name("map-preview.png")
             .save_file()
         {
@@ -768,7 +782,7 @@ impl Editor {
             }) {
                 Ok(()) => {
                     self.exporting = true;
-                    self.status = "正在后台导出地图预览小图…".into();
+                    self.status = tr!("正在后台导出地图预览小图…").into();
                 }
                 Err(e) => self.status = e.to_string(),
             }
@@ -794,7 +808,7 @@ impl Editor {
         }
         let Some(doc) = &self.doc else { return };
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("PNG 图像", &["png"])
+            .add_filter(tr!("PNG 图像"), &["png"])
             .set_file_name(file_name)
             .save_file()
         {
@@ -807,7 +821,7 @@ impl Editor {
             }) {
                 Ok(()) => {
                     self.exporting = true;
-                    self.status = "正在后台渲染完整地图…".into();
+                    self.status = tr!("正在后台渲染完整地图…").into();
                 }
                 Err(e) => self.status = e.to_string(),
             }
@@ -914,11 +928,11 @@ impl Editor {
                     match self.tool {
                         Tool::Waypoint => doc.waypoint(self.waypoint, at)?,
                         Tool::Move => {
-                            let id = self.selected.context("请先选中对象或航点")?;
+                            let id = self.selected.context(tr!("请先选中对象或航点"))?;
                             let record = self
                                 .records
                                 .get(&id)
-                                .context("选中对象已不存在")?
+                                .context(tr!("选中对象已不存在"))?
                                 .moved(at)?;
                             ra2_map_scene::placement::validate(
                                 doc,
@@ -931,13 +945,13 @@ impl Editor {
                             doc.set(Target::Record(id), Some(Value::Record(record)))?;
                         }
                         Tool::Clone => {
-                            let id = self.selected.context("请先选择要克隆的对象")?;
+                            let id = self.selected.context(tr!("请先选择要克隆的对象"))?;
                             let record = self
                                 .records
                                 .get(&id)
-                                .context("选中对象已不存在")?
+                                .context(tr!("选中对象已不存在"))?
                                 .moved(at)?;
-                            ensure!(record.section != "Waypoints", "航点请使用区域复制");
+                            ensure!(record.section != "Waypoints", tr!("航点请使用区域复制"));
                             ra2_map_scene::placement::validate(
                                 doc,
                                 scene,
@@ -1010,7 +1024,7 @@ impl Editor {
                                 let footprint = scene
                                     .brushes
                                     .get(stroke.brush)
-                                    .context("请选择地形")
+                                    .context(tr!("请选择地形"))
                                     .and_then(|brush| terrain_tools::footprint(scene, brush, cell));
                                 match footprint {
                                     Ok(cells) => {
@@ -1041,7 +1055,7 @@ impl Editor {
                                         let brush = scene
                                             .brushes
                                             .get(stroke.brush)
-                                            .context("请选择地形")?;
+                                            .context(tr!("请选择地形"))?;
                                         terrain_tools::stamp_at_height(
                                             doc,
                                             scene,
@@ -1056,11 +1070,11 @@ impl Editor {
                                             Tool::Ore => scene
                                                 .catalog
                                                 .ore
-                                                .context("当前规则没有注册矿石覆盖物")?,
+                                                .context(tr!("当前规则没有注册矿石覆盖物"))?,
                                             Tool::Gems => scene
                                                 .catalog
                                                 .gems
-                                                .context("当前规则没有注册宝石覆盖物")?,
+                                                .context(tr!("当前规则没有注册宝石覆盖物"))?,
                                             Tool::Erase => 255,
                                             _ => stroke.overlay,
                                         };
@@ -1141,7 +1155,11 @@ impl Editor {
                         stroke.tool.name()
                     };
                     self.commit(scene, name);
-                    self.status = format!("{} · {} 格", name, self.feedback.len());
+                    self.status = tr!(
+                        "{arg0} · {arg1} 格",
+                        arg0 = name,
+                        arg1 = self.feedback.len()
+                    );
                 }
                 Err(e) => self.abort_stroke(scene, e),
             }
@@ -1162,7 +1180,7 @@ impl Editor {
         self.stroke_cells.clear();
         self.feedback.clear();
         self.cache(scene);
-        self.status = format!("本笔未修改：{error:#}");
+        self.status = tr!("本笔未修改：{error}", error = format!("{:#}", error));
     }
     /// Outline the complete footprint, including invalid boundary cells, before
     /// writing. Uses geometry cached by the resource worker.

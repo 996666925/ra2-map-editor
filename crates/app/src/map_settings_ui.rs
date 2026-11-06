@@ -1,4 +1,5 @@
 //! Map information, geometry planning, automatic lighting/crate edits and read-only previews.
+use crate::i18n::tr;
 use crate::{editing::Editor, map::MapScene};
 use eframe::egui;
 use ra2_map_document::{
@@ -70,7 +71,7 @@ impl MapSettingsUi {
         if self.dirty() {
             self.open = true;
             self.message =
-                "请完成或取消地图名称、署名、基地车、出生点、光照、箱子设置输入；尺寸修改需检查预览并应用，或放弃尺寸修改。".into();
+                tr!("请完成或取消地图名称、署名、基地车、出生点、光照、箱子设置输入；尺寸修改需检查预览并应用，或放弃尺寸修改。").into();
             false
         } else {
             true
@@ -140,10 +141,10 @@ impl MapSettingsUi {
                 let doc = editor
                     .doc
                     .as_mut()
-                    .ok_or_else(|| anyhow::anyhow!("没有地图"))?;
+                    .ok_or_else(|| anyhow::anyhow!(tr!("没有地图")))?;
                 anyhow::ensure!(
                     self.identity == Some((doc.id, doc.state_id)),
-                    "文档已变化，请取消本次输入后重新编辑"
+                    tr!("文档已变化，请取消本次输入后重新编辑")
                 );
                 self.apply_lighting(doc)
             })();
@@ -153,9 +154,11 @@ impl MapSettingsUi {
                     self.identity = editor.doc.as_ref().map(|doc| (doc.id, doc.state_id));
                     self.original_light = self.light.clone();
                     self.light_editing = false;
-                    self.message = "光照已自动生效，可撤销。".into();
+                    self.message = tr!("光照已自动生效，可撤销。").into();
                 }
-                Err(error) => self.message = format!("尚未生效：{error:#}"),
+                Err(error) => {
+                    self.message = tr!("尚未生效：{error}", error = format!("{:#}", error))
+                }
             }
         }
         if self.crates_editing
@@ -174,10 +177,10 @@ impl MapSettingsUi {
                 let doc = editor
                     .doc
                     .as_mut()
-                    .ok_or_else(|| anyhow::anyhow!("没有地图"))?;
+                    .ok_or_else(|| anyhow::anyhow!(tr!("没有地图")))?;
                 anyhow::ensure!(
                     self.identity == Some((doc.id, doc.state_id)),
-                    "文档已变化，请取消本次输入后重新编辑"
+                    tr!("文档已变化，请取消本次输入后重新编辑")
                 );
                 self.crates.as_ref().unwrap().apply(doc)
             })();
@@ -192,9 +195,11 @@ impl MapSettingsUi {
                         .map(ra2_map_document::crate_settings::Draft::read);
                     self.original_crates = self.crates.clone();
                     self.crates_editing = false;
-                    self.message = "箱子设置已自动生效，可撤销。".into();
+                    self.message = tr!("箱子设置已自动生效，可撤销。").into();
                 }
-                Err(error) => self.message = format!("尚未生效：{error:#}"),
+                Err(error) => {
+                    self.message = tr!("尚未生效：{error}", error = format!("{:#}", error))
+                }
             }
         }
         if self.info_editing
@@ -213,10 +218,10 @@ impl MapSettingsUi {
                 let doc = editor
                     .doc
                     .as_mut()
-                    .ok_or_else(|| anyhow::anyhow!("没有地图"))?;
+                    .ok_or_else(|| anyhow::anyhow!(tr!("没有地图")))?;
                 anyhow::ensure!(
                     self.identity == Some((doc.id, doc.state_id)),
-                    "文档已变化，请取消本次输入后重新编辑"
+                    tr!("文档已变化，请取消本次输入后重新编辑")
                 );
                 doc.atomic(|doc| {
                     if self.name != self.original_name {
@@ -246,9 +251,11 @@ impl MapSettingsUi {
                     self.original_bases = self.bases;
                     self.original_players = self.players;
                     self.info_editing = false;
-                    self.message = "地图信息已自动生效，可撤销。".into();
+                    self.message = tr!("地图信息已自动生效，可撤销。").into();
                 }
-                Err(error) => self.message = format!("尚未生效：{error:#}"),
+                Err(error) => {
+                    self.message = tr!("尚未生效：{error}", error = format!("{:#}", error))
+                }
             }
         }
         self.completion.observe(ctx);
@@ -291,15 +298,15 @@ impl MapSettingsUi {
                     match result {
                         Ok(p) if Some(&p.options) == self.options.as_ref() => {
                             self.plan = Some(p);
-                            self.message = "迁移预览完成，未改写地图。".into();
+                            self.message = tr!("迁移预览完成，未改写地图。").into();
                         }
-                        Ok(_) => self.message = "设置已改变，请重新检查迁移。".into(),
+                        Ok(_) => self.message = tr!("设置已改变，请重新检查迁移。").into(),
                         Err(e) => self.message = format!("{e:#}"),
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.worker = None;
-                    self.message = "迁移检查线程意外结束。".into();
+                    self.message = tr!("迁移检查线程意外结束。").into();
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
@@ -312,86 +319,86 @@ impl MapSettingsUi {
         let mut inspect = false;
         let mut undo = false;
         let mut redo = false;
-        crate::ui_theme::window(ctx,"地图设置","map-properties",egui::vec2(750.,690.)).open(&mut open).show(ctx,|ui|{
+        crate::ui_theme::window(ctx,tr!("地图设置"),"map-properties",egui::vec2(750.,690.)).open(&mut open).show(ctx,|ui|{
             ui.horizontal_wrapped(|ui|{
                 ui.add_enabled_ui(!self.dirty(),|ui|{
-                    changed|=ui.selectable_value(&mut self.tab,3,"地图信息").changed();
-                    changed|=ui.selectable_value(&mut self.tab,0,"尺寸与可玩区域").changed();
-                    changed|=ui.selectable_value(&mut self.tab,1,"光照").changed();
-                    changed|=ui.selectable_value(&mut self.tab,2,"箱子设置").changed();
+                    changed|=ui.selectable_value(&mut self.tab,3,tr!("地图信息")).changed();
+                    changed|=ui.selectable_value(&mut self.tab,0,tr!("尺寸与可玩区域")).changed();
+                    changed|=ui.selectable_value(&mut self.tab,1,tr!("光照")).changed();
+                    changed|=ui.selectable_value(&mut self.tab,2,tr!("箱子设置")).changed();
                 });
-                if self.dirty(){ui.colored_label(egui::Color32::YELLOW,match self.tab{1=>"光照输入待完成",2=>"箱子设置输入待完成",3=>"地图信息输入待完成",_=>"有未应用尺寸设置"});}
+                if self.dirty(){ui.colored_label(egui::Color32::YELLOW,match self.tab{1=>tr!("光照输入待完成"),2=>tr!("箱子设置输入待完成"),3=>tr!("地图信息输入待完成"),_=>tr!("有未应用尺寸设置")});}
             });
             egui::ScrollArea::vertical().max_height((ui.available_height()-100.).max(140.)).show(ui,|ui|{
                 if self.tab==0 {
                     let options=self.options.as_mut().unwrap();
-                    ui.label(format!("当前尺寸：{} × {}；宽＋高 ≤ {MAX_MAP_SPAN}。平移以投影平面左/上为单位。",doc.base.header.width,doc.base.header.height));
+                    ui.label(tr!("当前尺寸：{arg0} × {arg1}；宽＋高 ≤ {MAX_MAP_SPAN}。平移以投影平面左/上为单位。", arg0 = doc.base.header.width, arg1 = doc.base.header.height, MAX_MAP_SPAN = MAX_MAP_SPAN));
                     egui::Grid::new("map-dimensions").num_columns(2).show(ui,|ui|{
-                        for (name,value) in [("新宽度",&mut options.width),("新高度",&mut options.height)]{ui.label(name);changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION),name).changed();ui.end_row();}
-                        ui.label("原图放置偏移（左、上）");ui.horizontal(|ui|{for (value,name) in options.offset.iter_mut().zip(["左侧偏移","顶部偏移"]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(-i32::from(MAX_MAP_SPAN)..=i32::from(MAX_MAP_SPAN)),name).changed();}});ui.end_row();
-                        ui.label("扩展区域清地高度");changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut options.fill_level).range(0..=127),"扩展区域清地高度").changed();ui.end_row();
-                        ui.label("可玩区域（左、上、宽、高）").on_hover_text("LocalSize");ui.horizontal_wrapped(|ui|{for (value,name) in options.local.iter_mut().zip(["可玩区域左侧","可玩区域顶部","可玩区域宽度","可玩区域高度"]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(0..=MAX_MAP_DIMENSION),name).changed();}});ui.end_row();
+                        for (name,value) in [(tr!("新宽度"),&mut options.width),(tr!("新高度"),&mut options.height)]{ui.label(name);changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION),name).changed();ui.end_row();}
+                        ui.label(tr!("原图放置偏移（左、上）"));ui.horizontal(|ui|{for (value,name) in options.offset.iter_mut().zip([tr!("左侧偏移"),tr!("顶部偏移")]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(-i32::from(MAX_MAP_SPAN)..=i32::from(MAX_MAP_SPAN)),name).changed();}});ui.end_row();
+                        ui.label(tr!("扩展区域清地高度"));changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut options.fill_level).range(0..=127),tr!("扩展区域清地高度")).changed();ui.end_row();
+                        ui.label(tr!("可玩区域（左、上、宽、高）")).on_hover_text("LocalSize");ui.horizontal_wrapped(|ui|{for (value,name) in options.local.iter_mut().zip([tr!("可玩区域左侧"),tr!("可玩区域顶部"),tr!("可玩区域宽度"),tr!("可玩区域高度")]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(0..=MAX_MAP_DIMENSION),name).changed();}});ui.end_row();
                     });
                     ui.horizontal_wrapped(|ui|{
-                        if ui.button("可玩区域铺满有效边距").clicked(){options.local=[2,4,i32::from(options.width)-4,i32::from(options.height)-10];changed=true;}
-                        if ui.button("居中放置原图").clicked(){options.offset=[(i32::from(options.width)-doc.base.header.width as i32)/2,(i32::from(options.height)-doc.base.header.height as i32)/2];changed=true;}
+                        if ui.button(tr!("可玩区域铺满有效边距")).clicked(){options.local=[2,4,i32::from(options.width)-4,i32::from(options.height)-10];changed=true;}
+                        if ui.button(tr!("居中放置原图")).clicked(){options.offset=[(i32::from(options.width)-doc.base.header.width as i32)/2,(i32::from(options.height)-doc.base.header.height as i32)/2];changed=true;}
                     });
-                    changed|=ui.checkbox(&mut options.delete_outside,"应用时删除预览中允许删除的越界内容").changed();
-                    ui.small("裁切可删除越界对象、覆盖物、格子标签、基地节点和整条隧道。越界航点、桥梁、脚本目的格和任务可视矩形须先调整；共享标签保留。建筑按当前美术配置中的占地检查。");
+                    changed|=ui.checkbox(&mut options.delete_outside,tr!("应用时删除预览中允许删除的越界内容")).changed();
+                    ui.small(tr!("裁切可删除越界对象、覆盖物、格子标签、基地节点和整条隧道。越界航点、桥梁、脚本目的格和任务可视矩形须先调整；共享标签保留。建筑按当前美术配置中的占地检查。"));
                     if let Err(e)=options.validate(){ui.colored_label(egui::Color32::LIGHT_RED,e.to_string());}
-                    inspect=ui.add_enabled(self.worker.is_none(),egui::Button::new("检查迁移与越界预览")).clicked();
+                    inspect=ui.add_enabled(self.worker.is_none(),egui::Button::new(tr!("检查迁移与越界预览"))).clicked();
                     if self.worker.is_some(){ui.spinner();}
                     if let Some(plan)=&self.plan {
-                        let s=&plan.summary;ui.label(format!("地形新增 {} / 裁去 {}；移动对象 {}、任务引用 {}；越界 {} 项",s.terrain_added,s.terrain_removed,s.records_moved,s.references_moved,s.affected.len()));
+                        let s=&plan.summary;ui.label(tr!("地形新增 {arg0} / 裁去 {arg1}；移动对象 {arg2}、任务引用 {arg3}；越界 {arg4} 项", arg0 = s.terrain_added, arg1 = s.terrain_removed, arg2 = s.records_moved, arg3 = s.references_moved, arg4 = s.affected.len()));
                         draw_preview(ui,doc,&plan.options,&plan.summary);
-                        for a in s.affected.iter().take(100){ui.colored_label(if a.blocking{egui::Color32::LIGHT_RED}else{egui::Color32::YELLOW},format!("{} {:?} · {}",a.source,a.cell,if a.blocking{"请先调整"}else{"将删除"}));}
-                        if s.affected.len()>100{ui.label("其余项目见预览统计；裁切前请检查边界内容。");}
-                        apply_map=ui.add_enabled(plan.can_apply(),egui::Button::new("应用地图设置（整笔撤销）")).clicked();
+                        for a in s.affected.iter().take(100){ui.colored_label(if a.blocking{egui::Color32::LIGHT_RED}else{egui::Color32::YELLOW},format!("{} {:?} · {}",a.source,a.cell,if a.blocking{tr!("请先调整")}else{tr!("将删除")}));}
+                        if s.affected.len()>100{ui.label(tr!("其余项目见预览统计；裁切前请检查边界内容。"));}
+                        apply_map=ui.add_enabled(plan.can_apply(),egui::Button::new(tr!("应用地图设置（整笔撤销）"))).clicked();
                     }
                 }else if self.tab==1{
                     ui.horizontal_wrapped(|ui|{
-                        for p in Profile::ALL{changed|=ui.selectable_value(&mut self.profile,p,p.label()).changed();}
-                        changed|=ui.checkbox(&mut self.preview,"在画布实时预览").changed();
+                        for p in Profile::ALL{changed|=ui.selectable_value(&mut self.profile,p,crate::i18n::text(p.label())).changed();}
+                        changed|=ui.checkbox(&mut self.preview,tr!("在画布实时预览")).changed();
                     });
-                    ui.small("光照参数结束输入后自动生效，可撤销。关闭面板恢复普通光照预览，保存与发布使用当前参数。空值使用引擎默认值。");
+                    ui.small(tr!("光照参数结束输入后自动生效，可撤销。关闭面板恢复普通光照预览，保存与发布使用当前参数。空值使用引擎默认值。"));
                     let light=self.light.as_mut().unwrap();
                     egui::Grid::new("lighting-components").num_columns(2).show(ui,|ui|{
                         for component in COMPONENTS{let key=format!("{}{component}",self.profile.prefix());let label=crate::labels::field(&key);ui.label(label).on_hover_text(&key);changed|=ui.text_edit_singleline(light.values.get_mut(&key).unwrap()).accessible_name(label).changed();ui.end_row();}
                         for key in ["DominatorAmbientChangeRate","NukeAmbientChangeRate"]{let label=crate::labels::field(key);ui.label(label).on_hover_text(key);changed|=ui.text_edit_singleline(light.values.get_mut(key).unwrap()).accessible_name(label).changed();ui.end_row();}
                     });
-                    ui.small("环境亮度与红绿蓝分量按 1%=1 单位量化；地面与每层高度亮度补偿按 0.001 量化。心灵控制器顶部层高使用原生核爆参数（每层补偿 0.1）。过渡间隔只编辑，不模拟动态淡入淡出。");
-                    if let Ok(p)=light.effective(doc,self.profile){ui.label(format!("实际量化：环境亮度 {}%，红绿蓝 {:?}%，地面补偿 {} / 每层补偿 {}（千分单位）",p.units.ambient_percent,[p.units.red_percent,p.units.green_percent,p.units.blue_percent],p.units.ground_units,p.units.level_units));}
+                    ui.small(tr!("环境亮度与红绿蓝分量按 1%=1 单位量化；地面与每层高度亮度补偿按 0.001 量化。心灵控制器顶部层高使用原生核爆参数（每层补偿 0.1）。过渡间隔只编辑，不模拟动态淡入淡出。"));
+                    if let Ok(p)=light.effective(doc,self.profile){ui.label(tr!("实际量化：环境亮度 {arg0}%，红绿蓝 {arg1}%，地面补偿 {arg2} / 每层补偿 {arg3}（千分单位）", arg0 = p.units.ambient_percent, arg1 = format!("{:?}", [p.units.red_percent,p.units.green_percent,p.units.blue_percent]), arg2 = p.units.ground_units, arg3 = p.units.level_units));}
                     if let Err(e)=light.validate(){ui.colored_label(egui::Color32::LIGHT_RED,e.to_string());}
                     ui.horizontal_wrapped(|ui|{
-                        if ui.button("所选配置使用引擎默认").clicked(){for c in COMPONENTS{light.values.insert(format!("{}{c}",self.profile.prefix()),String::new());}changed=true;}
+                        if ui.button(tr!("所选配置使用引擎默认")).clicked(){for c in COMPONENTS{light.values.insert(format!("{}{c}",self.profile.prefix()),String::new());}changed=true;}
                     });
                 }else if self.tab==3{
-                    ui.label("地图名称");
+                    ui.label(tr!("地图名称"));
                     let name=self.name.as_mut().unwrap();
-                    changed|=ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY)).accessible_name("地图名称").changed();
-                    ui.small("修改地图显示名称，支持中文；按回车或移开焦点后自动生效，可撤销。Ctrl+S 保存地图。");
+                    changed|=ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY)).accessible_name(tr!("地图名称")).changed();
+                    ui.small(tr!("修改地图显示名称，支持中文；按回车或移开焦点后自动生效，可撤销。Ctrl+S 保存地图。"));
                     if let Err(error)=ra2_map_document::new_map::validate_title(name){ui.colored_label(egui::Color32::LIGHT_RED,error.to_string());}
                     ui.separator();
-                    ui.label("作者署名（可留空）");
-                    changed|=ui.add(egui::TextEdit::singleline(&mut self.author).desired_width(f32::INFINITY)).accessible_name("作者署名").changed();
+                    ui.label(tr!("作者署名（可留空）"));
+                    changed|=ui.add(egui::TextEdit::singleline(&mut self.author).desired_width(f32::INFINITY)).accessible_name(tr!("作者署名")).changed();
                     if let Err(error)=ra2_map_document::new_map::validate_author(&self.author){ui.colored_label(egui::Color32::LIGHT_RED,error.to_string());}
-                    changed|=ui.checkbox(&mut self.bases,"开局有基地车").changed();
-                    ui.small("遭遇战开局基地设置；启动器或房间设置可能覆盖此选项，不影响地图中手动放置的单位。");
-                    ui.label("出生点数量");
-                    changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut self.players).range(2..=ra2_map_document::new_map::MAX_PLAYERS),"出生点数量").changed();
-                    ui.small("支持 2～30 个出生点，对应从 0 开始的连续航点。增加时补齐缺少的航点，保留已有位置；减少时删除多余出生点，其他任务航点保留。");
-                    ui.small("结束输入后自动生效，可撤销。可用航点工具调整位置；Ctrl+S 会先提交修改再保存。");
+                    changed|=ui.checkbox(&mut self.bases,tr!("开局有基地车")).changed();
+                    ui.small(tr!("遭遇战开局基地设置；启动器或房间设置可能覆盖此选项，不影响地图中手动放置的单位。"));
+                    ui.label(tr!("出生点数量"));
+                    changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut self.players).range(2..=ra2_map_document::new_map::MAX_PLAYERS),tr!("出生点数量")).changed();
+                    ui.small(tr!("支持 2～30 个出生点，对应从 0 开始的连续航点。增加时补齐缺少的航点，保留已有位置；减少时删除多余出生点，其他任务航点保留。"));
+                    ui.small(tr!("结束输入后自动生效，可撤销。可用航点工具调整位置；Ctrl+S 会先提交修改再保存。"));
                 }else{
                     crate_fields(ui,self.crates.as_mut().unwrap());
                 }
             });
             ui.separator();
             ui.horizontal_wrapped(|ui|{
-                let cancel=ui.button(if self.tab==0{"放弃尺寸修改"}else{"取消本次输入"});
+                let cancel=ui.button(if self.tab==0{tr!("放弃尺寸修改")}else{tr!("取消本次输入")});
                 self.completion.cancel_button(&cancel);
                 discard=cancel.clicked();
-                undo=ui.add_enabled(!self.dirty(),egui::Button::new("撤销")).clicked();
-                redo=ui.add_enabled(!self.dirty(),egui::Button::new("重做")).clicked();
+                undo=ui.add_enabled(!self.dirty(),egui::Button::new(tr!("撤销"))).clicked();
+                redo=ui.add_enabled(!self.dirty(),egui::Button::new(tr!("重做"))).clicked();
             });
             ui.label(&self.message);
         });
@@ -410,7 +417,7 @@ impl MapSettingsUi {
             let (tx, rx) = std::sync::mpsc::channel();
             self.worker = Some(rx);
             let ctx = ctx.clone();
-            self.message = "正在后台检查迁移…".into();
+            self.message = tr!("正在后台检查迁移…").into();
             self.plan = None;
             std::thread::spawn(move || {
                 let _ = tx.send(map_settings::plan(&scratch, options, &footprints));
@@ -422,7 +429,7 @@ impl MapSettingsUi {
                 Ok(_) => {
                     editor.structural_changed(scene);
                     self.load(editor.doc.as_ref().unwrap());
-                    self.message = "已应用地图设置，可整笔撤销。".into();
+                    self.message = tr!("已应用地图设置，可整笔撤销。").into();
                 }
                 Err(e) => self.message = format!("{e:#}"),
             }
@@ -462,7 +469,7 @@ impl MapSettingsUi {
         }
         if !open {
             if self.dirty() {
-                self.message = "请完成或取消当前输入；尺寸修改需应用或放弃后关闭。".into();
+                self.message = tr!("请完成或取消当前输入；尺寸修改需应用或放弃后关闭。").into();
             } else {
                 self.open = false;
                 self.due = None;
@@ -472,35 +479,47 @@ impl MapSettingsUi {
     }
 }
 fn crate_fields(ui: &mut egui::Ui, draft: &mut ra2_map_document::crate_settings::Draft) {
-    ui.heading("随机箱子");
-    ui.label("控制本张地图的箱子数量与刷新。结束输入后自动生效，可撤销；保存地图后保留设置。");
-    ui.small("留空表示继承游戏或 Mod 规则，字段提示中的原版参考值仅供参考。");
+    ui.heading(tr!("随机箱子"));
+    ui.label(tr!(
+        "控制本张地图的箱子数量与刷新。结束输入后自动生效，可撤销；保存地图后保留设置。"
+    ));
+    ui.small(tr!(
+        "留空表示继承游戏或 Mod 规则，字段提示中的原版参考值仅供参考。"
+    ));
     ui.add_space(8.);
     egui::Grid::new("crate-settings")
         .num_columns(2)
         .spacing([18., 12.])
         .show(ui, |ui| {
             for field in &ra2_map_document::crate_settings::FIELDS {
-                ui.label(field.label)
-                    .on_hover_text(format!("[CrateRules] {}\n{}", field.key, field.hint));
+                ui.label(crate::i18n::text(field.label))
+                    .on_hover_text(format!(
+                        "[CrateRules] {}\n{}",
+                        field.key,
+                        crate::i18n::text(field.hint)
+                    ));
                 ui.add(
                     egui::TextEdit::singleline(draft.values.get_mut(field.key).unwrap())
                         .desired_width(160.)
-                        .hint_text("继承游戏 / Mod"),
+                        .hint_text(tr!("继承游戏 / Mod")),
                 )
-                .accessible_name(field.label)
-                .on_hover_text(field.hint);
+                .accessible_name(crate::i18n::text(field.label))
+                .on_hover_text(crate::i18n::text(field.hint));
                 ui.end_row();
             }
         });
     ui.add_space(10.);
-    ui.label("固定开局数量：将最少和最多箱子数设为相同值；最多设为 0 可禁止开局随机生成。");
-    ui.small("初始数量按人类玩家人数限制在上下限之间，实际生成还取决于可放置位置。刷新间隔越小，未拾取箱子换位置越频繁；实际间隔在约 0.5～2 倍之间随机，拾取后会尝试立即补充。");
-    ui.small("遭遇战或试玩需同时开启“随机箱子”。单人任务中预放的箱子不使用随机刷新机制。");
+    ui.label(tr!(
+        "固定开局数量：将最少和最多箱子数设为相同值；最多设为 0 可禁止开局随机生成。"
+    ));
+    ui.small(tr!("初始数量按人类玩家人数限制在上下限之间，实际生成还取决于可放置位置。刷新间隔越小，未拾取箱子换位置越频繁；实际间隔在约 0.5～2 倍之间随机，拾取后会尝试立即补充。"));
+    ui.small(tr!(
+        "遭遇战或试玩需同时开启“随机箱子”。单人任务中预放的箱子不使用随机刷新机制。"
+    ));
     if let Err(error) = draft.validate() {
         ui.colored_label(egui::Color32::LIGHT_RED, error.to_string());
     }
-    if ui.button("全部继承游戏 / Mod 规则").clicked() {
+    if ui.button(tr!("全部继承游戏 / Mod 规则")).clicked() {
         for value in draft.values.values_mut() {
             value.clear();
         }
@@ -579,9 +598,9 @@ fn draw_preview(
             },
         );
     }
-    ui.small(
-        "灰：新尺寸；蓝：原图放置范围；绿：可玩区域；红/黄：受影响内容（位置按原图平移后绘制）。",
-    );
+    ui.small(tr!(
+        "灰：新尺寸；蓝：原图放置范围；绿：可玩区域；红/黄：受影响内容（位置按原图平移后绘制）。"
+    ));
 }
 
 #[cfg(test)]

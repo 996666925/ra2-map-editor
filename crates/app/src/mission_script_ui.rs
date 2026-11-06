@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use crate::{editing::Editor, map::MapScene};
 use anyhow::{Context, Result, ensure};
 use eframe::egui;
@@ -41,12 +42,12 @@ impl ScriptUi {
         {
             return Ok(parent.to_path_buf());
         }
-        std::env::current_dir().context("无法读取当前目录")
+        std::env::current_dir().context(tr!("无法读取当前目录"))
     }
 
     fn script_files(directory: &Path) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
-        for entry in std::fs::read_dir(directory).context("无法读取脚本目录")? {
+        for entry in std::fs::read_dir(directory).context(tr!("无法读取脚本目录"))? {
             let entry = entry?;
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
@@ -65,27 +66,28 @@ impl ScriptUi {
     fn script_path(&self) -> Result<PathBuf> {
         ensure!(
             !self.path.trim().is_empty(),
-            "请先新建脚本或填写已有脚本路径"
+            tr!("请先新建脚本或填写已有脚本路径")
         );
-        let path = std::fs::canonicalize(self.path.trim()).context("无法读取任务脚本路径")?;
+        let path = std::fs::canonicalize(self.path.trim()).context(tr!("无法读取任务脚本路径"))?;
         ensure!(
             path.is_file() && path.extension().is_some_and(|s| s == "ts"),
-            "任务入口须为已有的 .ts 文件"
+            tr!("任务入口须为已有的 .ts 文件")
         );
         Ok(path)
     }
 
     fn refresh_types(&mut self, editor: &Editor, scene: &MapScene) -> Result<()> {
         let path = self.script_path()?;
-        let doc = editor.doc.as_ref().context("缺少地图")?;
+        let doc = editor.doc.as_ref().context(tr!("缺少地图"))?;
         mission_script::refresh_document_types(doc, &path, &mission_script::catalog(doc, scene))?;
-        self.message = "已刷新 sdk.ts 和 map.generated.ts，外部编辑器可使用最新类型提示。".into();
+        self.message =
+            tr!("已刷新 sdk.ts 和 map.generated.ts，外部编辑器可使用最新类型提示。").into();
         Ok(())
     }
 
     fn start(&mut self, editor: &Editor, scene: &MapScene) -> Result<()> {
         let path = self.script_path()?;
-        let doc = editor.doc.as_ref().context("缺少地图")?;
+        let doc = editor.doc.as_ref().context(tr!("缺少地图"))?;
         let catalog = mission_script::catalog(doc, scene);
         mission_script::refresh_document_types(doc, &path, &catalog)?;
         let sources = Sources::read_for_document(doc, &path)?;
@@ -94,28 +96,29 @@ impl ScriptUi {
         }
         self.waiting = Some(self.worker.as_ref().unwrap().build(doc, catalog, sources)?);
         self.input_profile = scene.revision.id();
-        self.message = "正在读取已保存的脚本并检查、构建，通过后自动应用到地图…".into();
+        self.message = tr!("正在读取已保存的脚本并检查、构建，通过后自动应用到地图…").into();
         Ok(())
     }
 
     fn apply(&mut self, built: Built, editor: &mut Editor, scene: &MapScene) -> Result<()> {
         ensure!(
             self.input_profile == scene.revision.id(),
-            "资源配置已变化，请重新点击“应用到地图”"
+            tr!("资源配置已变化，请重新点击“应用到地图”")
         );
         built.sources.unchanged()?;
         let changed = built
             .build
-            .apply(editor.doc.as_mut().context("缺少地图")?)?;
+            .apply(editor.doc.as_mut().context(tr!("缺少地图"))?)?;
         if changed {
             editor.structural_changed(scene);
-            editor.status = "已应用 TypeScript 任务，可撤销、保存或试玩。".into();
-            self.message = format!(
-                "已应用到地图：{} 条规则、{} 支小队。可整笔撤销，保存地图后即可试玩。",
-                built.build.rule_count, built.build.team_count
+            editor.status = tr!("已应用 TypeScript 任务，可撤销、保存或试玩。").into();
+            self.message = tr!(
+                "已应用到地图：{arg0} 条规则、{arg1} 支小队。可整笔撤销，保存地图后即可试玩。",
+                arg0 = built.build.rule_count,
+                arg1 = built.build.team_count
             );
         } else {
-            self.message = "任务未变化，无需重复应用。".into();
+            self.message = tr!("任务未变化，无需重复应用。").into();
         }
         Ok(())
     }
@@ -147,7 +150,7 @@ impl ScriptUi {
                     self.waiting = None;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.message = "任务编译线程意外退出".into();
+                    self.message = tr!("任务编译线程意外退出").into();
                     self.waiting = None;
                     self.worker = None;
                 }
@@ -161,7 +164,7 @@ impl ScriptUi {
             && let Some(built) = self.pending.take()
             && let Err(error) = self.apply(built, editor, scene)
         {
-            self.message = format!("应用失败：{error:#}");
+            self.message = tr!("应用失败：{error}", error = format!("{:#}", error));
         }
         if !self.open {
             return;
@@ -174,8 +177,8 @@ impl ScriptUi {
                 Ok((id, state, result)) => {
                     if (id, state) == (doc.id, doc.state_id) {
                         self.freshness_message = result.err().map_or_else(
-                            || "已应用脚本与当前源码一致。".into(),
-                            |e| format!("待重新构建：{e}"),
+                            || tr!("已应用脚本与当前源码一致。").into(),
+                            |e| tr!("待重新构建：{e}", e = e),
                         );
                     }
                     self.freshness = None;
@@ -209,7 +212,12 @@ impl ScriptUi {
         if self.worker.is_none() {
             match Worker::new() {
                 Ok(worker) => self.worker = Some(worker),
-                Err(error) => self.message = format!("无法启动任务编译线程：{error:#}"),
+                Err(error) => {
+                    self.message = tr!(
+                        "无法启动任务编译线程：{error}",
+                        error = format!("{:#}", error)
+                    )
+                }
             }
         }
         let mut open = true;
@@ -217,33 +225,35 @@ impl ScriptUi {
         let mut result: Result<()> = Ok(());
         crate::ui_theme::window(
             ctx,
-            "TypeScript 任务",
+            tr!("TypeScript 任务"),
             "mission-typescript",
             egui::vec2(700., 300.),
         )
         .open(&mut open)
         .resizable(true)
         .show(ctx, |ui| {
-            ui.label("在外部编辑器中编写、检查类型并保存脚本，然后应用到地图。");
+            ui.label(tr!(
+                "在外部编辑器中编写、检查类型并保存脚本，然后应用到地图。"
+            ));
             if !self.freshness_message.is_empty() {
                 ui.label(&self.freshness_message);
             }
             ui.horizontal(|ui| {
-                ui.label("脚本路径");
+                ui.label(tr!("脚本路径"));
                 ui.add_enabled(
                     !busy,
                     egui::TextEdit::singleline(&mut self.path)
-                        .hint_text("从下拉列表选择，或填写 .ts 文件路径")
+                        .hint_text(tr!("从下拉列表选择，或填写 .ts 文件路径"))
                         .desired_width(f32::INFINITY),
                 );
             });
             ui.horizontal(|ui| {
-                ui.label("选择脚本");
+                ui.label(tr!("选择脚本"));
                 ui.add_enabled_ui(!busy, |ui| {
                     let selected = Path::new(self.path.trim())
                         .file_name()
                         .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "选择当前目录的 .ts 文件".into());
+                        .unwrap_or_else(|| tr!("选择当前目录的 .ts 文件").into());
                     egui::ComboBox::from_id_salt("mission-script-file")
                         .selected_text(selected)
                         .width(ui.available_width())
@@ -256,7 +266,7 @@ impl ScriptUi {
                                     ui.label(directory.display().to_string());
                                     ui.separator();
                                     if files.is_empty() {
-                                        ui.label("当前目录没有可用的 .ts 任务脚本");
+                                        ui.label(tr!("当前目录没有可用的 .ts 任务脚本"));
                                     }
                                     for path in files {
                                         let name = path.file_name().unwrap().to_string_lossy();
@@ -280,7 +290,9 @@ impl ScriptUi {
                 });
             });
             ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(!busy, egui::Button::new("新建…")).clicked()
+                if ui
+                    .add_enabled(!busy, egui::Button::new(tr!("新建…")))
+                    .clicked()
                     && let Some(path) = rfd::FileDialog::new()
                         .set_file_name("mission.ts")
                         .add_filter("TypeScript", &["ts"])
@@ -293,14 +305,14 @@ impl ScriptUi {
                         Ok(_) => {
                             self.path = path.to_string_lossy().into_owned();
                             self.message =
-                                "已创建任务脚本及类型文件，请在外部编辑器中打开脚本。".into();
+                                tr!("已创建任务脚本及类型文件，请在外部编辑器中打开脚本。").into();
                         }
                         Err(error) => result = Err(error),
                     }
                 }
                 let has_path = !self.path.trim().is_empty();
                 if ui
-                    .add_enabled(!busy && has_path, egui::Button::new("刷新类型"))
+                    .add_enabled(!busy && has_path, egui::Button::new(tr!("刷新类型")))
                     .clicked()
                 {
                     result = self.refresh_types(editor, scene);
@@ -308,7 +320,7 @@ impl ScriptUi {
                 if ui
                     .add_enabled(
                         !busy && has_path && !editor.stroking,
-                        egui::Button::new("应用到地图"),
+                        egui::Button::new(tr!("应用到地图")),
                     )
                     .clicked()
                 {
@@ -318,12 +330,12 @@ impl ScriptUi {
                     ui.spinner();
                 }
             });
-            ui.label(
-                "从当前目录下拉选择脚本，也可填写其他路径。修改地图后，刷新类型即可同步提示。",
-            );
-            ui.label(
-                "应用时自动刷新类型并转译磁盘源码，不做 TS 类型检查；成功后可撤销、保存或试玩。",
-            );
+            ui.label(tr!(
+                "从当前目录下拉选择脚本，也可填写其他路径。修改地图后，刷新类型即可同步提示。"
+            ));
+            ui.label(tr!(
+                "应用时自动刷新类型并转译磁盘源码，不做 TS 类型检查；成功后可撤销、保存或试玩。"
+            ));
             ui.separator();
             egui::ScrollArea::vertical()
                 .id_salt("typescript-diagnostics")

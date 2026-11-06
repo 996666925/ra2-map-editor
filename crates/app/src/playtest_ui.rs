@@ -1,5 +1,6 @@
 //! Play setup stays visible; optional economy/rules settings can be expanded.
 use super::*;
+use crate::i18n::tr;
 use crate::ui_theme as theme;
 use ra2_map_io::playtest::{PLAYER_COLOR_COUNT, PlayOptions};
 
@@ -50,10 +51,10 @@ fn country(ui: &mut egui::Ui, id: &str, label: &str, value: &mut u8) {
     ui.horizontal(|ui| {
         ui.label(label);
         egui::ComboBox::from_id_salt(id)
-            .selected_text(COUNTRIES[usize::from(*value).min(9)])
+            .selected_text(crate::i18n::text(COUNTRIES[usize::from(*value).min(9)]))
             .show_ui(ui, |ui| {
                 for (i, name) in COUNTRIES.iter().enumerate() {
-                    ui.selectable_value(value, i as u8, *name);
+                    ui.selectable_value(value, i as u8, crate::i18n::text(name));
                 }
             });
     });
@@ -62,18 +63,19 @@ fn country(ui: &mut egui::Ui, id: &str, label: &str, value: &mut u8) {
 fn speed(ui: &mut egui::Ui, options: &mut PlayOptions) {
     let mut position = 6 - options.speed.min(6);
     ui.horizontal(|ui| {
-        ui.label("游戏速度");
+        ui.label(tr!("游戏速度"));
         if ui
             .add(
-                egui::Slider::new(&mut position, 0..=6)
-                    .custom_formatter(|n, _| SPEEDS[(n as usize).min(6)].to_owned()),
+                egui::Slider::new(&mut position, 0..=6).custom_formatter(|n, _| {
+                    crate::i18n::text(SPEEDS[(n as usize).min(6)]).to_owned()
+                }),
             )
             .changed()
         {
             options.speed = 6 - position;
         }
     });
-    ui.small("向右加快；最快档不限制游戏帧率。");
+    ui.small(tr!("向右加快；最快档不限制游戏帧率。"));
 }
 
 fn display(ui: &mut egui::Ui, options: &mut PlayOptions, displays: &[PlayDisplay]) {
@@ -81,16 +83,18 @@ fn display(ui: &mut egui::Ui, options: &mut PlayOptions, displays: &[PlayDisplay
         return;
     }
     ui.horizontal(|ui| {
-        let label = ui.label("显示器");
+        let label = ui.label(tr!("显示器"));
         egui::ComboBox::from_id_salt("playtest-display")
             .selected_text(
                 displays
                     .iter()
                     .find(|display| options.display.as_ref() == Some(&display.id))
-                    .map_or("自动（跟随系统）", |display| display.label.as_str()),
+                    .map_or(tr!("自动（跟随系统）"), |display| {
+                        display.label.as_str()
+                    }),
             )
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut options.display, None, "自动（跟随系统）");
+                ui.selectable_value(&mut options.display, None, tr!("自动（跟随系统）"));
                 for display in displays {
                     ui.selectable_value(
                         &mut options.display,
@@ -119,13 +123,13 @@ fn resolution(ui: &mut egui::Ui, options: &mut PlayOptions, surface: [u32; 2]) {
         };
         let (width, height) = (width * 100 / percent, height * 100 / percent);
         if zoom == 0 {
-            format!("自动（{width} × {height}）")
+            tr!("自动（{width} × {height}）", width = width, height = height)
         } else {
             format!("{width} × {height}")
         }
     };
     ui.horizontal(|ui| {
-        let label = ui.label("游戏内分辨率");
+        let label = ui.label(tr!("游戏内分辨率"));
         egui::ComboBox::from_id_salt("playtest-resolution")
             .selected_text(label_for(options.zoom))
             .show_ui(ui, |ui| {
@@ -136,11 +140,15 @@ fn resolution(ui: &mut egui::Ui, options: &mut PlayOptions, surface: [u32; 2]) {
             .response
             .labelled_by(label.id)
             .on_hover_text(
-                "按所选显示器的实际像素列出档位。游戏会按实际绘制区域应用缩放，调整游戏窗口后渲染尺寸可能变化。",
+                tr!("按所选显示器的实际像素列出档位。游戏会按实际绘制区域应用缩放，调整游戏窗口后渲染尺寸可能变化。"),
             );
     });
-    ui.small("分辨率越高，画面越小，可见地图范围越大。");
-    ui.small(format!("按显示器 {width} × {height} 列出档位。"));
+    ui.small(tr!("分辨率越高，画面越小，可见地图范围越大。"));
+    ui.small(tr!(
+        "按显示器 {width} × {height} 列出档位。",
+        width = width,
+        height = height
+    ));
 }
 
 impl Editor {
@@ -174,7 +182,7 @@ impl Editor {
                         let id = monitor.name()?;
                         let size = monitor.size();
                         let suffix = if primary.as_ref() == Some(&monitor) {
-                            "（主显示器）"
+                            tr!("（主显示器）")
                         } else {
                             ""
                         };
@@ -187,7 +195,11 @@ impl Editor {
                     })
                     .enumerate()
                     .map(|(index, mut display)| {
-                        display.label = format!("显示器 {} · {}", index + 1, display.label);
+                        display.label = tr!(
+                            "显示器 {arg0} · {arg1}",
+                            arg0 = index + 1,
+                            arg1 = display.label
+                        );
                         display
                     })
                     .collect()
@@ -203,10 +215,14 @@ impl Editor {
     }
 
     pub fn playtest_controls(&mut self, ui: &mut egui::Ui) {
-        ui.label("配置本次试玩，使用当前地图（包含未保存的修改）。");
+        ui.label(tr!("配置本次试玩，使用当前地图（包含未保存的修改）。"));
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.play_options.mission, false, "遭遇战 · 配置电脑");
-            ui.selectable_value(&mut self.play_options.mission, true, "单人任务");
+            ui.selectable_value(
+                &mut self.play_options.mission,
+                false,
+                tr!("遭遇战 · 配置电脑"),
+            );
+            ui.selectable_value(&mut self.play_options.mission, true, tr!("单人任务"));
         });
         ui.separator();
         let starts = self.doc.as_ref().map(map_starts).unwrap_or_default();
@@ -219,13 +235,13 @@ impl Editor {
             .show(ui, |ui| {
                 let o = &mut self.play_options;
                 if o.mission {
-                    ui.strong("任务难度");
+                    ui.strong(tr!("任务难度"));
                     ui.horizontal_wrapped(|ui| {
-                        for (i, label) in ["简单", "普通", "困难"].iter().enumerate() {
+                        for (i, label) in [tr!("简单"), tr!("普通"), tr!("困难")].iter().enumerate() {
                             ui.selectable_value(&mut o.mission_difficulty, i as u8, *label);
                         }
                     });
-                    ui.small("电脑阵营、部队和资金由地图任务定义；选择遭遇战可设置电脑对手。");
+                    ui.small(tr!("电脑阵营、部队和资金由地图任务定义；选择遭遇战可设置电脑对手。"));
                     if let Some(doc) = &self.doc {
                         let player = doc.ini_text("Basic", "Player");
                         if !ra2_map_document::mission::ids(
@@ -235,104 +251,99 @@ impl Editor {
                         .contains(&player)
                         {
                             invalid =
-                                Some("单人任务需要在任务制作中设置有效的玩家所属方。".to_owned());
+                                Some(tr!("单人任务需要在任务制作中设置有效的玩家所属方。").to_owned());
                         }
                     }
                 } else {
-                    ui.strong("玩家与电脑");
-                    country(ui, "playtest-player-country", "玩家国家", &mut o.side);
+                    ui.strong(tr!("玩家与电脑"));
+                    country(ui, "playtest-player-country", tr!("玩家国家"), &mut o.side);
                     ui.horizontal(|ui| {
-                        ui.label("玩家起点");
+                        ui.label(tr!("玩家起点"));
                         egui::ComboBox::from_id_salt("playtest-start")
-                            .selected_text(format!("航点 {}", o.start))
+                            .selected_text(tr!("航点 {arg0}", arg0 = o.start))
                             .show_ui(ui, |ui| {
                                 for start in &starts {
                                     ui.selectable_value(
                                         &mut o.start,
                                         *start,
-                                        format!("航点 {start}"),
+                                        tr!("航点 {start}", start = start),
                                     );
                                 }
                             });
                     });
                     ui.horizontal(|ui| {
-                        ui.label("电脑数量");
+                        ui.label(tr!("电脑数量"));
                         egui::ComboBox::from_id_salt("playtest-ai-count")
                             .selected_text(if o.ai == 0 {
-                                "不添加电脑".into()
+                                tr!("不添加电脑").into()
                             } else {
-                                format!("{} 个电脑", o.ai)
+                                tr!("{arg0} 个电脑", arg0 = o.ai)
                             })
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut o.ai, 0, "不添加电脑");
+                                ui.selectable_value(&mut o.ai, 0, tr!("不添加电脑"));
                                 for count in 1..=capacity {
                                     ui.selectable_value(
                                         &mut o.ai,
                                         count,
-                                        format!("{count} 个电脑"),
+                                        tr!("{count} 个电脑", count = count),
                                     );
                                 }
                             });
                     });
                     ui.add_enabled_ui(o.ai > 0, |ui| {
-                        country(ui, "playtest-ai-country", "电脑国家", &mut o.ai_side);
+                        country(ui, "playtest-ai-country", tr!("电脑国家"), &mut o.ai_side);
                         ui.horizontal_wrapped(|ui| {
-                            ui.label("电脑难度");
+                            ui.label(tr!("电脑难度"));
                             // Native HouseHandicaps: 0 hard, 1 normal, 2 easy.
-                            for (value, label) in [(2, "简单"), (1, "普通"), (0, "困难")] {
+                            for (value, label) in [(2, tr!("简单")), (1, tr!("普通")), (0, tr!("困难"))] {
                                 ui.selectable_value(&mut o.difficulty, value, label);
                             }
                         });
                     });
-                    ui.small(format!(
-                        "地图可用玩家起点 {} 个，最多添加 {capacity} 个电脑（总人数最多 30 人）。",
-                        starts.len()
-                    ));
-                    ui.small("电脑共用上述国家和难度。");
+                    ui.small(tr!("地图可用玩家起点 {arg0} 个，最多添加 {capacity} 个电脑（总人数最多 30 人）。", arg0 = starts.len(), capacity = capacity));
+                    ui.small(tr!("电脑共用上述国家和难度。"));
                     if o.ai >= PLAYER_COLOR_COUNT {
-                        ui.small("超过 8 人时循环使用现有 8 种玩家颜色。");
+                        ui.small(tr!("超过 8 人时循环使用现有 8 种玩家颜色。"));
                     }
                     if !starts.contains(&o.start) {
-                        invalid = Some("请选择地图上已定义的玩家起点（航点 0～29）。".to_owned());
+                        invalid = Some(tr!("请选择地图上已定义的玩家起点（航点 0～29）。").to_owned());
                     } else if o.ai > capacity {
-                        invalid = Some(format!(
-                            "当前地图最多容纳 {capacity} 个电脑，请减少电脑数量。"
-                        ));
+                        invalid = Some(tr!("当前地图最多容纳 {capacity} 个电脑，请减少电脑数量。", capacity = capacity));
                     }
                 }
                 ui.separator();
                 display(ui, o, &self.play_displays);
-                ui.checkbox(&mut o.full_screen, "全屏");
+                ui.checkbox(&mut o.full_screen, tr!("全屏"));
                 let surface = resolution_surface(o, &self.play_displays);
                 resolution(ui, o, surface);
                 speed(ui, o);
                 if !o.mission {
-                    egui::CollapsingHeader::new("资金、单位与对局规则").show(ui, |ui| {
+                    egui::CollapsingHeader::new(tr!("资金、单位与对局规则")).show(ui, |ui| {
                         ui.add(
                             egui::DragValue::new(&mut o.credits)
                                 .range(0..=1_000_000)
-                                .prefix("初始资金  "),
+                                .prefix(tr!("初始资金  ")),
                         );
-                        ui.add(egui::Slider::new(&mut o.units, 0..=50).text("初始单位"));
-                        ui.add(egui::Slider::new(&mut o.tech, 0..=10).text("科技等级"));
+                        ui.add(egui::Slider::new(&mut o.units, 0..=50).text(tr!("初始单位")));
+                        ui.add(egui::Slider::new(&mut o.tech, 0..=10).text(tr!("科技等级")));
                         ui.add(
                             egui::Slider::new(&mut o.color, 0..=PLAYER_COLOR_COUNT - 1)
-                                .text("玩家颜色"),
+                                .text(tr!("玩家颜色")),
                         );
-                        ui.add(egui::DragValue::new(&mut o.seed).prefix("随机种子  "));
+                        ui.add(egui::DragValue::new(&mut o.seed).prefix(tr!("随机种子  ")));
                         ui.horizontal_wrapped(|ui| {
-                            ui.checkbox(&mut o.superweapons, "超级武器");
-                            ui.checkbox(&mut o.crates, "随机箱子");
-                            ui.checkbox(&mut o.short_game, "快速游戏");
+                            ui.checkbox(&mut o.superweapons, tr!("超级武器"));
+                            ui.checkbox(&mut o.crates, tr!("随机箱子"));
+                            ui.checkbox(&mut o.short_game, tr!("快速游戏"));
                         });
                     });
                 }
-                ui.collapsing("游戏程序", |ui| {
+                ui.collapsing(tr!("游戏程序"), |ui| {
                     if theme::path_entry(
                         ui,
                         &mut self.executable,
-                        "vera20k.exe 的完整路径",
-                        "选择…",
+                        tr!("vera20k.exe 的完整路径"),
+                        tr!("选择…"),
                     ) && let Some(path) = rfd::FileDialog::new()
                         .add_filter("VERA20k", &["exe"])
                         .pick_file()
@@ -342,10 +353,10 @@ impl Editor {
                 });
             });
         if !Path::new(&self.executable).is_file() {
-            invalid = Some("请在“游戏程序”中选择 vera20k.exe。".into());
+            invalid = Some(tr!("请在“游戏程序”中选择 vera20k.exe。").into());
         }
         if self.doc.is_none() {
-            invalid = Some("请先打开或新建可编辑地图。".into());
+            invalid = Some(tr!("请先打开或新建可编辑地图。").into());
         }
         if let Some(message) = &invalid {
             ui.colored_label(Color32::YELLOW, message);
@@ -355,9 +366,9 @@ impl Editor {
             .add_enabled(
                 invalid.is_none() && !self.launching && self.process.is_none() && !self.stroking,
                 theme::primary(if self.launching {
-                    "正在准备试玩…"
+                    tr!("正在准备试玩…")
                 } else {
-                    "启动试玩"
+                    tr!("启动试玩")
                 }),
             )
             .clicked()
@@ -365,10 +376,10 @@ impl Editor {
             self.play();
         }
         if let Some(process) = &mut self.process {
-            let folder = format!("日志：{}", process.folder.display());
+            let folder = tr!("日志：{arg0}", arg0 = process.folder.display());
             ui.add(egui::Label::new(&folder).truncate())
                 .on_hover_text(&folder);
-            if ui.button("停止本次试玩").clicked()
+            if ui.button(tr!("停止本次试玩")).clicked()
                 && let Err(e) = process.child.kill()
             {
                 self.status = e.to_string();

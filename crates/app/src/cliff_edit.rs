@@ -1,5 +1,6 @@
 //! Deferred plateau gestures and cached, side-effect-free generation previews.
 use super::*;
+use crate::i18n::tr;
 use ra2_map_scene::cliff_authoring;
 use ra2_map_scene::cliff_tools::{self, PlateauPlan};
 
@@ -39,7 +40,7 @@ impl PlateauEdit {
         scene: &MapScene,
         at: Cell,
     ) -> std::result::Result<Arc<PlateauPlan>, String> {
-        let g = self.gesture.as_ref().ok_or("按下并拖动绘制高台")?;
+        let g = self.gesture.as_ref().ok_or(tr!("按下并拖动绘制高台"))?;
         let mut path = g.path.clone();
         if path.last() != Some(&at) {
             path.push(at);
@@ -148,7 +149,7 @@ impl Editor {
         at: Cell,
     ) -> Result<Arc<PlateauPlan>> {
         self.plateau
-            .generate(self.doc.as_ref().context("没有地图文档")?, scene, at)
+            .generate(self.doc.as_ref().context(tr!("没有地图文档"))?, scene, at)
             .map_err(anyhow::Error::msg)
     }
 
@@ -210,12 +211,12 @@ impl Editor {
                         Ok(cells) => {
                             self.feedback = cells.into_iter().collect();
                             self.commit(scene, mode.name());
-                            self.status = format!(
-                                "{} · {} 格 · {} 个地形模板 · {} 个桥面格",
-                                mode.name(),
-                                self.feedback.len(),
-                                plan.cliffs.len(),
-                                plan.overlays.len()
+                            self.status = tr!(
+                                "{arg0} · {arg1} 格 · {arg2} 个地形模板 · {arg3} 个桥面格",
+                                arg0 = mode.name(),
+                                arg1 = self.feedback.len(),
+                                arg2 = plan.cliffs.len(),
+                                arg3 = plan.overlays.len()
                             );
                         }
                         Err(e) => self.abort_stroke(scene, e),
@@ -453,11 +454,15 @@ impl Editor {
                 }
                 let g = self.plateau.gesture.as_ref().unwrap();
                 let heights = if g.mode.joining() {
-                    "按原高度连接地形".into()
+                    tr!("按原高度连接地形").into()
                 } else if g.mode == TerrainMode::Bridge && !g.bridge.high() {
-                    format!("桥面与地面 {} 层", plan.base)
+                    tr!("桥面与地面 {arg0} 层", arg0 = plan.base)
                 } else {
-                    format!("低地 {} / 高地 {} 层", plan.base, plan.base + 4)
+                    tr!(
+                        "低地 {arg0} / 高地 {arg1} 层",
+                        arg0 = plan.base,
+                        arg1 = plan.base + 4
+                    )
                 };
                 painter.text(
                     rect.left_top() + egui::vec2(12., 12.),
@@ -465,17 +470,18 @@ impl Editor {
                     error
                         .as_ref()
                         .map(|e| {
-                            format!(
-                                "预览 {} 排桥面 · {e}；红色时松开不会放置，Esc 取消",
-                                plan.overlays.len() / 3
+                            tr!(
+                                "预览 {arg0} 排桥面 · {e}；红色时松开不会放置，Esc 取消",
+                                arg0 = plan.overlays.len() / 3,
+                                e = e
                             )
                         })
                         .unwrap_or_else(|| {
-                            format!(
-                                "{} 格修改 · {} 个地形模板 · {}；松开放置，Esc 取消",
-                                plan.edits.len() + plan.overlays.len(),
-                                plan.cliffs.len(),
-                                heights
+                            tr!(
+                                "{arg0} 格修改 · {arg1} 个地形模板 · {arg2}；松开放置，Esc 取消",
+                                arg0 = plan.edits.len() + plan.overlays.len(),
+                                arg1 = plan.cliffs.len(),
+                                arg2 = heights
                             )
                         }),
                     egui::FontId::proportional(13.),
@@ -515,7 +521,7 @@ impl Editor {
                 painter.text(
                     rect.left_top() + egui::vec2(12., 12.),
                     egui::Align2::LEFT_TOP,
-                    error.unwrap_or_else(|| "无法生成预览".into()),
+                    error.unwrap_or_else(|| tr!("无法生成预览").into()),
                     egui::FontId::proportional(13.),
                     Color32::LIGHT_RED,
                 );
@@ -527,34 +533,42 @@ impl Editor {
         if self.terrain_mode.joining() {
             let text = match self.terrain_mode {
                 TerrainMode::Water => {
-                    "拖动矩形绘制水域；自动生成直岸、内角和外角，与已有水域合并。"
+                    tr!("拖动矩形绘制水域；自动生成直岸、内角和外角，与已有水域合并。")
                 }
                 TerrainMode::WaterOutline => {
-                    "按住描绘水域轮廓，松开闭合并填水；无法拼接的细小折角会按 2×2 格向外规整，以预览为准。"
+                    tr!(
+                        "按住描绘水域轮廓，松开闭合并填水；无法拼接的细小折角会按 2×2 格向外规整，以预览为准。"
+                    )
                 }
-                TerrainMode::LandFill => "拖动矩形回填为平地；自动移除旧岸线，修补湖岸和岛屿。",
+                TerrainMode::LandFill => {
+                    tr!("拖动矩形回填为平地；自动移除旧岸线，修补湖岸和岛屿。")
+                }
                 TerrainMode::ShoreRepair => {
-                    "拖动矩形修复水陆边界，保持现有水域范围；包含邻近的完整岸线模板。"
+                    tr!("拖动矩形修复水陆边界，保持现有水域范围；包含邻近的完整岸线模板。")
                 }
                 TerrainMode::CoastalCliff => {
-                    "框选已有正面悬崖；按低地是否临水，切换水悬崖或陆地悬崖。背面方向保持原样。"
+                    tr!(
+                        "框选已有正面悬崖；按低地是否临水，切换水悬崖或陆地悬崖。背面方向保持原样。"
+                    )
                 }
                 TerrainMode::Road => {
-                    "沿地图轴向拖出三格宽道路。从已有路端继续画可生成弯道；接入道路中部生成 T 字或十字路口。"
+                    tr!(
+                        "沿地图轴向拖出三格宽道路。从已有路端继续画可生成弯道；接入道路中部生成 T 字或十字路口。"
+                    )
                 }
-                _ => "沿道路中心线拖动切除，修复剩余路段的端点和路口。",
+                _ => tr!("沿道路中心线拖动切除，修复剩余路段的端点和路口。"),
             };
             ui.small(text);
             if matches!(self.terrain_mode, TerrainMode::Road | TerrainMode::RoadCut) {
-                ui.small(
-                    "中心线吸附附近道路；路口与转角之间请保留至少 4 格直道。切除后恢复为平地。",
-                );
+                ui.small(tr!(
+                    "中心线吸附附近道路；路口与转角之间请保留至少 4 格直道。切除后恢复为平地。"
+                ));
             } else if self.terrain_mode != TerrainMode::CoastalCliff {
-                ui.small(
-                    "水道和陆地至少宽 2 格；狭窄急转角请适当加宽。水域保持原高度，岸线两侧需等高。",
-                );
+                ui.small(tr!(
+                    "水道和陆地至少宽 2 格；狭窄急转角请适当加宽。水域保持原高度，岸线两侧需等高。"
+                ));
             }
-            ui.small("自动选择当前环境资源；保护建筑、对象、桥面和特殊地形。绿色可放置，红色说明原因，Esc 取消。");
+            ui.small(tr!("自动选择当前环境资源；保护建筑、对象、桥面和特殊地形。绿色可放置，红色说明原因，Esc 取消。"));
             return;
         }
         let supported = scene
@@ -564,11 +578,11 @@ impl Editor {
         if !supported {
             ui.colored_label(
                 Color32::LIGHT_RED,
-                "当前环境没有标准陆地悬崖，无法自动生成高台。",
+                tr!("当前环境没有标准陆地悬崖，无法自动生成高台。"),
             );
         }
         let mut fixed = self.template_level.is_some();
-        if ui.checkbox(&mut fixed, "指定低地基准高度").changed() {
+        if ui.checkbox(&mut fixed, tr!("指定低地基准高度")).changed() {
             self.template_level = fixed.then_some(0);
         }
         if let Some(level) = self.template_level.as_mut() {
@@ -576,32 +590,40 @@ impl Editor {
                 egui::Slider::new(level, 0..=cliff_tools::MAX_CLIFF_BASE)
                     .smart_aim(false)
                     .drag_value_speed(1.)
-                    .text("低地高度"),
+                    .text(tr!("低地高度")),
             );
-            ui.small("可点击数字直接输入高度；高地比低地高 4 层。");
+            ui.small(tr!("可点击数字直接输入高度；高地比低地高 4 层。"));
         } else {
-            ui.small("自动识别所选高台的低地高度；悬崖高差为 4 层。");
+            ui.small(tr!("自动识别所选高台的低地高度；悬崖高差为 4 层。"));
         }
         match self.terrain_mode {
             TerrainMode::Plateau => {
-                ui.small("拖到对角格：新建、扩建或合并同层高台，重建悬崖边界。");
+                ui.small(tr!("拖到对角格：新建、扩建或合并同层高台，重建悬崖边界。"));
             }
             TerrainMode::PlateauCut => {
-                ui.small("拖到对角格：切除所选高台，修补剩余边界；可整块删除。");
+                ui.small(tr!("拖到对角格：切除所选高台，修补剩余边界；可整块删除。"));
             }
             TerrainMode::CliffFront | TerrainMode::CliffBack => {
-                ui.small("拖出悬崖线段，自动吸附八方向。正面高地朝屏幕上方，背面相反。");
-                ui.small("高侧生成窄高台，末端和后侧自动封口。接续时合并高地并移除内部旧崖壁；可用高台工具继续扩建。");
+                ui.small(tr!(
+                    "拖出悬崖线段，自动吸附八方向。正面高地朝屏幕上方，背面相反。"
+                ));
+                ui.small(tr!("高侧生成窄高台，末端和后侧自动封口。接续时合并高地并移除内部旧崖壁；可用高台工具继续扩建。"));
             }
             TerrainMode::RampEntrance => {
-                ui.small("在悬崖边缘按住左键拖动加宽；点在矩形角落会生成向外下降的坡面；接到同高度、同坡向的已有入口时自动合并，松开生成。");
+                ui.small(tr!("在悬崖边缘按住左键拖动加宽；点在矩形角落会生成向外下降的坡面；接到同高度、同坡向的已有入口时自动合并，松开生成。"));
             }
             _ => {
-                ui.small("按住左键描绘高台轮廓：松开闭合，与触及的同层高台合并。");
+                ui.small(tr!(
+                    "按住左键描绘高台轮廓：松开闭合，与触及的同层高台合并。"
+                ));
             }
         }
-        ui.small("使用标准陆地悬崖，保留未改变的对象；修改范围内的覆盖物和对象会阻止放置。");
-        ui.small("绿色为可生成预览；红色说明原因。松开整笔提交，Esc 取消。");
+        ui.small(tr!(
+            "使用标准陆地悬崖，保留未改变的对象；修改范围内的覆盖物和对象会阻止放置。"
+        ));
+        ui.small(tr!(
+            "绿色为可生成预览；红色说明原因。松开整笔提交，Esc 取消。"
+        ));
     }
 }
 #[cfg(test)]

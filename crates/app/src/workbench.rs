@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::tr;
 use crate::new_map::{MAX_MAP_DIMENSION, MAX_MAP_SPAN, MAX_PLAYERS, MIN_MAP_DIMENSION};
 use crate::ui_theme::{self as theme, Icon};
 use egui::RichText;
@@ -128,16 +129,16 @@ impl MapView {
                 self.workbench.playtest = true;
             }
         }
-        ui.menu_button("文件", |ui| {
-            if ui.button("新建地图…   Ctrl+N").clicked() {
+        ui.menu_button(tr!("文件"), |ui| {
+            if ui.button(tr!("新建地图…   Ctrl+N")).clicked() {
                 self.show_new_map();
                 ui.close();
             }
-            if ui.button("新建随机地图…").clicked() {
+            if ui.button(tr!("新建随机地图…")).clicked() {
                 self.show_random_map();
                 ui.close();
             }
-            if ui.button("打开地图…   Ctrl+O").clicked() {
+            if ui.button(tr!("打开地图…   Ctrl+O")).clicked() {
                 self.pick_map(directory);
                 ui.close();
             }
@@ -148,7 +149,7 @@ impl MapView {
                         && !self.editor.stroking
                         && !self.workbench.mission.has_draft()
                         && !self.workbench.map_settings.open,
-                    egui::Button::new("另存为…   Ctrl+Shift+S"),
+                    egui::Button::new(tr!("另存为…   Ctrl+Shift+S")),
                 )
                 .clicked()
             {
@@ -164,7 +165,7 @@ impl MapView {
                                 .doc
                                 .as_ref()
                                 .is_none_or(|doc| doc.saved_state.is_some()),
-                    egui::Button::new("重新加载地图"),
+                    egui::Button::new(tr!("重新加载地图")),
                 )
                 .clicked()
             {
@@ -186,10 +187,10 @@ impl MapView {
                         && !self.editor.stroking
                         && !self.workbench.mission.has_draft()
                         && !self.workbench.map_settings.open,
-                    egui::Button::new("导出高清地图预览图 PNG…"),
+                    egui::Button::new(tr!("导出高清地图预览图 PNG…")),
                 )
                 .on_hover_text(
-                    "使用游戏资源重新生成地图预览，最长边 4096 像素，小地图保持原始分辨率。包含未保存的修改，显示全部对象、覆盖物、House 换色与地图光照。",
+                    tr!("使用游戏资源重新生成地图预览，最长边 4096 像素，小地图保持原始分辨率。包含未保存的修改，显示全部对象、覆盖物、House 换色与地图光照。"),
                 )
                 .clicked()
             {
@@ -201,10 +202,10 @@ impl MapView {
                     self.scene.is_some()
                         && !self.editor.exporting
                         && !self.loading,
-                    egui::Button::new("导出内嵌预览原图 PNG…"),
+                    egui::Button::new(tr!("导出内嵌预览原图 PNG…")),
                 )
                 .on_hover_text(
-                    "导出当前加载地图内嵌的 PreviewPack 小图，保留原始尺寸和像素。未保存的修改不会更新此预览。",
+                    tr!("导出当前加载地图内嵌的 PreviewPack 小图，保留原始尺寸和像素。未保存的修改不会更新此预览。"),
                 )
                 .clicked()
             {
@@ -220,7 +221,7 @@ impl MapView {
                         && !self.editor.stroking
                         && !self.workbench.mission.has_draft()
                         && !self.workbench.map_settings.open,
-                    egui::Button::new("导出完整地图 PNG…（最长边 4096）"),
+                    egui::Button::new(tr!("导出完整地图 PNG…（最长边 4096）")),
                 )
                 .clicked()
             {
@@ -234,7 +235,7 @@ impl MapView {
                         && !self.editor.stroking
                         && !self.workbench.mission.has_draft()
                         && !self.workbench.map_settings.open,
-                    egui::Button::new("导出原始分辨率 PNG…"),
+                    egui::Button::new(tr!("导出原始分辨率 PNG…")),
                 )
                 .clicked()
             {
@@ -244,16 +245,18 @@ impl MapView {
             if ui
                 .add_enabled(
                     self.scene.is_some(),
-                    egui::Button::new("导出加载时的原文副本…"),
+                    egui::Button::new(tr!("导出加载时的原文副本…")),
                 )
-                .on_hover_text("不包含当前未保存的编辑")
+                .on_hover_text(tr!("不包含当前未保存的编辑"))
                 .clicked()
             {
                 self.export_original();
                 ui.close();
             }
         });
-        ui.menu_button("设置", |ui| {
+        ui.menu_button(tr!("设置"), |ui| {
+            crate::i18n::language_menu(ui);
+            ui.separator();
             if ui
                 .add_enabled(
                     self.editor.doc.is_some()
@@ -261,7 +264,7 @@ impl MapView {
                         && !self.editor.stroking
                         && !self.workbench.mission.has_draft()
                         && !self.workbench.map_settings.open,
-                    egui::Button::new("地图信息…"),
+                    egui::Button::new(tr!("地图信息…")),
                 )
                 .clicked()
             {
@@ -281,7 +284,7 @@ impl MapView {
                         && !self.editor.stroking
                         && !self.workbench.mission.has_draft()
                         && !self.workbench.map_settings.open,
-                    egui::Button::new("地图尺寸与光照…"),
+                    egui::Button::new(tr!("地图尺寸与光照…")),
                 )
                 .clicked()
             {
@@ -301,7 +304,7 @@ impl MapView {
                         && !self.editor.stroking
                         && !self.workbench.mission.has_draft()
                         && !self.workbench.map_settings.open,
-                    egui::Button::new("箱子设置…"),
+                    egui::Button::new(tr!("箱子设置…")),
                 )
                 .clicked()
             {
@@ -314,11 +317,11 @@ impl MapView {
                 }
                 ui.close();
             }
-            if ui.button("游戏资源与地图来源…").clicked() {
+            if ui.button(tr!("游戏资源与地图来源…")).clicked() {
                 self.workbench.settings = true;
                 ui.close();
             }
-            if ui.button("试玩配置…").clicked() {
+            if ui.button(tr!("试玩配置…")).clicked() {
                 self.workbench.playtest = true;
                 ui.close();
             }
@@ -328,7 +331,7 @@ impl MapView {
                 self.editor.doc.is_some()
                     && !self.editor.stroking
                     && !self.workbench.map_settings.open,
-                egui::Button::new("任务制作"),
+                egui::Button::new(tr!("任务制作")),
             )
             .clicked()
         {
@@ -342,7 +345,7 @@ impl MapView {
                     && !self.editor.stroking
                     && !self.workbench.mission.has_draft()
                     && !self.workbench.map_settings.open,
-                egui::Button::new("TypeScript 任务"),
+                egui::Button::new(tr!("TypeScript 任务")),
             )
             .clicked()
             && self.editor.check_property_draft()
@@ -353,15 +356,15 @@ impl MapView {
         }
         if !self.editor.recoveries.is_empty()
             && ui
-                .small_button(format!("恢复 {}", self.editor.recoveries.len()))
-                .on_hover_text("发现可恢复的地图快照")
+                .small_button(tr!("恢复 {arg0}", arg0 = self.editor.recoveries.len()))
+                .on_hover_text(tr!("发现可恢复的地图快照"))
                 .clicked()
         {
             self.workbench.settings = true;
         }
         ui.separator();
-        if theme::button(ui, Icon::Folder, "打开", 73., false)
-            .on_hover_text("打开地图文件  Ctrl+O")
+        if theme::button(ui, Icon::Folder, tr!("打开"), 73., false)
+            .on_hover_text(tr!("打开地图文件  Ctrl+O"))
             .clicked()
         {
             self.pick_map(directory);
@@ -372,15 +375,15 @@ impl MapView {
                 |ui| self.editor.document_actions(ui, scene),
             )
             .response
-            .on_disabled_hover_text("请先完成或取消当前任务输入。");
+            .on_disabled_hover_text(tr!("请先完成或取消当前任务输入。"));
         } else {
             ui.add_enabled_ui(false, |ui| {
-                theme::button(ui, Icon::Save, "保存", 73., false);
+                theme::button(ui, Icon::Save, tr!("保存"), 73., false);
             });
         }
         if ui
-            .add_sized([56., 32.], egui::Button::new("帮助"))
-            .on_hover_text("操作说明与快捷键  F1")
+            .add_sized([56., 32.], egui::Button::new(tr!("帮助")))
+            .on_hover_text(tr!("操作说明与快捷键  F1"))
             .clicked()
         {
             self.workbench.help = true;
@@ -390,7 +393,7 @@ impl MapView {
         let name = target_name
             .as_deref()
             .or_else(|| self.scene.as_ref().map(|scene| scene.source.name.as_str()))
-            .unwrap_or("未打开地图");
+            .unwrap_or(tr!("未打开地图"));
         let filename = Path::new(name)
             .file_name()
             .unwrap_or_default()
@@ -420,11 +423,11 @@ impl MapView {
             |ui| {
                 if ui
                     .add_enabled_ui(self.editor.doc.is_some() && !self.editor.stroking, |ui| {
-                        theme::button(ui, Icon::Play, "试玩", 76., false)
+                        theme::button(ui, Icon::Play, tr!("试玩"), 76., false)
                     })
                     .inner
-                    .on_hover_text("设置电脑、游戏速度，并启动当前地图快照  F5")
-                    .on_disabled_hover_text("先打开地图，并完成当前一笔。")
+                    .on_hover_text(tr!("设置电脑、游戏速度，并启动当前地图快照  F5"))
+                    .on_disabled_hover_text(tr!("先打开地图，并完成当前一笔。"))
                     .clicked()
                 {
                     self.workbench.playtest = true;
@@ -453,13 +456,13 @@ impl MapView {
         }
         self.overview(ui);
         let Some(scene) = &self.scene else {
-            theme::section(ui, "属性检查", "");
+            theme::section(ui, tr!("属性检查"), "");
             ui.add_space(16.);
-            ui.label(RichText::new("尚未选择内容").color(theme::MUTED));
-            ui.small("打开地图后，可在这里导航、查看格子和编辑对象。");
+            ui.label(RichText::new(tr!("尚未选择内容")).color(theme::MUTED));
+            ui.small(tr!("打开地图后，可在这里导航、查看格子和编辑对象。"));
             return;
         };
-        theme::section(ui, "当前选择", "");
+        theme::section(ui, tr!("当前选择"), "");
         if self.editor.selected.is_some() {
             self.editor.selection_properties(ui, scene);
         } else if let Some(cell) = self.selected.and_then(|i| scene.cells.get(i)) {
@@ -468,10 +471,10 @@ impl MapView {
                 .doc
                 .as_ref()
                 .map(|doc| ra2_map_scene::terrain_tools::value(doc, scene, [cell.rx, cell.ry]));
-            theme::field(ui, "格子坐标", format!("{}, {}", cell.rx, cell.ry));
+            theme::field(ui, tr!("格子坐标"), format!("{}, {}", cell.rx, cell.ry));
             theme::field(
                 ui,
-                "地形子块",
+                tr!("地形子块"),
                 value.map_or_else(
                     || format!("{} : {}", cell.tile_id, cell.sub_tile),
                     |v| {
@@ -488,19 +491,19 @@ impl MapView {
                     },
                 ),
             );
-            theme::field(ui, "高度", value.map_or(cell.z, |v| v.level) as i8);
+            theme::field(ui, tr!("高度"), value.map_or(cell.z, |v| v.level) as i8);
             theme::badge(
                 ui,
                 if scene.is_playable(cell) {
-                    "可玩区域内"
+                    tr!("可玩区域内")
                 } else {
-                    "边界填充区域"
+                    tr!("边界填充区域")
                 },
                 theme::BLUE,
             );
         } else {
             ui.label(
-                RichText::new("在画布中选择格子或对象")
+                RichText::new(tr!("在画布中选择格子或对象"))
                     .color(theme::MUTED)
                     .size(12.),
             );
@@ -508,33 +511,38 @@ impl MapView {
         ui.add_space(8.);
         ui.separator();
         ui.add_space(6.);
-        theme::section(ui, "显示图层", "");
+        theme::section(ui, tr!("显示图层"), "");
         if self.editor.framework {
-            ui.small("框架与 2D 地形互斥；Ctrl+F 切换框架，F2 切换 2D。");
+            ui.small(tr!("框架与 2D 地形互斥；Ctrl+F 切换框架，F2 切换 2D。"));
         }
         if self.editor.flat_view {
-            ui.checkbox(&mut self.workbench.flat_view.heights, "2D 高度数字");
+            ui.checkbox(&mut self.workbench.flat_view.heights, tr!("2D 高度数字"));
             ui.checkbox(
                 &mut self.workbench.flat_view.templates,
-                "2D 完整模板边界 / 编号",
+                tr!("2D 完整模板边界 / 编号"),
             );
-            ui.small("金线：高度变化；蓝线：模板外沿；红叉 / 红点：对象占地 / 覆盖物。");
+            ui.small(tr!(
+                "金线：高度变化；蓝线：模板外沿；红叉 / 红点：对象占地 / 覆盖物。"
+            ));
         } else {
             for (index, label) in [
-                (0, "矿石与覆盖物"),
-                (1, "对象预览与标记"),
-                (2, "航点与玩家起点"),
+                (0, tr!("矿石与覆盖物")),
+                (1, tr!("对象预览与标记")),
+                (2, tr!("航点与玩家起点")),
             ] {
                 ui.checkbox(&mut self.editor.layers[index], label);
             }
-            ui.checkbox(&mut self.editor.task_labels, "任务标签与格子触发点");
-            ui.checkbox(&mut self.editor.base_nodes_visible, "基地节点与建造顺序");
-            ui.checkbox(&mut self.editor.remap, "所属方换色");
-            ui.checkbox(&mut self.editor.lighting, "地图基础光照");
+            ui.checkbox(&mut self.editor.task_labels, tr!("任务标签与格子触发点"));
+            ui.checkbox(
+                &mut self.editor.base_nodes_visible,
+                tr!("基地节点与建造顺序"),
+            );
+            ui.checkbox(&mut self.editor.remap, tr!("所属方换色"));
+            ui.checkbox(&mut self.editor.lighting, tr!("地图基础光照"));
         }
         ui.add_space(8.);
         ui.separator();
-        egui::CollapsingHeader::new("地图信息")
+        egui::CollapsingHeader::new(tr!("地图信息"))
             .default_open(true)
             .show(ui, |ui| {
                 let header = &scene.source.header;
@@ -542,18 +550,18 @@ impl MapView {
                     .iter()
                     .find(|(id, _)| *id == header.theater)
                     .map_or(header.theater.as_str(), |(_, label)| *label);
-                theme::field(ui, "环境", theater);
+                theme::field(ui, tr!("环境"), crate::i18n::text(theater));
                 theme::field(
                     ui,
-                    "地图尺寸",
+                    tr!("地图尺寸"),
                     format!("{} × {}", header.width, header.height),
                 );
                 theme::field(
                     ui,
-                    "可玩尺寸",
+                    tr!("可玩尺寸"),
                     format!("{} × {}", header.local_width, header.local_height),
                 );
-                theme::field(ui, "地形格数", scene.cells.len());
+                theme::field(ui, tr!("地形格数"), scene.cells.len());
                 ui.add(
                     egui::Label::new(
                         RichText::new(&scene.source.title)
@@ -568,46 +576,51 @@ impl MapView {
             .iter()
             .filter(|d| d.code != "EDITOR_PREVIEW")
             .collect();
-        egui::CollapsingHeader::new(format!("地图诊断  ·  {}", issues.len())).show(ui, |ui| {
-            if issues.is_empty() {
-                ui.label(
-                    RichText::new("未发现资源或地图格式错误")
-                        .size(11.)
-                        .color(theme::GREEN),
-                );
-            }
-            for diagnostic in issues {
-                if ui
-                    .small_button(format!(
-                        "{}{}",
-                        diagnostic.code,
-                        diagnostic
-                            .cell
-                            .map(|c| format!("  {}, {}", c[0], c[1]))
-                            .unwrap_or_default()
-                    ))
-                    .clicked()
-                    && let Some(at) = diagnostic.cell
-                    && let Some((index, c)) = scene
-                        .cells
-                        .iter()
-                        .enumerate()
-                        .find(|(_, c)| [c.rx, c.ry] == at)
-                {
-                    self.selected = Some(index);
-                    self.center = egui::pos2(c.screen_x + 30., c.screen_y + 15.);
-                    self.zoom = 1. / ui.ctx().pixels_per_point();
-                    self.fit = false;
+        egui::CollapsingHeader::new(tr!("地图诊断  ·  {arg0}", arg0 = issues.len())).show(
+            ui,
+            |ui| {
+                if issues.is_empty() {
+                    ui.label(
+                        RichText::new(tr!("未发现资源或地图格式错误"))
+                            .size(11.)
+                            .color(theme::GREEN),
+                    );
                 }
-                ui.small(&diagnostic.message);
-            }
-            ui.add_space(6.);
-            ui.small("静态场景使用共享像素深度；完整桥梁、动态效果与局部灯光仍需继续完善。");
-        });
+                for diagnostic in issues {
+                    if ui
+                        .small_button(format!(
+                            "{}{}",
+                            diagnostic.code,
+                            diagnostic
+                                .cell
+                                .map(|c| format!("  {}, {}", c[0], c[1]))
+                                .unwrap_or_default()
+                        ))
+                        .clicked()
+                        && let Some(at) = diagnostic.cell
+                        && let Some((index, c)) = scene
+                            .cells
+                            .iter()
+                            .enumerate()
+                            .find(|(_, c)| [c.rx, c.ry] == at)
+                    {
+                        self.selected = Some(index);
+                        self.center = egui::pos2(c.screen_x + 30., c.screen_y + 15.);
+                        self.zoom = 1. / ui.ctx().pixels_per_point();
+                        self.fit = false;
+                    }
+                    ui.small(&diagnostic.message);
+                }
+                ui.add_space(6.);
+                ui.small(tr!(
+                    "静态场景使用共享像素深度；完整桥梁、动态效果与局部灯光仍需继续完善。"
+                ));
+            },
+        );
     }
     fn overview(&mut self, ui: &mut egui::Ui) {
         let Some(scene) = &self.scene else { return };
-        theme::section(ui, "地图导航", "");
+        theme::section(ui, tr!("地图导航"), "");
         if self.workbench.overview.is_none() {
             let radar = match ra2_map_scene::radar::terrain(scene) {
                 Ok(radar) => radar,
@@ -706,17 +719,16 @@ impl MapView {
             egui::StrokeKind::Inside,
         );
         ui.horizontal_wrapped(|ui| {
-            for (flag, name) in self
-                .workbench
-                .overview_markers
-                .0
-                .iter_mut()
-                .zip(["起点", "资源", "建筑", "单位"])
-            {
+            for (flag, name) in self.workbench.overview_markers.0.iter_mut().zip([
+                tr!("起点"),
+                tr!("资源"),
+                tr!("建筑"),
+                tr!("单位"),
+            ]) {
                 ui.checkbox(flag, name);
             }
         });
-        response.on_hover_text("点击或拖动，快速移动地图视角");
+        response.on_hover_text(tr!("点击或拖动，快速移动地图视角"));
         ui.add_space(5.);
         ui.separator();
         ui.add_space(4.);
@@ -724,23 +736,23 @@ impl MapView {
     pub fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let (color, text) = if self.loading {
-                (theme::ACCENT, self.stage)
+                (theme::ACCENT, crate::i18n::text(self.stage))
             } else if self.editor.saving {
-                (theme::ACCENT, "正在保存…")
+                (theme::ACCENT, tr!("正在保存…"))
             } else if self.error.is_some() {
-                (egui::Color32::LIGHT_RED, "加载失败")
+                (egui::Color32::LIGHT_RED, tr!("加载失败"))
             } else if self.workbench.mission.has_draft() {
-                (theme::ACCENT, "任务输入待完成")
+                (theme::ACCENT, tr!("任务输入待完成"))
             } else if self.workbench.map_settings.dirty() {
-                (theme::ACCENT, "地图设置草稿未应用")
+                (theme::ACCENT, tr!("地图设置草稿未应用"))
             } else if self.editor.object_properties_dirty() {
-                (theme::ACCENT, "属性输入待完成")
+                (theme::ACCENT, tr!("属性输入待完成"))
             } else if self.editor.dirty() {
-                (theme::ACCENT, "有未保存修改")
+                (theme::ACCENT, tr!("有未保存修改"))
             } else if self.scene.is_some() {
-                (theme::GREEN, "已保存")
+                (theme::GREEN, tr!("已保存"))
             } else {
-                (theme::MUTED, "就绪")
+                (theme::MUTED, tr!("就绪"))
             };
             let (dot, _) = ui.allocate_exact_size(egui::vec2(8., 14.), egui::Sense::hover());
             ui.painter().circle_filled(dot.center(), 3., color);
@@ -763,7 +775,11 @@ impl MapView {
                 .color(theme::BLUE),
             )
             .on_hover_text(self.editor.tool.hint());
-            if ui.small_button("F1").on_hover_text("操作帮助").clicked() {
+            if ui
+                .small_button("F1")
+                .on_hover_text(tr!("操作帮助"))
+                .clicked()
+            {
                 self.workbench.help = true;
             }
             let status = self
@@ -791,7 +807,7 @@ impl MapView {
     }
     fn pick_map(&mut self, directory: &str) {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("YR 地图", &["map", "mpr", "yrm", "mmx", "yro"])
+            .add_filter(tr!("YR 地图"), &["map", "mpr", "yrm", "mmx", "yro"])
             .pick_file()
         {
             self.open(PathBuf::from(directory.trim()), path.display().to_string());
@@ -804,8 +820,8 @@ impl MapView {
                 .save_file()
         {
             self.status = match scene.source.export_new(&path) {
-                Ok(()) => format!("已导出原文：{}", path.display()),
-                Err(e) => format!("导出失败：{e:#}"),
+                Ok(()) => tr!("已导出原文：{arg0}", arg0 = path.display()),
+                Err(e) => tr!("导出失败：{e}", e = format!("{:#}", e)),
             };
         }
     }
@@ -854,52 +870,52 @@ impl MapView {
         if self.workbench.help {
             theme::window(
                 ctx,
-                "操作帮助与快捷键",
+                tr!("操作帮助与快捷键"),
                 "interaction-help",
                 egui::vec2(570., 540.),
             )
             .open(&mut self.workbench.help)
             .vscroll(true)
             .show(ctx, |ui| {
-                ui.heading("地图导航");
+                ui.heading(tr!("地图导航"));
                 for text in [
-                    "中键 / 右键拖动，或空格 + 左键拖动：平移地图",
-                    "滚轮：围绕鼠标缩放；Home：适应地图；1：原始像素比例",
-                    "F2：切换 2D 地形视图，铺平地形并显示高度与模板边界；对象与区域工具自动返回立体视图",
-                    "Ctrl+F：框架模式，同步简化画布、地形素材栏和放置预览；与 2D 地形互斥",
-                    "F：定位当前对象或格子；小地图单击 / 拖动：快速定位",
+                    tr!("中键 / 右键拖动，或空格 + 左键拖动：平移地图"),
+                    tr!("滚轮：围绕鼠标缩放；Home：适应地图；1：原始像素比例"),
+                    tr!("F2：切换 2D 地形视图，铺平地形并显示高度与模板边界；对象与区域工具自动返回立体视图"),
+                    tr!("Ctrl+F：框架模式，同步简化画布、地形素材栏和放置预览；与 2D 地形互斥"),
+                    tr!("F：定位当前对象或格子；小地图单击 / 拖动：快速定位"),
                 ] {
                     ui.label(text);
                 }
                 ui.separator();
-                ui.heading("工具切换");
+                ui.heading(tr!("工具切换"));
                 for &(_, tool, key) in &crate::editing::interaction::TOOL_KEYS {
                     ui.label(format!("{key}  —  {}", tool.name()))
                         .on_hover_text(tool.hint());
                 }
-                ui.label("B  —  地形画笔；G  —  框选铺地；C  —  围合悬崖；H  —  矩形高台");
-                ui.label("[ / ]  —  缩小 / 放大子块、矿石和覆盖物画笔");
+                ui.label(tr!("B  —  地形画笔；G  —  框选铺地；C  —  围合悬崖；H  —  矩形高台"));
+                ui.label(tr!("[ / ]  —  缩小 / 放大子块、矿石和覆盖物画笔"));
                 ui.separator();
-                ui.heading("选择与编辑");
+                ui.heading(tr!("选择与编辑"));
                 for text in [
-                    "Shift + 框选：添加；Alt + 框选：减去；按下鼠标时确定本笔方式",
-                    "Shift + 地形 / 对象 / 资源画笔：锁定地图轴向；松开恢复自由绘制",
-                    "Ctrl+C / X / V：复制 / 剪切 / 粘贴区域；Ctrl+D：克隆选中对象",
-                    "Delete：删除选中对象或当前区域所选数据层",
-                    "Esc / 右键：取消当前绘制或放置；空闲时 Esc 返回选择工具",
-                    "Ctrl+Z：撤销；绘制中先取消本笔，保留上一笔；Ctrl+Y / Ctrl+Shift+Z：重做",
-                    "右键单击：常用操作菜单；右键拖动：平移地图",
+                    tr!("Shift + 框选：添加；Alt + 框选：减去；按下鼠标时确定本笔方式"),
+                    tr!("Shift + 地形 / 对象 / 资源画笔：锁定地图轴向；松开恢复自由绘制"),
+                    tr!("Ctrl+C / X / V：复制 / 剪切 / 粘贴区域；Ctrl+D：克隆选中对象"),
+                    tr!("Delete：删除选中对象或当前区域所选数据层"),
+                    tr!("Esc / 右键：取消当前绘制或放置；空闲时 Esc 返回选择工具"),
+                    tr!("Ctrl+Z：撤销；绘制中先取消本笔，保留上一笔；Ctrl+Y / Ctrl+Shift+Z：重做"),
+                    tr!("右键单击：常用操作菜单；右键拖动：平移地图"),
                 ] {
                     ui.label(text);
                 }
                 ui.separator();
-                ui.heading("文件与试玩");
+                ui.heading(tr!("文件与试玩"));
                 for text in [
-                    "Ctrl+N / O：新建 / 打开地图",
-                    "Ctrl+S / Ctrl+Shift+S：保存 / 另存为；F5：打开试玩设置",
-                    "对象属性、任务参数和光照结束输入后自动生效；撤销可恢复修改",
-                    "编辑文字、下拉菜单和浮动设置窗口时，地图工具快捷键暂停",
-                    "窗口失去焦点时取消未完成的一笔，已完成的修改保留",
+                    tr!("Ctrl+N / O：新建 / 打开地图"),
+                    tr!("Ctrl+S / Ctrl+Shift+S：保存 / 另存为；F5：打开试玩设置"),
+                    tr!("对象属性、任务参数和光照结束输入后自动生效；撤销可恢复修改"),
+                    tr!("编辑文字、下拉菜单和浮动设置窗口时，地图工具快捷键暂停"),
+                    tr!("窗口失去焦点时取消未完成的一笔，已完成的修改保留"),
                 ] {
                     ui.label(text);
                 }
@@ -911,58 +927,62 @@ impl MapView {
             let modal = theme::modal(ctx, "new-map", |ui| {
                 ui.set_width(440.0_f32.min(ctx.content_rect().width() - 64.));
                 ui.set_max_height((ctx.content_rect().height() - 64.).max(120.));
-                ui.heading("新建地图");
-                ui.label(RichText::new("从平坦地面开始，创建遭遇战地图。").color(theme::MUTED));
+                ui.heading(tr!("新建地图"));
+                ui.label(
+                    RichText::new(tr!("从平坦地面开始，创建遭遇战地图。")).color(theme::MUTED),
+                );
                 ui.separator();
                 let mut valid = false;
                 egui::ScrollArea::vertical().id_salt("new-map-form")
                     .max_height((ctx.content_rect().height() - 185.).max(120.))
                     .show(ui, |ui| {
-                        ui.label("游戏资源目录");
-                        if theme::path_entry(ui, directory, "包含 ra2.mix 与 ra2md.mix 的目录", "浏览…")
+                        ui.label(tr!("游戏资源目录"));
+                        if theme::path_entry(ui, directory, tr!("包含 ra2.mix 与 ra2md.mix 的目录"), tr!("浏览…"))
                             && let Some(path) = rfd::FileDialog::new().pick_folder()
                         { *directory = path.display().to_string(); }
-                        ui.label("地图名称");
-                        ui.add(egui::TextEdit::singleline(&mut self.workbench.new_options.title).desired_width(f32::INFINITY)).accessible_name("地图名称");
+                        ui.label(tr!("地图名称"));
+                        ui.add(egui::TextEdit::singleline(&mut self.workbench.new_options.title).desired_width(f32::INFINITY)).accessible_name(tr!("地图名称"));
                         let options = &mut self.workbench.new_options;
-                        ui.label("作者署名（可留空）");
-                        ui.add(egui::TextEdit::singleline(&mut options.author).desired_width(f32::INFINITY)).accessible_name("作者署名");
+                        ui.label(tr!("作者署名（可留空）"));
+                        ui.add(egui::TextEdit::singleline(&mut options.author).desired_width(f32::INFINITY)).accessible_name(tr!("作者署名"));
                         egui::Grid::new("new-map-fields").num_columns(2).spacing([20., 8.]).show(ui, |ui| {
-                            ui.label("地图环境");
+                            ui.label(tr!("地图环境"));
                             egui::ComboBox::from_id_salt("new-map-theater")
                                 .width(210.)
-                                .selected_text(crate::new_map::THEATERS.iter().find(|(id,_)| *id == options.theater).map_or(options.theater.clone(), |(id,label)| format!("{label} / {id}")))
+                                .selected_text(crate::new_map::THEATERS.iter().find(|(id,_)| *id == options.theater).map_or(options.theater.clone(), |(id,label)| format!("{} / {id}", crate::i18n::text(label))))
                                 .show_ui(ui, |ui| {
                                     for (id, label) in crate::new_map::THEATERS {
-                                        ui.selectable_value(&mut options.theater, id.into(), format!("{label} / {id}"));
+                                        ui.selectable_value(&mut options.theater, id.into(), format!("{} / {id}", crate::i18n::text(label)));
                                     }
                                 });
                             ui.end_row();
-                            ui.label("地图宽度");
-                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.width).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).suffix(" 格"), "地图宽度");
+                            ui.label(tr!("地图宽度"));
+                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.width).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).suffix(tr!(" 格")), tr!("地图宽度"));
                             ui.end_row();
-                            ui.label("地图高度");
-                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.height).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).suffix(" 格"), "地图高度");
+                            ui.label(tr!("地图高度"));
+                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.height).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION).suffix(tr!(" 格")), tr!("地图高度"));
                             ui.end_row();
-                            ui.label("初始地面高度");
-                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.level).range(0..=127).suffix(" 层"), "初始地面高度");
+                            ui.label(tr!("初始地面高度"));
+                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.level).range(0..=127).suffix(tr!(" 层")), tr!("初始地面高度"));
                             ui.end_row();
-                            ui.label("玩家起点");
-                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.players).range(2..=MAX_PLAYERS).suffix(" 个"), "玩家起点");
+                            ui.label(tr!("玩家起点"));
+                            crate::form_edit::number(ui, egui::DragValue::new(&mut options.players).range(2..=MAX_PLAYERS).suffix(tr!(" 个")), tr!("玩家起点"));
                             ui.end_row();
                         });
-                        ui.small(format!("宽＋高 ≤ {MAX_MAP_SPAN}，例如 {} × {} 或 {MAX_MAP_DIMENSION} × {MIN_MAP_DIMENSION}。", MAX_MAP_SPAN / 2, MAX_MAP_SPAN / 2));
-                        theme::field(ui, "可玩区域", format!("{} × {} 格", options.width.saturating_sub(4), options.height.saturating_sub(10)));
-                        ui.small("尺寸包含边界；初始不放置建筑、单位或矿石，起点可继续编辑。");
+                        ui.small(tr!("宽＋高 ≤ {MAX_MAP_SPAN}，例如 {arg0} × {arg1} 或 {MAX_MAP_DIMENSION} × {MIN_MAP_DIMENSION}。", MAX_MAP_SPAN = MAX_MAP_SPAN, arg0 = MAX_MAP_SPAN / 2, arg1 = MAX_MAP_SPAN / 2, MAX_MAP_DIMENSION = MAX_MAP_DIMENSION, MIN_MAP_DIMENSION = MIN_MAP_DIMENSION));
+                        theme::field(ui, tr!("可玩区域"), tr!("{arg0} × {arg1} 格", arg0 = options.width.saturating_sub(4), arg1 = options.height.saturating_sub(10)));
+                        ui.small(tr!("尺寸包含边界；初始不放置建筑、单位或矿石，起点可继续编辑。"));
                         let result = options.validate();
                         valid = result.is_ok() && !directory.trim().is_empty();
                         if let Err(e) = result { ui.colored_label(theme::ACCENT, e.to_string()); }
-                        if directory.trim().is_empty() { ui.colored_label(theme::ACCENT, "请先选择游戏资源目录。"); }
+                        if directory.trim().is_empty() { ui.colored_label(theme::ACCENT, tr!("请先选择游戏资源目录。")); }
                     });
                 ui.separator();
                 theme::right_to_left(ui, |ui| {
-                    create = ui.add_enabled(valid, theme::primary("创建地图")).clicked();
-                    cancel = ui.button("取消").clicked();
+                    create = ui
+                        .add_enabled(valid, theme::primary(tr!("创建地图")))
+                        .clicked();
+                    cancel = ui.button(tr!("取消")).clicked();
                 });
             });
             if create {
@@ -979,27 +999,27 @@ impl MapView {
             let mut open = true;
             theme::window(
                 ctx,
-                "资源与地图来源",
+                tr!("资源与地图来源"),
                 "project-settings",
                 egui::vec2(490., 420.),
             )
             .open(&mut open)
             .vscroll(true)
             .show(ctx, |ui| {
-                theme::section(ui, "游戏资源目录", "");
-                if let Some(scene)=&self.scene { ui.label(format!("数据结构版本：{}",scene.revision.schema));ui.label(format!("资源版本：{} · {} 文件",scene.revision.resources,scene.revision.files)); }
+                theme::section(ui, tr!("游戏资源目录"), "");
+                if let Some(scene)=&self.scene { ui.label(tr!("数据结构版本：{arg0}", arg0 = scene.revision.schema));ui.label(tr!("资源版本：{arg0} · {arg1} 文件", arg0 = scene.revision.resources, arg1 = scene.revision.files)); }
                 ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(!self.loading && self.editor.doc.is_some(),egui::Button::new("刷新当前资源（保留地图）")).clicked() { self.refresh_resources(PathBuf::from(directory.trim())); }
-                    if ui.button("载入模组配置…").clicked() && let Some(path)=rfd::FileDialog::new().add_filter("模组配置", &["json"]).pick_file() {
+                    if ui.add_enabled(!self.loading && self.editor.doc.is_some(),egui::Button::new(tr!("刷新当前资源（保留地图）"))).clicked() { self.refresh_resources(PathBuf::from(directory.trim())); }
+                    if ui.button(tr!("载入模组配置…")).clicked() && let Some(path)=rfd::FileDialog::new().add_filter(tr!("模组配置"), &["json"]).pick_file() {
                         match ra2_map_assets::profile::Profile::read(&path) {
                             Ok(p)=>{*directory=p.game_dir.display().to_string();if let Some(exe)=p.playtest_exe{self.editor.executable=exe.display().to_string();}self.refresh_resources(p.game_dir);},
                             Err(e)=>self.status=format!("{e:#}"),
                         }
                     }
                 });
-                ui.small("刷新重读归档、类型与任务资源；同环境跨模组剪贴板会按版本检查。保存和试玩记录资源与数据结构版本。");
+                ui.small(tr!("刷新重读归档、类型与任务资源；同环境跨模组剪贴板会按版本检查。保存和试玩记录资源与数据结构版本。"));
 
-                if theme::path_entry(ui, directory, "包含 ra2.mix 与 ra2md.mix 的目录", "浏览…")
+                if theme::path_entry(ui, directory, tr!("包含 ra2.mix 与 ra2md.mix 的目录"), tr!("浏览…"))
                     && let Some(path) = rfd::FileDialog::new().pick_folder()
                 {
                     *directory = path.display().to_string();
@@ -1008,7 +1028,7 @@ impl MapView {
                     if ui
                         .add_enabled(
                             !self.name.trim().is_empty() && !directory.trim().is_empty(),
-                            egui::Button::new("应用并重载"),
+                            egui::Button::new(tr!("应用并重载")),
                         )
                         .clicked()
                     {
@@ -1016,16 +1036,16 @@ impl MapView {
                     }
                 });
                 ui.separator();
-                theme::section(ui, "地图路径或归档名称", "");
+                theme::section(ui, tr!("地图路径或归档名称"), "");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.name)
                         .desired_width(f32::INFINITY)
-                        .hint_text("例如 XMP03T4.MAP，或本地文件路径"),
+                        .hint_text(tr!("例如 XMP03T4.MAP，或本地文件路径")),
                 );
                 if ui
                     .add_enabled(
                         !self.name.trim().is_empty() && !directory.trim().is_empty(),
-                        theme::primary("加载地图"),
+                        theme::primary(tr!("加载地图")),
                     )
                     .clicked()
                 {
@@ -1033,17 +1053,17 @@ impl MapView {
                 }
                 if !self.editor.recoveries.is_empty() {
                     ui.separator();
-                    theme::section(ui, "恢复未保存地图", "");
+                    theme::section(ui, tr!("恢复未保存地图"), "");
                     let mut restore = None;
                     let mut discard = None;
                     for (index, entry) in self.editor.recoveries.iter().enumerate() {
                         ui.add(egui::Label::new(&entry.meta.name).truncate())
                             .on_hover_text(&entry.meta.name);
                         ui.horizontal(|ui| {
-                            if ui.button("恢复").clicked() {
+                            if ui.button(tr!("恢复")).clicked() {
                                 restore = Some(entry.path.clone());
                             }
-                            if ui.button("丢弃快照").clicked() {
+                            if ui.button(tr!("丢弃快照")).clicked() {
                                 discard = Some((index, entry.path.clone()));
                             }
                         });
@@ -1071,7 +1091,7 @@ impl MapView {
         if self.workbench.playtest {
             theme::window(
                 ctx,
-                "VERA20k 试玩设置",
+                tr!("VERA20k 试玩设置"),
                 "playtest-settings",
                 egui::vec2(520., 600.),
             )
@@ -1083,7 +1103,7 @@ impl MapView {
                 if draft {
                     ui.colored_label(
                         theme::ACCENT,
-                        "请先完成或取消任务与光照输入；尺寸修改需应用或放弃。",
+                        tr!("请先完成或取消任务与光照输入；尺寸修改需应用或放弃。"),
                     );
                 }
                 ui.add_enabled_ui(!draft, |ui| self.editor.playtest_controls(ui));

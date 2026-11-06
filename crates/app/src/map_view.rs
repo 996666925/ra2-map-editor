@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use crate::{
     map::MapScene,
     map_loader::{LoadTimings, MapCreation, MapLoader},
@@ -142,7 +143,7 @@ impl MapView {
             return;
         }
         if self.editor.doc.is_none() {
-            self.status = "请先打开或新建地图。".into();
+            self.status = tr!("请先打开或新建地图。").into();
             return;
         }
         self.loader.invalidate_resources();
@@ -150,7 +151,7 @@ impl MapView {
         self.editor.directory = directory;
         self.editor.structural_refresh = true;
         self.editor.refresh = true;
-        self.status = "正在刷新资源；地图修改与历史保留。".into();
+        self.status = tr!("正在刷新资源；地图修改与历史保留。").into();
     }
     pub fn create(&mut self, directory: PathBuf, options: crate::new_map::NewMapOptions) {
         self.create_map(directory, MapCreation::Blank(options));
@@ -201,7 +202,7 @@ impl MapView {
         self.verified = false;
         self.screenshot_requested = false;
         self.started = Instant::now();
-        self.stage = "等待读取地图…";
+        self.stage = tr!("等待读取地图…");
         self.timings = Default::default();
         self.loading_ticks = 0;
         self.last_loading_tick = None;
@@ -228,8 +229,8 @@ impl MapView {
             self.generation += 1;
             self.loader.cancel(self.generation);
             self.loading = false;
-            self.stage = "已取消加载";
-            self.status = "已取消；编辑数据仍保留，可刷新资源重新加载预览。".into();
+            self.stage = tr!("已取消加载");
+            self.status = tr!("已取消；编辑数据仍保留，可刷新资源重新加载预览。").into();
         }
         self.editor.poll(ctx);
         if let Some(scene) = &self.scene {
@@ -308,7 +309,7 @@ impl MapView {
             self.editor.refresh = false;
             self.generation += 1;
             self.loading = true;
-            self.stage = "更新编辑预览…";
+            self.stage = tr!("更新编辑预览…");
             self.error = None;
             // Keep drawing the published scene while the worker prepares its
             // replacement. The worker never mutates callback-bound buffers.
@@ -379,7 +380,10 @@ impl MapView {
                             self.gpu = Some(gpu);
                         }
                         Some(Err(e)) => {
-                            self.error = Some(format!("地形上传失败；原文仍可导出：{e:#}"));
+                            self.error = Some(tr!(
+                                "地形上传失败；原文仍可导出：{e}",
+                                e = format!("{:#}", e)
+                            ));
                             continue;
                         }
                         None => {
@@ -395,9 +399,9 @@ impl MapView {
                                 scene.source.bytes(),
                             ) && let Some(random) = ini.section("RandomMap")
                             {
-                                self.editor.status = format!(
-                                    "已生成随机地图，种子 {}；Ctrl+S 选择保存位置。",
-                                    random.read_int("Seed", 0)
+                                self.editor.status = tr!(
+                                    "已生成随机地图，种子 {arg0}；Ctrl+S 选择保存位置。",
+                                    arg0 = random.read_int("Seed", 0)
                                 );
                             }
                         }
@@ -459,9 +463,9 @@ impl MapView {
                     ui.add_space(14.);
                     ui.label(
                         egui::RichText::new(if self.loading {
-                            "正在准备地图"
+                            tr!("正在准备地图")
                         } else {
-                            "开始编辑你的战场"
+                            tr!("开始编辑你的战场")
                         })
                         .size(21.)
                         .strong(),
@@ -470,7 +474,7 @@ impl MapView {
                         egui::RichText::new(if self.loading {
                             self.stage
                         } else {
-                            "新建空白地图，或打开现有地图继续编辑。"
+                            tr!("新建空白地图，或打开现有地图继续编辑。")
                         })
                         .color(theme::MUTED),
                     );
@@ -478,17 +482,17 @@ impl MapView {
                     if self.loading {
                         ui.spinner();
                     } else {
-                        if ui.button("新建地图…").clicked() {
+                        if ui.button(tr!("新建地图…")).clicked() {
                             self.show_new_map();
                         }
-                        if ui.button("新建随机地图…").clicked() {
+                        if ui.button(tr!("新建随机地图…")).clicked() {
                             self.show_random_map();
                         }
-                        if ui.button("选择资源与地图…").clicked() {
+                        if ui.button(tr!("选择资源与地图…")).clicked() {
                             self.show_project_settings();
                         }
                     }
-                    ui.small("也可以将 .map / .yrm 文件拖到窗口中");
+                    ui.small(tr!("也可以将 .map / .yrm 文件拖到窗口中"));
                 },
             );
             return;
@@ -511,7 +515,9 @@ impl MapView {
         let mut framework = self.editor.framework;
         if scene.images.is_empty() {
             ui.centered_and_justified(|ui| {
-                ui.label("当前地图暂无可预览的地形，请查看左侧诊断；可继续查看地图头并导出原文。");
+                ui.label(tr!(
+                    "当前地图暂无可预览的地形，请查看左侧诊断；可继续查看地图头并导出原文。"
+                ));
             });
             return;
         }
@@ -522,11 +528,11 @@ impl MapView {
                 ui.horizontal(|ui| {
                     if ui.available_width() > 600. { theme::badge(ui, &scene.source.header.theater, theme::BLUE); }
                     ui.add_enabled_ui(editing && !self.editor.stroking, |ui| {
-                        if ui.toggle_value(&mut framework, "框架")
-                            .on_hover_text("Ctrl+F：框架模式，简化悬崖与坡道外观；开启时关闭 2D 地形。")
+                        if ui.toggle_value(&mut framework, tr!("框架"))
+                            .on_hover_text(tr!("Ctrl+F：框架模式，简化悬崖与坡道外观；开启时关闭 2D 地形。"))
                             .changed() && framework { flat = false; }
-                        if ui.toggle_value(&mut flat, "2D 地形")
-                            .on_hover_text("F2：铺平地形以对齐悬崖；开启时关闭框架。对象与区域工具使用立体视图。")
+                        if ui.toggle_value(&mut flat, tr!("2D 地形"))
+                            .on_hover_text(tr!("F2：铺平地形以对齐悬崖；开启时关闭框架。对象与区域工具使用立体视图。"))
                             .changed() && flat { framework = false; }
                     });
                     if ui.available_width() > 240. {
@@ -534,7 +540,7 @@ impl MapView {
                             [ui.available_width() - 195., 20.],
                             egui::Label::new(
                                 egui::RichText::new(if scene.source.title.is_empty() {
-                                    "地图视图"
+                                    tr!("地图视图")
                                 } else {
                                     &scene.source.title
                                 })
@@ -545,7 +551,7 @@ impl MapView {
                         );
                     }
                     crate::ui_theme::right_to_left(ui, |ui| {
-                        if ui.button("适应地图").clicked() {
+                        if ui.button(tr!("适应地图")).clicked() {
                             self.fit = true;
                         }
                         if ui.button("1:1").clicked() {
@@ -802,18 +808,18 @@ impl MapView {
                 painter.text(
                     rect.left_bottom() + egui::vec2(12., -12.),
                     egui::Align2::LEFT_BOTTOM,
-                    format!(
-                        "2D · {}, {} · 高度 {} · 模板 {}:{}",
-                        at[0],
-                        at[1],
-                        v.level as i8,
-                        scene
+                    tr!(
+                        "2D · {arg0}, {arg1} · 高度 {arg2} · 模板 {arg3}:{arg4}",
+                        arg0 = at[0],
+                        arg1 = at[1],
+                        arg2 = v.level as i8,
+                        arg3 = scene
                             .palette
                             .raw_ids
                             .get(&v.tile)
                             .copied()
                             .map_or(v.tile, i32::from),
-                        v.sub
+                        arg4 = v.sub
                     ),
                     egui::FontId::monospace(12.),
                     egui::Color32::WHITE,
@@ -849,7 +855,7 @@ impl MapView {
         if task_hit.is_some() {
             response
                 .clone()
-                .on_hover_text("Ctrl+单击任务标记，打开对应标签或格子触发点。");
+                .on_hover_text(tr!("Ctrl+单击任务标记，打开对应标签或格子触发点。"));
         }
         let task_navigation = !self.workbench.mission.picking()
             && editing
@@ -955,26 +961,29 @@ impl MapView {
         let mut choice = 0;
         let modal = crate::ui_theme::modal(ctx, "unsaved-map", |ui| {
             ui.set_width(420.0_f32.min(ctx.content_rect().width() - 64.));
-            ui.heading("地图有未保存的修改");
-            ui.label("保存当前地图后继续，或丢弃本次修改。");
+            ui.heading(tr!("地图有未保存的修改"));
+            ui.label(tr!("保存当前地图后继续，或丢弃本次修改。"));
             if !self.editor.status.is_empty() {
                 ui.add(egui::Label::new(&self.editor.status).wrap());
             }
             ui.separator();
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add_enabled(!self.editor.saving, crate::ui_theme::primary("保存并继续"))
+                    .add_enabled(
+                        !self.editor.saving,
+                        crate::ui_theme::primary(tr!("保存并继续")),
+                    )
                     .clicked()
                 {
                     choice = 1;
                 }
                 if ui
-                    .add_enabled(!self.editor.saving, egui::Button::new("丢弃修改"))
+                    .add_enabled(!self.editor.saving, egui::Button::new(tr!("丢弃修改")))
                     .clicked()
                 {
                     choice = 2;
                 }
-                if ui.button("取消").clicked() {
+                if ui.button(tr!("取消")).clicked() {
                     choice = 3;
                 }
             });

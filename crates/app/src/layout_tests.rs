@@ -955,6 +955,70 @@ fn information_rows_do_not_consume_the_panel_height() {
 }
 
 #[test]
+fn language_settings_switch_both_ways_without_changing_map_or_draft() {
+    use crate::i18n::{self, Language};
+    let (mut view, root) = view();
+    let scene = terrain_scene();
+    view.editor.attach(&scene);
+    view.scene = Some(scene);
+    let before = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    let state = view.editor.doc.as_ref().unwrap().state_id;
+    let mut draft = "Name 地图 {language}".to_owned();
+    let mut harness = crate::test_support::harness()
+        .with_context_setup(setup)
+        .with_size([1280., 800.])
+        .build_ui(|ui| {
+            let _language = i18n::enter(i18n::selected(ui.ctx()));
+            ui.horizontal(|ui| view.toolbar(ui, "D:/YR"));
+            ui.add(egui::TextEdit::singleline(&mut draft).id_salt("language-draft"))
+                .accessible_name(i18n::tr!("地图名称"));
+        });
+    harness.get_by_label("文件");
+    harness.get_by_label("设置").click();
+    harness.run();
+    harness.get_by_label("语言 / Language").hover();
+    harness.run();
+    harness.get_by_label("English").click();
+    harness.run();
+    assert_eq!(i18n::selected(&harness.ctx), Language::English);
+    harness.get_by_label("File");
+    assert_eq!(
+        harness.get_by_label("Map name").value().as_deref(),
+        Some("Name 地图 {language}")
+    );
+    harness.get_by_label("Settings").click();
+    harness.run();
+    harness.get_by_label("Language / 语言").hover();
+    harness.run();
+    harness.get_by_label("简体中文").click();
+    harness.run();
+    assert_eq!(i18n::selected(&harness.ctx), Language::Chinese);
+    harness.get_by_label("文件");
+    drop(harness);
+    assert_eq!(draft, "Name 地图 {language}");
+    assert_eq!(view.editor.doc.as_ref().unwrap().state_id, state);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn map_settings_tabs_stay_inside_the_viewport_without_document_writes() {
     let (mut editor, _ctx, root) = crate::editing::tests::editor();
     let scene = terrain_scene();
@@ -996,7 +1060,12 @@ fn all_workbench_panel_layouts_fit_desktop_and_compact_viewports() {
     use crate::editing::Tool;
     use ra2_map_document::mission::{self, Kind};
 
-    for (name, panel) in panels() {
+    for (language, name, panel) in crate::i18n::LANGUAGES.iter().flat_map(|info| {
+        panels()
+            .into_iter()
+            .map(move |(name, panel)| (info.language, name, panel))
+    }) {
+        let _language = crate::i18n::enter(language);
         let (mut view, root) = view();
         let scene = terrain_scene();
         view.editor.attach(&scene);
@@ -1123,7 +1192,7 @@ fn all_workbench_panel_layouts_fit_desktop_and_compact_viewports() {
                 harness
                     .render()
                     .unwrap()
-                    .save(output.join(format!("{name}-{}.png", size[0])))
+                    .save(output.join(format!("{language:?}-{name}-{}.png", size[0])))
                     .unwrap();
             }
         }
