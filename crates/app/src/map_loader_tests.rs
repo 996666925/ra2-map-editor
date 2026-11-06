@@ -163,3 +163,79 @@ fn superseded_worker_does_not_publish_a_stale_load() {
         "old generation must not be published"
     );
 }
+
+#[test]
+fn terrain_refreshes_reuse_worker_resources_and_rebuild_geometry_across_history() {
+    use ra2_map_document::{
+        document::{MapDocument, Target, TerrainValue, Value},
+        lighting::Profile,
+        new_map::NewMapOptions,
+    };
+    let fixture = crate::test_support::map_loader_fixture();
+    let path = fixture.0.join("terrain-worker.map");
+    std::fs::write(
+        &path,
+        NewMapOptions {
+            width: 20,
+            height: 20,
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap(),
+    )
+    .unwrap();
+    let name = path.to_string_lossy().into_owned();
+    let loader = MapLoader::new(egui::Context::default()).unwrap();
+    loader.request(1, fixture.0.clone(), name.clone()).unwrap();
+    let initial = loader
+        .results
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap()
+        .result
+        .unwrap();
+    let mut doc = MapDocument::new(initial.source.edit_base.as_ref().unwrap().clone());
+    let value = doc.terrain([20, 20]).unwrap();
+    doc.set(
+        Target::Terrain([20, 20]),
+        Some(Value::Terrain(TerrainValue { level: 4, ..value })),
+    )
+    .unwrap();
+    doc.commit("height");
+    for generation in 2..=4 {
+        if generation == 3 {
+            assert!(doc.undo());
+        }
+        if generation == 4 {
+            assert!(doc.redo());
+        }
+        loader
+            .preview_profile(
+                generation,
+                fixture.0.clone(),
+                name.clone(),
+                doc.snapshot(),
+                Profile::Normal,
+            )
+            .unwrap();
+        let result = loader
+            .results
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap();
+        assert_eq!(result.preview, Some((doc.id, doc.state_id)));
+        assert!(result.timings.incremental_scene);
+        assert!(!result.timings.visual_reused);
+        let scene = result.result.unwrap();
+        assert!(Arc::ptr_eq(&scene.catalog, &initial.catalog));
+        assert!(Arc::ptr_eq(&scene.sprites, &initial.sprites));
+        assert!(!scene.resolved_terrain_is_shared(&initial));
+        assert_eq!(
+            scene
+                .cells
+                .iter()
+                .find(|c| [c.rx, c.ry] == [20, 20])
+                .unwrap()
+                .z,
+            if generation == 3 { value.level } else { 4 }
+        );
+    }
+}

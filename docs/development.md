@@ -96,6 +96,12 @@ cargo run --locked -p ra2-map-render --example framework_gpu_audit -- 'D:/Games/
 
 审计检查框架材质的透明覆盖和几何、视图切换不修改地图，以及框架、光照和换色组合的 CPU / GPU 一致性。本机有 `marble.mix` 时也会报告各环境兼容的 FA2 原生框架模板数量。
 
+悬崖编辑刷新审计对比 80×80、256×256 地图的缓存更新与完整重载耗时，覆盖放置、撤销和重做，并检查普通 / 框架像素、地形升高后的单位位置及旧 GPU 场景仍可使用。报告中的耗时包含场景构建和 GPU 准备，不包含 UI 调度及屏幕呈现：
+
+```powershell
+cargo run --locked -p ra2-map-render --example cliff_refresh_audit -- 'D:/Games/YR' target/cliff-refresh-audit
+```
+
 体素适配直接编译固定版本引擎的 GPU 光栅器和 WGSL，在资源线程按最多 32 个朝向批量生成静态图，每批只提交、读回一次，供预览、拾取与地图图集共享。`UseBuffer` 等上游不支持的 GPU 路径直接复用 CPU 结果；车体、炮塔、炮管相交合成需要几何深度，因此整体走一次 CPU 路径，避免 GPU 绘制后再完整执行 CPU 光栅化。
 
 使用真实资源验证 GPU 的 32 朝向像素、合成深度和 CPU 回退（测试会要求实际 GPU 执行，不能以回退代替）：

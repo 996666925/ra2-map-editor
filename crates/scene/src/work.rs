@@ -16,7 +16,8 @@ pub fn checkpoint(cancelled: &dyn Fn() -> bool) -> Result<()> {
 }
 
 /// Known mission fields retain the complete visual scene. Record edits retain
-/// resolved terrain/materials; unknown INI, terrain and overlay edits fall back.
+/// resolved terrain/materials. Terrain edits reuse installation materials;
+/// unknown INI and mixed terrain/INI edits fall back to a full load.
 pub fn update_records(
     old: &MapScene,
     before: &Snapshot,
@@ -36,16 +37,23 @@ pub fn update_records(
         return Ok(None);
     };
     let targets: Vec<_> = targets.collect();
-    if targets
+    let terrain_changed = targets
         .iter()
-        .any(|key| matches!(key, Target::Terrain(_) | Target::Overlay(_)))
+        .any(|key| matches!(key, Target::Terrain(_) | Target::Overlay(_)));
+    if terrain_changed
+        && targets.iter().any(|key| {
+            !matches!(
+                key,
+                Target::Terrain(_) | Target::Overlay(_) | Target::Record(_)
+            )
+        })
     {
         return Ok(None);
     }
     checkpoint(cancelled)?;
     let started = std::time::Instant::now();
     let bytes = after.bytes()?;
-    if targets.iter().any(|key| !matches!(key, Target::Record(_))) {
+    if !terrain_changed && targets.iter().any(|key| !matches!(key, Target::Record(_))) {
         let previous_ini = IniFile::from_bytes(old.source.bytes())?;
         let next_ini = IniFile::from_bytes(&bytes)?;
         let fields = crate::scene_changes::MissionFields::new(
@@ -63,17 +71,19 @@ pub fn update_records(
             return Ok(None);
         }
     }
-    let (source, _) = SourceMap::parse(old.source.name.clone(), "编辑快照".into(), bytes)?;
+    let (source, map) = SourceMap::parse(old.source.name.clone(), "编辑快照".into(), bytes)?;
     checkpoint(cancelled)?;
     let mut scene = old.clone();
     scene.source = source;
-    if targets.iter().any(|key| matches!(key, Target::Record(_))) {
+    if terrain_changed {
+        scene.rebuild_terrain(&map, install, profile, Some(old), cancelled)?;
+    } else if targets.iter().any(|key| matches!(key, Target::Record(_))) {
         scene.visual = Arc::new(crate::visual::VisualScene::build_cached(
             &scene,
             install,
             old.resolved.as_ref().unwrap(),
             profile,
-            Some(&old.visual),
+            Some(crate::visual::SceneReuse::Records(&old.visual)),
             cancelled,
         )?);
     }

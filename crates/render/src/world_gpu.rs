@@ -271,7 +271,7 @@ impl WorldGpu {
         queue: &wgpu::Queue,
         scene: &VisualScene,
     ) -> Option<Self> {
-        if scene.surfaces.len() != self.surfaces.len()
+        if scene.surfaces.len() < self.surfaces.len()
             || !scene
                 .surfaces
                 .iter()
@@ -280,10 +280,32 @@ impl WorldGpu {
         {
             return None;
         }
+        let mut pages = self.pages.clone();
+        let mut placements = self.placements.clone();
+        if scene.surfaces.len() > self.surfaces.len() {
+            // Append immutable pages for new cliff/object materials. Published
+            // scenes keep their original textures and atlas coordinates.
+            let mut additions = VisualScene::default();
+            additions
+                .surfaces
+                .extend_from_slice(&scene.surfaces[self.surfaces.len()..]);
+            let extra = Self::new(device, queue, &additions, self.pipelines.clone()).ok()?;
+            if pages.len() + extra.pages.len() > 32 {
+                return None; // The full path compacts all retained surfaces.
+            }
+            let offset = pages.len();
+            placements.extend(
+                extra
+                    .placements
+                    .iter()
+                    .map(|&(page, pos)| (page + offset, pos)),
+            );
+            pages.extend(extra.pages);
+        }
         let mut next = Vec::with_capacity(scene.draws.len());
         let mut batches = Vec::with_capacity(scene.draws.len());
         for d in &scene.draws {
-            let (page, atlas) = self.placements[d.surface];
+            let (page, atlas) = placements[d.surface];
             next.push(Instance {
                 position: d.position,
                 size: scene.surfaces[d.surface].size.map(|v| v as f32),
@@ -348,9 +370,9 @@ impl WorldGpu {
             uploaded_bytes,
             incremental: true,
             pipelines: self.pipelines.clone(),
-            pages: self.pages.clone(),
-            placements: self.placements.clone(),
-            surfaces: self.surfaces.clone(),
+            pages,
+            placements,
+            surfaces: scene.surfaces.clone(),
             instances,
             batches,
         })

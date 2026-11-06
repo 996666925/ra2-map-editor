@@ -193,6 +193,17 @@ impl TerrainGpu {
         scene: &MapScene,
         pipelines: &mut Option<Arc<TerrainPipelines>>,
     ) -> Result<Arc<Self>> {
+        Self::new_cached(device, queue, format, scene, pipelines, None)
+    }
+    /// Rebuild terrain buffers while retaining immutable world atlas materials.
+    pub fn new_cached(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        scene: &MapScene,
+        pipelines: &mut Option<Arc<TerrainPipelines>>,
+        previous: Option<&Self>,
+    ) -> Result<Arc<Self>> {
         let pipelines = pipelines
             .get_or_insert_with(|| Arc::new(TerrainPipelines::new(device, format)))
             .clone();
@@ -285,12 +296,18 @@ impl TerrainGpu {
             usage: wgpu::BufferUsages::STORAGE,
         });
         Ok(Arc::new(Self {
-            world: crate::world_gpu::WorldGpu::new(
-                device,
-                queue,
-                &scene.visual,
-                pipelines.world.clone(),
-            )?,
+            world: if let Some(world) =
+                previous.and_then(|old| old.world.updated(device, queue, &scene.visual))
+            {
+                world
+            } else {
+                crate::world_gpu::WorldGpu::new(
+                    device,
+                    queue,
+                    &scene.visual,
+                    pipelines.world.clone(),
+                )?
+            },
             pipelines,
             atlas,
             zatlas,

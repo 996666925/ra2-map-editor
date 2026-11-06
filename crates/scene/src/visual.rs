@@ -113,6 +113,11 @@ pub struct VisualScene {
     pub dirty_chunks: usize,
     pub reused_surfaces: usize,
 }
+/// Terrain changes retain materials but rebuild heights, lighting and draws.
+pub(crate) enum SceneReuse<'a> {
+    Records(&'a VisualScene),
+    Terrain(&'a VisualScene),
+}
 impl VisualScene {
     pub fn build(
         scene: &MapScene,
@@ -135,17 +140,21 @@ impl VisualScene {
         Self::build_cached(scene, install, resolved, profile, None, &|| false)
             .expect("uncancelled scene build")
     }
-    /// `previous` requires identical terrain, visual INI, resources and lighting
-    /// profile, enforced by work::update_records. Mission-only INI may differ.
+    /// Reuse requires identical visual INI, resources and lighting profile.
+    /// Terrain reuse rebuilds lighting and all draws, including unchanged records.
     pub(crate) fn build_cached(
         scene: &MapScene,
         install: &Install,
         resolved: &vera20k_core::map::resolved_terrain::ResolvedTerrainGrid,
         profile: ra2_map_document::lighting::Profile,
-        previous: Option<&Self>,
+        previous: Option<SceneReuse<'_>>,
         cancelled: &dyn Fn() -> bool,
     ) -> anyhow::Result<Self> {
         crate::work::checkpoint(cancelled)?;
+        let terrain_changed = matches!(previous, Some(SceneReuse::Terrain(_)));
+        let previous = previous.map(|reuse| match reuse {
+            SceneReuse::Records(old) | SceneReuse::Terrain(old) => old,
+        });
         // Bound retained materials. A changed resource/catalog owner never calls
         // this with an old cache; unused historical materials are periodically dropped.
         let previous =
@@ -161,22 +170,25 @@ impl VisualScene {
             out.reused_surfaces = out.surfaces.len();
         }
         let ini = IniFile::from_bytes(scene.source.bytes()).unwrap_or_else(|_| IniFile::empty());
-        let light = previous.and_then(|s| s.light.clone()).unwrap_or_else(|| {
-            Arc::new(
-                lighting::build_cell_light_grid_from_heights_and_units_with_detail(
-                    scene.cells.iter().map(|c| ((c.rx, c.ry), c.z)),
-                    profile.units(&ini),
-                    2,
-                ),
-            )
-        });
+        let light = previous
+            .filter(|_| !terrain_changed)
+            .and_then(|s| s.light.clone())
+            .unwrap_or_else(|| {
+                Arc::new(
+                    lighting::build_cell_light_grid_from_heights_and_units_with_detail(
+                        scene.cells.iter().map(|c| ((c.rx, c.ry), c.z)),
+                        profile.units(&ini),
+                        2,
+                    ),
+                )
+            });
         out.light = Some(light.clone());
         let schemes = color_scheme::parse_color_schemes(&scene.catalog.rules);
         let mut tiles = std::mem::take(&mut out.terrain_cache);
-        if let Some(old) = previous {
+        if let Some(old) = previous.filter(|_| !terrain_changed) {
             out.draws.extend_from_slice(&old.draws[..old.static_draws]);
         }
-        if previous.is_none() {
+        if previous.is_none() || terrain_changed {
             for (cell_index, cell) in scene.cells.iter().enumerate() {
                 if cell_index % 256 == 0 {
                     crate::work::checkpoint(cancelled)?;
@@ -225,7 +237,7 @@ impl VisualScene {
         let cell_map: HashMap<_, _> = scene.cells.iter().map(|c| ([c.rx, c.ry], c)).collect();
         out.terrain_cache = tiles;
         let mut cache = std::mem::take(&mut out.surface_cache);
-        if previous.is_none() {
+        if previous.is_none() || terrain_changed {
             for cell in &scene.cells {
                 let (id, state) = doc.overlay([cell.rx, cell.ry]);
                 let Some(name) = scene
@@ -313,6 +325,7 @@ impl VisualScene {
                 let id = *id;
                 let start = out.draws.len();
                 if let Some((_, ranges)) = previous
+                    .filter(|_| !terrain_changed)
                     .and_then(|old| old.records.get(&id))
                     .filter(|(record, _)| record == r)
                 {

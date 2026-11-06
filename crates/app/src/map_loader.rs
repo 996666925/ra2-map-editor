@@ -154,11 +154,11 @@ impl MapLoader {
                         }
                         stage("准备地形图集与 GPU 管线…");
                         let preparing = Instant::now();
-                        let updated = previous_gpu.as_ref().filter(|_|timings.incremental_scene).and_then(|gpu|gpu.updated_records(&state.device,&state.queue,scene));
+                        let updated = previous_gpu.as_ref().filter(|_|timings.incremental_scene && previous.as_ref().is_some_and(|(old,_,_)| old.resolved_terrain_is_shared(scene))).and_then(|gpu|gpu.updated_records(&state.device,&state.queue,scene));
                         let prepared = if let Some(gpu)=updated {
                             timings.incremental_gpu=true; Ok(gpu)
-                        } else { TerrainGpu::new(&state.device,&state.queue,state.target_format,scene,&mut pipelines) };
-                        if let Ok(gpu)=&prepared {timings.uploaded_instance_bytes=gpu.update_stats()["uploaded_instance_bytes"].as_u64().unwrap_or(0) as usize;}
+                        } else { TerrainGpu::new_cached(&state.device,&state.queue,state.target_format,scene,&mut pipelines,previous_gpu.as_deref().filter(|_|timings.incremental_scene)) };
+                        if let Ok(gpu)=&prepared {timings.incremental_gpu |= gpu.update_stats()["incremental"].as_bool().unwrap_or(false); timings.uploaded_instance_bytes=gpu.update_stats()["uploaded_instance_bytes"].as_u64().unwrap_or(0) as usize;}
                         // Flush staging on this worker instead of deferring all
                         // allocations/copies to the first UI render submission.
                         state.queue.submit([]);

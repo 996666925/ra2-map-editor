@@ -46,6 +46,13 @@ pub struct MapScene {
     buckets: HashMap<(i32, i32), Vec<usize>>,
 }
 impl MapScene {
+    /// Legacy terrain GPU buffers can only be retained with unchanged geometry.
+    pub fn resolved_terrain_is_shared(&self, other: &Self) -> bool {
+        self.resolved
+            .as_ref()
+            .zip(other.resolved.as_ref())
+            .is_some_and(|(a, b)| Arc::ptr_eq(a, b))
+    }
     pub fn key(cell: &TerrainCell) -> TileKey {
         TileKey {
             tile_id: cell.tile_id,
@@ -318,140 +325,7 @@ pub fn load_scene_bytes_controlled(
         }
     }
     let sprites = install.sprite_palette(&catalog);
-    for cell in &map.cells {
-        if !playfield::size_diamond_contains(
-            map.header.width as i32,
-            map.header.height as i32,
-            (cell.rx as i16, cell.ry as i16),
-        ) && diagnostics
-            .iter()
-            .filter(|d| d.code == "OUTSIDE_SIZE")
-            .count()
-            < 16
-        {
-            diagnostics.push(Diagnostic {
-                code: "OUTSIDE_SIZE",
-                message: "原文格子在 Size 菱形之外，浏览器不显示；保存仍保留。".into(),
-                cell: Some([cell.rx, cell.ry]),
-            });
-        }
-    }
-    let mut selector_cache =
-        vera20k_core::map::tile_variant_selector::TileVariantSelectorCache::default();
-    let mut rng = vera20k_core::sim::rng::SimRng::new(0);
-    let mut random = || rng.next_u32();
-    let mut fill = |low, _high| low;
-    let mut selector = selector_cache.begin_load(&mut random);
-    let resolved = ResolvedTerrainGrid::build_with_variant_selector(
-        &map,
-        Some(&install.theater),
-        Some(&install.manager),
-        None,
-        None,
-        None,
-        false,
-        0,
-        &mut fill,
-        &mut selector,
-    );
-    crate::work::checkpoint(cancelled)?;
-    let mut grid = terrain::build_terrain_grid_from_resolved(&resolved, None);
-    grid.cells.retain(|c| {
-        playfield::size_diamond_contains(
-            map.header.width as i32,
-            map.header.height as i32,
-            (c.rx as i16, c.ry as i16),
-        )
-    });
-    let mut needed: HashSet<_> = grid.cells.iter().map(MapScene::key).collect();
-    needed.extend(install.catalog.defaults.iter().copied());
-    // Diagnose authored choices before core's ClearTile fallback hides them.
-    // Raw -1 must cross LastTilesInSet translation before sentinel admission.
-    let mut authored = HashMap::new();
-    let mut invalid_ids = HashSet::new();
-    for cell in &map.cells {
-        let tile = install
-            .theater
-            .lookup
-            .translate_legacy_map_tile_index(cell.tile_index);
-        if tile == -1 || tile == 0xFFFF {
-            continue;
-        }
-        if tile < 0 || tile as usize >= install.theater.lookup.len() {
-            if invalid_ids.len() < 16 && invalid_ids.insert(tile) {
-                diagnostics.push(Diagnostic {code:"INVALID_TILE_ID",message:format!("原文地形索引 {} 翻译为 {tile}，超出 theater 范围；显示 core 的 ClearTile 替代。",cell.tile_index),cell:Some([cell.rx,cell.ry])});
-            }
-            continue;
-        }
-        authored
-            .entry(TileKey {
-                tile_id: tile as u16,
-                sub_tile: cell.sub_tile,
-                variant: 0,
-            })
-            .or_insert([cell.rx, cell.ry]);
-    }
-    let all_needed = needed
-        .union(&authored.keys().copied().collect())
-        .copied()
-        .collect();
-    let mut images = theater::load_tile_images(
-        &install.manager,
-        &install.theater.lookup,
-        &install.theater.iso_palette,
-        &all_needed,
-    );
-    for key in all_needed
-        .iter()
-        .filter(|key| !images.contains_key(key))
-        .take(64)
-    {
-        diagnostics.push(Diagnostic {
-            code: "MISSING_TILE",
-            message: format!(
-                "未解码地形 {}:{} variant={} ({})",
-                key.tile_id,
-                key.sub_tile,
-                key.variant,
-                install
-                    .theater
-                    .lookup
-                    .filename(i32::from(key.tile_id))
-                    .unwrap_or("无文件名")
-            ),
-            cell: authored.get(key).copied().or_else(|| {
-                grid.cells
-                    .iter()
-                    .find(|c| MapScene::key(c) == *key)
-                    .map(|c| [c.rx, c.ry])
-            }),
-        });
-    }
-    images.retain(|key, _| needed.contains(key));
-    let mut bounds = egui::Rect::NOTHING;
-    for c in &grid.cells {
-        if let Some(image) = images.get(&MapScene::key(c)) {
-            bounds = bounds.union(egui::Rect::from_min_size(
-                egui::pos2(
-                    c.screen_x + image.offset_x as f32,
-                    c.screen_y + image.offset_y as f32,
-                ),
-                egui::vec2(image.width as f32, image.height as f32),
-            ));
-        }
-    }
-    if !bounds.is_finite() {
-        diagnostics.push(Diagnostic {
-            code: "NO_RENDERABLE_TERRAIN",
-            message: "地图没有可显示的 TMP 地形，请检查资源目录；仍可导出原文。".into(),
-            cell: None,
-        });
-        bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(60., 30.));
-    }
-    // The material library belongs to the installation, not the current map's
-    // atlas. A blank map must also offer roads, cliffs and all other subtiles.
     let palette = install.terrain_palette();
-    let brushes = palette.brushes.clone();
     let mut scene = MapScene {
         resolved: None,
         revision: install.revision.clone(),
@@ -459,24 +333,210 @@ pub fn load_scene_bytes_controlled(
         mission_definitions: Arc::new(crate::mission_catalog::load(install)),
         visual: Default::default(),
         source,
-        cells: grid.cells,
-        images: Arc::new(images),
-        bounds,
+        cells: vec![],
+        images: Default::default(),
+        bounds: egui::Rect::NOTHING,
         diagnostics,
-        elapsed_ms: started.elapsed().as_millis(),
+        elapsed_ms: 0,
         playfield,
         buckets: HashMap::new(),
         catalog,
         sprites,
-        brushes,
+        brushes: palette.brushes.clone(),
         palette,
     };
-    scene.index_pixels();
-    scene.visual = Arc::new(crate::visual::VisualScene::build_cached(
-        &scene, install, &resolved, profile, None, cancelled,
-    )?);
-    scene.resolved = Some(Arc::new(resolved));
+    scene.rebuild_terrain(&map, install, profile, None, cancelled)?;
+    scene.elapsed_ms = started.elapsed().as_millis();
     Ok(scene)
+}
+
+impl MapScene {
+    pub(crate) fn rebuild_terrain(
+        &mut self,
+        map: &vera20k_core::map::map_file::MapFile,
+        install: &Install,
+        profile: ra2_map_document::lighting::Profile,
+        previous: Option<&Self>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<()> {
+        self.diagnostics.retain(|d| {
+            !matches!(
+                d.code,
+                "OUTSIDE_SIZE" | "INVALID_TILE_ID" | "MISSING_TILE" | "NO_RENDERABLE_TERRAIN"
+            )
+        });
+        for cell in &map.cells {
+            if !playfield::size_diamond_contains(
+                map.header.width as i32,
+                map.header.height as i32,
+                (cell.rx as i16, cell.ry as i16),
+            ) && self
+                .diagnostics
+                .iter()
+                .filter(|d| d.code == "OUTSIDE_SIZE")
+                .count()
+                < 16
+            {
+                self.diagnostics.push(Diagnostic {
+                    code: "OUTSIDE_SIZE",
+                    message: "原文格子在 Size 菱形之外，浏览器不显示；保存仍保留。".into(),
+                    cell: Some([cell.rx, cell.ry]),
+                });
+            }
+        }
+        let mut selector_cache =
+            vera20k_core::map::tile_variant_selector::TileVariantSelectorCache::default();
+        let mut rng = vera20k_core::sim::rng::SimRng::new(0);
+        let mut random = || rng.next_u32();
+        let mut fill = |low, _high| low;
+        let mut selector = selector_cache.begin_load(&mut random);
+        let resolved = ResolvedTerrainGrid::build_with_variant_selector(
+            map,
+            Some(&install.theater),
+            Some(&install.manager),
+            None,
+            None,
+            None,
+            false,
+            0,
+            &mut fill,
+            &mut selector,
+        );
+        crate::work::checkpoint(cancelled)?;
+        let mut grid = terrain::build_terrain_grid_from_resolved(&resolved, None);
+        grid.cells.retain(|c| {
+            playfield::size_diamond_contains(
+                map.header.width as i32,
+                map.header.height as i32,
+                (c.rx as i16, c.ry as i16),
+            )
+        });
+        let mut needed: HashSet<_> = grid.cells.iter().map(MapScene::key).collect();
+        needed.extend(install.catalog.defaults.iter().copied());
+        // Diagnose authored choices before core's ClearTile fallback hides them.
+        // Raw -1 must cross LastTilesInSet translation before sentinel admission.
+        let mut authored = HashMap::new();
+        let mut invalid_ids = HashSet::new();
+        for cell in &map.cells {
+            let tile = install
+                .theater
+                .lookup
+                .translate_legacy_map_tile_index(cell.tile_index);
+            if tile == -1 || tile == 0xFFFF {
+                continue;
+            }
+            if tile < 0 || tile as usize >= install.theater.lookup.len() {
+                if invalid_ids.len() < 16 && invalid_ids.insert(tile) {
+                    self.diagnostics.push(Diagnostic {code:"INVALID_TILE_ID",message:format!("原文地形索引 {} 翻译为 {tile}，超出 theater 范围；显示 core 的 ClearTile 替代。",cell.tile_index),cell:Some([cell.rx,cell.ry])});
+                }
+                continue;
+            }
+            authored
+                .entry(TileKey {
+                    tile_id: tile as u16,
+                    sub_tile: cell.sub_tile,
+                    variant: 0,
+                })
+                .or_insert([cell.rx, cell.ry]);
+        }
+        let all_needed: HashSet<_> = needed
+            .union(&authored.keys().copied().collect())
+            .copied()
+            .collect();
+        let missing = all_needed
+            .iter()
+            .filter(|key| !previous.is_some_and(|old| old.images.contains_key(key)))
+            .copied()
+            .collect();
+        let mut images = theater::load_tile_images(
+            &install.manager,
+            &install.theater.lookup,
+            &install.theater.iso_palette,
+            &missing,
+        );
+        if let Some(old) = previous {
+            images.extend(
+                old.images
+                    .iter()
+                    .filter(|(key, _)| all_needed.contains(key))
+                    .map(|(&key, image)| {
+                        (
+                            key,
+                            TileImage {
+                                rgba: image.rgba.clone(),
+                                depth: image.depth.clone(),
+                                width: image.width,
+                                height: image.height,
+                                offset_x: image.offset_x,
+                                offset_y: image.offset_y,
+                            },
+                        )
+                    }),
+            );
+        }
+        for key in all_needed
+            .iter()
+            .filter(|key| !images.contains_key(key))
+            .take(64)
+        {
+            self.diagnostics.push(Diagnostic {
+                code: "MISSING_TILE",
+                message: format!(
+                    "未解码地形 {}:{} variant={} ({})",
+                    key.tile_id,
+                    key.sub_tile,
+                    key.variant,
+                    install
+                        .theater
+                        .lookup
+                        .filename(i32::from(key.tile_id))
+                        .unwrap_or("无文件名")
+                ),
+                cell: authored.get(key).copied().or_else(|| {
+                    grid.cells
+                        .iter()
+                        .find(|c| MapScene::key(c) == *key)
+                        .map(|c| [c.rx, c.ry])
+                }),
+            });
+        }
+        images.retain(|key, _| needed.contains(key));
+        let images = Arc::new(images);
+        let mut bounds = egui::Rect::NOTHING;
+        for c in &grid.cells {
+            if let Some(image) = images.get(&MapScene::key(c)) {
+                bounds = bounds.union(egui::Rect::from_min_size(
+                    egui::pos2(
+                        c.screen_x + image.offset_x as f32,
+                        c.screen_y + image.offset_y as f32,
+                    ),
+                    egui::vec2(image.width as f32, image.height as f32),
+                ));
+            }
+        }
+        if !bounds.is_finite() {
+            self.diagnostics.push(Diagnostic {
+                code: "NO_RENDERABLE_TERRAIN",
+                message: "地图没有可显示的 TMP 地形，请检查资源目录；仍可导出原文。".into(),
+                cell: None,
+            });
+            bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(60., 30.));
+        }
+        self.cells = grid.cells;
+        self.images = images;
+        self.bounds = bounds;
+        self.index_pixels();
+        self.visual = Arc::new(crate::visual::VisualScene::build_cached(
+            self,
+            install,
+            &resolved,
+            profile,
+            previous.map(|old| crate::visual::SceneReuse::Terrain(&old.visual)),
+            cancelled,
+        )?);
+        self.resolved = Some(Arc::new(resolved));
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -8,7 +8,10 @@ use ra2_map_document::{
 use std::time::Instant;
 
 fn setup() -> (Fixture, Install, MapScene, MapDocument) {
-    let fixture = Fixture::new();
+    setup_with(Fixture::new())
+}
+
+fn setup_with(fixture: Fixture) -> (Fixture, Install, MapScene, MapDocument) {
     std::fs::write(fixture.0.join("rulesmd.ini"),
         b"[VehicleTypes]\n0=GI\n[GI]\nName=Test unit\n[Countries]\n0=Americans\n[Americans]\nColor=Gold\n[Colors]\nGold=25,255,255\n").unwrap();
     let mut install = fixture.install();
@@ -191,7 +194,7 @@ fn visual_unknown_and_mixed_changes_keep_the_full_refresh_path() {
             &|| false
         )
         .unwrap()
-        .is_none()
+        .is_some()
     );
     doc.cancel();
     doc.set(Target::Overlay([20, 20]), Some(Value::Overlay(1, 0)))
@@ -206,7 +209,7 @@ fn visual_unknown_and_mixed_changes_keep_the_full_refresh_path() {
             &|| false
         )
         .unwrap()
-        .is_none()
+        .is_some()
     );
     doc.cancel();
     assert!(
@@ -324,5 +327,142 @@ fn mission_and_object_edits_rebuild_objects_without_reusing_the_whole_visual() {
         full.visual
             .raster(scene.bounds, [80, 80], Default::default())
             .unwrap()
+    );
+}
+
+#[test]
+fn terrain_refresh_matches_full_load_through_cliff_history_and_object_heights() {
+    let (_fixture, mut install, initial, mut doc) = setup_with(Fixture::with_authoring());
+    let before = doc.snapshot();
+    // Low-level terrain edits can change the ground under an existing record.
+    // Generate the cliff footprint without the authoring tool's occupancy guard.
+    let mut planning = MapDocument::new(doc.base.clone());
+    let ids: Vec<_> = planning
+        .record_iter()
+        .filter(|(_, r)| r.section == "Units")
+        .map(|(id, _)| id)
+        .collect();
+    for id in ids {
+        planning.set(Target::Record(id), None).unwrap();
+    }
+    let plan = crate::cliff_authoring::reshape(
+        &planning,
+        &initial,
+        crate::cliff_tools::rectangle([17, 17], [24, 24]),
+        0,
+        false,
+    )
+    .unwrap();
+    assert!(!plan.cliffs.is_empty());
+    plan.apply(&mut doc).unwrap();
+    doc.commit("cliff");
+    let after = doc.snapshot();
+    let mut scene = initial.clone();
+    let mut previous = before;
+    for step in 0..4 {
+        if step == 1 {
+            assert!(doc.undo());
+        }
+        if step == 2 {
+            assert!(doc.redo());
+        }
+        if step == 3 {
+            doc.set(Target::Overlay([20, 20]), Some(Value::Overlay(1, 0)))
+                .unwrap();
+            let r = doc
+                .record_iter()
+                .find(|(_, r)| r.section == "Units")
+                .unwrap();
+            let (id, r) = (r.0, r.1.moved([21, 20]).unwrap());
+            doc.set(Target::Record(id), Some(Value::Record(r))).unwrap();
+            doc.commit("overlay and object");
+        }
+        let next = doc.snapshot();
+        let updated = update_records(&scene, &previous, &next, &install, Profile::Normal, &|| {
+            false
+        })
+        .unwrap()
+        .unwrap();
+        assert!(Arc::ptr_eq(&updated.catalog, &initial.catalog));
+        assert!(Arc::ptr_eq(&updated.sprites, &initial.sprites));
+        assert!(Arc::ptr_eq(
+            &updated.mission_definitions,
+            &initial.mission_definitions
+        ));
+        assert!(!updated.resolved_terrain_is_shared(&scene));
+        assert!(updated.visual.reused_surfaces > 0);
+        let full = crate::map::load_scene_bytes(
+            &mut install,
+            "test.map",
+            "full".into(),
+            next.bytes().unwrap(),
+            Instant::now(),
+        )
+        .unwrap();
+        assert_eq!(updated.bounds, full.bounds);
+        assert_eq!(updated.source.bytes(), full.source.bytes());
+        assert_eq!(updated.cells.len(), full.cells.len());
+        for (a, b) in updated.cells.iter().zip(&full.cells) {
+            assert_eq!(
+                (
+                    a.rx, a.ry, a.z, a.tile_id, a.sub_tile, a.variant, a.screen_x, a.screen_y
+                ),
+                (
+                    b.rx, b.ry, b.z, b.tile_id, b.sub_tile, b.variant, b.screen_x, b.screen_y
+                )
+            );
+            let point = egui::pos2(a.screen_x + 2., a.screen_y + 0.5);
+            assert_eq!(updated.pick(point), full.pick(point));
+        }
+        for options in [
+            crate::visual::ViewOptions::default(),
+            crate::visual::ViewOptions {
+                framework: true,
+                ..Default::default()
+            },
+            crate::visual::ViewOptions {
+                lighting: false,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                updated
+                    .visual
+                    .raster(full.bounds, [320, 320], options)
+                    .unwrap(),
+                full.visual
+                    .raster(full.bounds, [320, 320], options)
+                    .unwrap(),
+                "step {step}"
+            );
+        }
+        if step == 0 {
+            assert_eq!(updated.source.bytes(), after.bytes().unwrap());
+        }
+        scene = updated;
+        previous = next;
+    }
+    doc.set_ini("Lighting", "Ambient", Some(b"0.5".to_vec()))
+        .unwrap();
+    let v = doc.terrain([20, 20]).unwrap();
+    doc.set(
+        Target::Terrain([20, 20]),
+        Some(Value::Terrain(ra2_map_document::document::TerrainValue {
+            level: 1,
+            ..v
+        })),
+    )
+    .unwrap();
+    assert!(
+        update_records(
+            &scene,
+            &previous,
+            &doc.snapshot(),
+            &install,
+            Profile::Normal,
+            &|| false
+        )
+        .unwrap()
+        .is_none()
     );
 }
