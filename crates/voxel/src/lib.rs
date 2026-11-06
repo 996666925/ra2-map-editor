@@ -9,6 +9,22 @@
 #![cfg(not(test))]
 pub use vera20k_core::{assets, map, rules, sim, util};
 
+#[rustfmt::skip]
+#[allow(clippy::all)]
+#[path = "../../../vendor/vera20k/src/render/native_surface_format.rs"]
+mod native_surface_format;
+
+/// Packed surface operations used by the engine's traditional map preview.
+pub fn preview_pack(rgb: [u8; 3]) -> u16 {
+    native_surface_format::RGB565.pack_rgb8(rgb)
+}
+pub fn preview_unpack(word: u16) -> [u8; 3] {
+    native_surface_format::RGB565.unpack_rgb8(word)
+}
+pub fn preview_mix(first: u16, second: u16, amount: u32) -> u16 {
+    native_surface_format::RGB565.mix_packed_rgb16(first, second, amount)
+}
+
 // These path modules are upstream sources, linted in the engine workspace.
 // --no-deps does not exclude them; editor-owned adapter code stays linted here.
 #[rustfmt::skip]

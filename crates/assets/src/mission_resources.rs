@@ -77,6 +77,7 @@ pub struct InfantryAppearance {
 /// Registries and appearance data from the same cold/reset Rules owner as game
 /// loading, including LANG, map passes and implicit identities.
 pub struct NativeRegistries {
+    pub radar: std::sync::Arc<crate::radar::Palette>,
     pub infantry_appearances: BTreeMap<String, InfantryAppearance>,
     pub vehicle_templates: BTreeMap<String, BTreeMap<String, String>>,
     pub countries: BTreeMap<String, i32>,
@@ -112,7 +113,7 @@ pub fn scenario_registries(
     let eva = EvaRegistry::from_ini(&audio(manager.ini_roots().eva())?);
     let mut owner =
         RetailRulesSources::select(manager)?.into_owner(Arc::new(sounds), Arc::new(eva))?;
-    let (rules, processed_ini, _, _) = owner
+    let (mut rules, processed_ini, _, _) = owner
         .load_scenario(
             if multiplayer {
                 NativeScenarioRulesPrefix::NonCampaign(mode)
@@ -156,7 +157,21 @@ pub fn scenario_registries(
         .map_while(|index| rules.particle_system_type_id_by_index(index))
         .map(|id| rules.particle_system_type(id).name.clone())
         .collect();
+    let theater = map
+        .section_or_empty("Map")
+        .read_name("Theater", 32)
+        .unwrap_or("TEMPERATE");
+    let extension = vera20k_core::map::theater::theater_extension(theater).unwrap_or("tem");
+    rules.bind_terrain_assets(
+        manager,
+        extension,
+        vera20k_core::rules::terrain_asset_catalog::TerrainAssetLoadPhase::Fresh,
+    );
+    let radar = Arc::new(crate::radar::Palette::load(
+        &rules, manager, theater, extension,
+    ));
     Ok(NativeRegistries {
+        radar,
         infantry_appearances: rules
             .all_objects()
             .filter(|object| {

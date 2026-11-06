@@ -196,6 +196,51 @@ fn embedded_preview_export_preserves_custom_pixels_and_rejects_missing_or_broken
     assert_eq!(fs::read(&path).unwrap(), exported);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn hd_preview_failure_preserves_existing_png_and_snapshot() {
+    let root = root();
+    let path = root.join("高清预览.png");
+    fs::write(&path, b"keep existing output").unwrap();
+    let bytes = fixture();
+    let original = bytes.clone();
+    let error = crate::map_picture::export(
+        &bytes,
+        &root.join("missing-engine.exe"),
+        &root,
+        &root,
+        &path,
+    )
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("VERA20k"));
+    assert_eq!(fs::read(&path).unwrap(), b"keep existing output");
+    assert_eq!(bytes, original);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "requires retail RA2_DIR, VERA20K_EXE and a GPU"]
+fn retail_engine_hd_preview_exports_the_current_snapshot() {
+    let directory = PathBuf::from(std::env::var_os("RA2_DIR").expect("RA2_DIR required"));
+    let exe = PathBuf::from(std::env::var_os("VERA20K_EXE").expect("VERA20K_EXE required"));
+    let root = root();
+    let bytes = ra2_map_document::new_map::NewMapOptions {
+        width: 40,
+        height: 25,
+        ..Default::default()
+    }
+    .bytes()
+    .unwrap();
+    let path = root.join("高清预览.png");
+    fs::write(&path, b"previous output").unwrap();
+    let size = crate::map_picture::export(&bytes, &exe, &directory, &root, &path).unwrap();
+    let image = image::open(&path).unwrap().to_rgb8();
+    assert_eq!([image.width(), image.height()], size);
+    assert!(size.iter().all(|side| *side > 0 && *side <= 4096));
+    assert!(image.pixels().any(|p| p.0 != [0; 3]));
+    assert_eq!(fs::read_dir(root.join("map-pictures")).unwrap().count(), 0);
+    fs::remove_dir_all(root).unwrap();
+}
 #[test]
 fn atomic_save_replaces_on_windows_backs_up_original_and_rejects_external_changes() {
     let root = root();

@@ -21,19 +21,12 @@ pub(super) struct Workbench {
     new_options: crate::new_map::NewMapOptions,
     overview: Option<egui::TextureHandle>,
     pub(super) overview_bounds: Option<egui::Rect>,
-    overview_overlay: crate::overview::OverviewOverlay,
-    overview_markers: OverviewMarkers,
+    overview_revision: Option<u64>,
     pub(super) canvas_extent: Option<egui::Vec2>,
     pub(super) canvas_rect: Option<egui::Rect>,
     pub(super) overview_rect: Option<egui::Rect>,
 }
 
-struct OverviewMarkers([bool; 4]);
-impl Default for OverviewMarkers {
-    fn default() -> Self {
-        Self([true; 4])
-    }
-}
 fn navigator_point(bounds: egui::Rect, rect: egui::Rect, pointer: egui::Pos2) -> egui::Pos2 {
     let t = (pointer - rect.min) / rect.size();
     bounds.min + bounds.size() * t.clamp(egui::Vec2::ZERO, egui::Vec2::splat(1.))
@@ -93,7 +86,7 @@ impl MapView {
     pub(super) fn reset_overview(&mut self) {
         self.workbench.overview = None;
         self.workbench.overview_bounds = None;
-        self.workbench.overview_overlay = Default::default();
+        self.workbench.overview_revision = None;
     }
     pub fn show_project_settings(&mut self) {
         self.workbench.settings = true;
@@ -190,7 +183,7 @@ impl MapView {
                     egui::Button::new(tr!("导出高清地图预览图 PNG…")),
                 )
                 .on_hover_text(
-                    tr!("使用游戏资源重新生成地图预览，最长边 4096 像素，小地图保持原始分辨率。包含未保存的修改，显示全部对象、覆盖物、House 换色与地图光照。"),
+                    tr!("使用试玩设置中的 VERA20k 引擎生成高清地图预览，最长边 4096 像素。包含未保存的修改，使用游戏实际渲染器。"),
                 )
                 .clicked()
             {
@@ -212,34 +205,6 @@ impl MapView {
                 if let Some(scene) = &self.scene {
                     self.editor.export_preview_png(scene.source.bytes());
                 }
-                ui.close();
-            }
-            if ui
-                .add_enabled(
-                    self.editor.doc.is_some()
-                        && !self.editor.exporting
-                        && !self.editor.stroking
-                        && !self.workbench.mission.has_draft()
-                        && !self.workbench.map_settings.open,
-                    egui::Button::new(tr!("导出完整地图 PNG…（最长边 4096）")),
-                )
-                .clicked()
-            {
-                self.editor.export_png(4096);
-                ui.close();
-            }
-            if ui
-                .add_enabled(
-                    self.editor.doc.is_some()
-                        && !self.editor.exporting
-                        && !self.editor.stroking
-                        && !self.workbench.mission.has_draft()
-                        && !self.workbench.map_settings.open,
-                    egui::Button::new(tr!("导出原始分辨率 PNG…")),
-                )
-                .clicked()
-            {
-                self.editor.export_png(0);
                 ui.close();
             }
             if ui
@@ -621,19 +586,22 @@ impl MapView {
     fn overview(&mut self, ui: &mut egui::Ui) {
         let Some(scene) = &self.scene else { return };
         theme::section(ui, tr!("地图导航"), "");
-        if self.workbench.overview.is_none() {
-            let radar = match ra2_map_scene::radar::terrain(scene) {
+        if self.workbench.overview.is_none()
+            || self.workbench.overview_revision != Some(self.editor.visual_revision)
+        {
+            let radar = match ra2_map_scene::radar::render(scene, self.editor.doc.as_ref()) {
                 Ok(radar) => radar,
                 Err(error) => {
                     ui.small(error.to_string());
                     return;
                 }
             };
+            self.workbench.overview_revision = Some(self.editor.visual_revision);
             self.workbench.overview_bounds = Some(radar.bounds);
             self.workbench.overview = Some(ui.ctx().load_texture(
                 "map-navigator",
                 radar.image,
-                egui::TextureOptions::LINEAR,
+                egui::TextureOptions::NEAREST,
             ));
         }
         let bounds = self.workbench.overview_bounds.unwrap_or(scene.bounds);
@@ -658,7 +626,7 @@ impl MapView {
             ui.scope_id().with("map-navigator"),
             egui::Sense::click_and_drag(),
         );
-        ui.painter().rect_filled(frame, 4, theme::BACKGROUND);
+        ui.painter().rect_filled(frame, 0, theme::BACKGROUND);
         if (response.clicked() || response.dragged())
             && let Some(pointer) = response.interact_pointer_pos()
         {
@@ -684,14 +652,6 @@ impl MapView {
                     (pos.y - bounds.top()) / bounds.height() * rect.height(),
                 )
         };
-        self.workbench.overview_overlay.draw(
-            &p,
-            scene,
-            &self.editor,
-            rect,
-            self.workbench.overview_markers.0,
-            bounds,
-        );
         let screen = ui.ctx().content_rect();
         // The precise canvas extent is retained from its last layout pass.
         let extent = self.workbench.canvas_extent.unwrap_or(screen.size());
@@ -712,22 +672,6 @@ impl MapView {
                 egui::StrokeKind::Inside,
             );
         }
-        p.rect_stroke(
-            rect,
-            4,
-            egui::Stroke::new(1., theme::BORDER),
-            egui::StrokeKind::Inside,
-        );
-        ui.horizontal_wrapped(|ui| {
-            for (flag, name) in self.workbench.overview_markers.0.iter_mut().zip([
-                tr!("起点"),
-                tr!("资源"),
-                tr!("建筑"),
-                tr!("单位"),
-            ]) {
-                ui.checkbox(flag, name);
-            }
-        });
         response.on_hover_text(tr!("点击或拖动，快速移动地图视角"));
         ui.add_space(5.);
         ui.separator();

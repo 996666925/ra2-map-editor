@@ -806,17 +806,6 @@ impl Editor {
         }
     }
     pub fn export_hd_preview_png(&mut self) {
-        self.export_scene_png(4096, Default::default(), "map-preview-hd.png");
-    }
-    pub fn export_png(&mut self, max_edge: u32) {
-        self.export_scene_png(max_edge, self.view_options(), "map.png");
-    }
-    fn export_scene_png(
-        &mut self,
-        max_edge: u32,
-        options: ra2_map_scene::visual::ViewOptions,
-        file_name: &str,
-    ) {
         if !self.check_property_draft() {
             return;
         }
@@ -826,15 +815,14 @@ impl Editor {
         let Some(doc) = &self.doc else { return };
         if let Some(path) = rfd::FileDialog::new()
             .add_filter(tr!("PNG 图像"), &["png"])
-            .set_file_name(file_name)
+            .set_file_name("map-preview-hd.png")
             .save_file()
         {
-            match self.io.send(Job::Export {
+            match self.io.send(Job::ExportHdPreview {
                 snapshot: doc.snapshot(),
                 directory: self.directory.clone(),
                 path,
-                max_edge,
-                options,
+                exe: PathBuf::from(&self.executable),
             }) {
                 Ok(()) => {
                     self.exporting = true;

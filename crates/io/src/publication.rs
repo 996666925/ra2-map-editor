@@ -10,8 +10,6 @@ use std::{
     time::Instant,
 };
 
-pub use ra2_map_scene::radar::MAX_EDGE as PREVIEW_MAX_EDGE;
-
 #[derive(Default)]
 pub struct Publisher {
     cached: Option<(PathBuf, Install)>,
@@ -77,30 +75,15 @@ impl Publisher {
     }
 }
 
-/// Generate the same radar terrain and symbols used by the navigator.
+/// Generate the complete engine terrain preview used by the navigator.
 pub fn render_preview(scene: &MapScene) -> Result<image::RgbaImage> {
     let radar = ra2_map_scene::radar::terrain(scene)?;
-    let base = scene
-        .source
-        .edit_base
-        .as_ref()
-        .map_err(|error| anyhow::anyhow!(error.clone()))?;
-    let doc = ra2_map_document::document::MapDocument::new(base.clone());
-    let symbols = ra2_map_scene::radar::symbols(scene, &doc);
     let size = radar.image.size;
-    let overlay = ra2_map_scene::radar::overlay(
-        size,
-        radar.bounds,
-        &symbols,
-        [true; 4],
-        size[0].max(size[1]) as f32 / 192.,
-    );
     let rgba = radar
         .image
         .pixels
         .iter()
-        .zip(&overlay.pixels)
-        .flat_map(|(background, symbol)| background.blend(*symbol).to_array())
+        .flat_map(|pixel| pixel.to_array())
         .collect();
     image::RgbaImage::from_raw(size[0] as u32, size[1] as u32, rgba).context("地图预览图像尺寸无效")
 }
@@ -130,7 +113,7 @@ pub fn preview_png(bytes: &[u8], path: &Path) -> Result<[u32; 2]> {
     Ok(size)
 }
 
-fn write_png(img: &image::RgbaImage, path: &Path) -> Result<()> {
+pub(crate) fn write_png(img: &image::RgbaImage, path: &Path) -> Result<()> {
     let temp = path.with_extension(format!("{}.tmp", std::process::id()));
     img.save_with_format(&temp, image::ImageFormat::Png)
         .context("写入导出 PNG 失败")?;

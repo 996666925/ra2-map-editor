@@ -296,6 +296,7 @@ pub fn load_scene_bytes_controlled(
     ) {
         Ok(registries) => {
             let catalog = Arc::make_mut(&mut catalog);
+            catalog.radar = registries.radar;
             catalog.infantry_appearances = registries.infantry_appearances;
             catalog.mission_country_indices = registries.countries;
             catalog.mission_country_names = registries.country_names;

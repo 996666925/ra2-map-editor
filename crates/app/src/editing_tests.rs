@@ -51,196 +51,50 @@ fn ini_commits_and_history_keep_spatial_caches_until_the_scene_changes() {
 }
 
 #[test]
-fn navigator_pixels_match_embedded_preview_at_the_same_size() {
-    let (mut editor, ctx, _root) = editor();
+fn navigator_uses_the_same_complete_engine_image_as_previewpack() {
+    let (mut editor, _ctx, root) = editor();
     let scene = terrain_scene();
     editor.attach(&scene);
-    let radar = ra2_map_scene::radar::terrain(&scene).unwrap();
-    let size = radar.image.size;
-    let mut overview = crate::overview::OverviewOverlay::default();
-    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-        overview.draw(
-            ui.painter(),
-            &scene,
-            &editor,
-            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32)),
-            [true; 4],
-            radar.bounds,
-        );
-    });
-    let symbols = output
-        .textures_delta
-        .set
-        .values()
-        .flatten()
-        .find_map(|delta| {
-            let egui::ImageData::Color(image) = &delta.image;
-            (image.size == size).then(|| image.clone())
-        })
-        .unwrap();
-    output.textures_delta.clear();
-    let navigator: Vec<_> = radar
+    let radar = ra2_map_scene::radar::render(&scene, editor.doc.as_ref()).unwrap();
+    let preview = ra2_map_io::publication::render_preview(&scene).unwrap();
+    assert_eq!(
+        radar.image.size,
+        [preview.width() as usize, preview.height() as usize]
+    );
+    let pixels: Vec<_> = radar
         .image
         .pixels
         .iter()
-        .zip(&symbols.pixels)
-        .flat_map(|(background, symbol)| background.blend(*symbol).to_array())
+        .flat_map(|p| p.to_array())
         .collect();
-    let preview = ra2_map_io::publication::render_preview(&scene).unwrap();
-    assert_eq!([preview.width() as usize, preview.height() as usize], size);
-    assert_eq!(&navigator, preview.as_raw());
-}
-
-#[test]
-fn navigator_bridge_surface_follows_edits_history_and_overlay_visibility() {
-    let (mut editor, ctx, root) = editor();
-    let scene = terrain_scene();
-    editor.attach(&scene);
-    let radar = ra2_map_scene::radar::terrain(&scene).unwrap();
-    let size = radar.image.size;
-    let mut overview = crate::overview::OverviewOverlay::default();
-    let mut draw = |editor: &Editor| {
-        let mut output = ctx.run_ui(Default::default(), |ui| {
-            overview.draw(
-                ui.painter(),
-                &scene,
-                editor,
-                egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(size[0] as f32, size[1] as f32),
-                ),
-                [false; 4],
-                radar.bounds,
-            );
-        });
-        let pixels = output
-            .textures_delta
-            .set
-            .values()
-            .flatten()
-            .find_map(|delta| {
-                let egui::ImageData::Color(image) = &delta.image;
-                (image.size == size).then(|| image.pixels.clone())
-            })
-            .unwrap();
-        output.textures_delta.clear();
-        pixels
-    };
-    let before = draw(&editor);
-    assert!(before.iter().all(|p| p.a() == 0));
-    for x in 16..=24 {
-        editor
-            .doc
-            .as_mut()
-            .unwrap()
-            .set(Target::Overlay([x, 20]), Some(Value::Overlay(24, 0)))
-            .unwrap();
-    }
-    editor.commit(&scene, "bridge");
-    let bridge = draw(&editor);
-    assert!(bridge.iter().any(|p| p.a() != 0));
-    editor.layers[0] = false;
-    assert_eq!(draw(&editor), before);
-    editor.layers[0] = true;
-    assert_eq!(draw(&editor), bridge);
-    editor.history(false, &scene);
-    assert_eq!(draw(&editor), before);
-    editor.history(true, &scene);
-    assert_eq!(draw(&editor), bridge);
-    drop(editor);
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn cached_object_geometry_and_navigator_follow_move_history_and_layer_changes() {
-    let (mut editor, ctx, _root) = editor();
-    let scene = terrain_scene();
-    editor.attach(&scene);
-    let id = editor
-        .doc
-        .as_mut()
-        .unwrap()
-        .add_record("Units", [18, 20], "Neutral", "MISSING")
-        .unwrap();
-    editor.commit(&scene, "place");
-    let before_origin = editor
-        .marker_cache
-        .markers
-        .iter()
-        .find(|m| m.id == id)
-        .unwrap()
-        .origin;
-    let mut overview = crate::overview::OverviewOverlay::default();
-    let rect = egui::Rect::from_min_size(egui::pos2(30., 40.), egui::vec2(256., 128.));
-    let mut draw = |editor: &Editor| {
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            overview.draw(
-                ui.painter(),
-                &scene,
-                editor,
-                rect,
-                [false, false, false, true],
-                scene.bounds,
-            );
-        });
-        let pixels = output
-            .textures_delta
-            .set
-            .values()
-            .flatten()
-            .find_map(|delta| {
-                if delta.image.size() != [256, 128] {
-                    return None;
-                }
-                let egui::ImageData::Color(image) = &delta.image;
-                Some(image.pixels.clone())
-            });
-        output.textures_delta.clear();
-        pixels
-    };
-    let before = draw(&editor).unwrap();
-    assert!(before.iter().any(|p| p.a() != 0));
+    assert_eq!(&pixels, preview.as_raw());
+    let doc = editor.doc.as_mut().unwrap();
+    doc.waypoint(0, [20, 20]).unwrap();
+    editor.commit(&scene, "start");
+    let moved = ra2_map_scene::radar::render(&scene, editor.doc.as_ref()).unwrap();
+    assert_ne!(radar.image, moved.image);
     assert!(
-        draw(&editor).is_none(),
-        "unchanged navigator must reuse its texture"
+        moved
+            .image
+            .pixels
+            .contains(&egui::Color32::from_rgb(240, 0, 0))
     );
-    let moved = editor.records[&id].moved([25, 20]).unwrap();
-    editor
-        .doc
-        .as_mut()
-        .unwrap()
-        .set(Target::Record(id), Some(Value::Record(moved)))
-        .unwrap();
-    editor.commit(&scene, "move");
-    assert_ne!(
-        before_origin,
-        editor
-            .marker_cache
-            .markers
-            .iter()
-            .find(|m| m.id == id)
-            .unwrap()
-            .origin
-    );
-    assert_ne!(before, draw(&editor).unwrap());
     editor.history(false, &scene);
     assert_eq!(
-        before_origin,
-        editor
-            .marker_cache
-            .markers
-            .iter()
-            .find(|m| m.id == id)
+        radar.image,
+        ra2_map_scene::radar::render(&scene, editor.doc.as_ref())
             .unwrap()
-            .origin
+            .image
     );
-    assert_eq!(before, draw(&editor).unwrap());
-    editor.layers[1] = false;
-    assert!(draw(&editor).unwrap().iter().all(|p| p.a() == 0));
-    editor.layers[1] = true;
-    assert_eq!(before, draw(&editor).unwrap());
     editor.history(true, &scene);
-    assert_ne!(before, draw(&editor).unwrap());
+    assert_eq!(
+        moved.image,
+        ra2_map_scene::radar::render(&scene, editor.doc.as_ref())
+            .unwrap()
+            .image
+    );
+    drop(editor);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 pub(crate) fn terrain_scene() -> MapScene {

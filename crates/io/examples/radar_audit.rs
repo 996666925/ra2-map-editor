@@ -1,12 +1,12 @@
 //! Real-resource radar framing, player starts and embedded-preview checks.
 use anyhow::{Context, Result, ensure};
-use ra2_map_document::{document::MapDocument, new_map::NewMapOptions};
+use ra2_map_document::{document::MapDocument, new_map::NewMapOptions, source::SourceMap};
 use ra2_map_io::{
     editor_io,
     publication::{self, Publisher},
 };
-use ra2_map_scene::radar::{self, SymbolKind};
-use std::{collections::HashSet, path::PathBuf};
+use ra2_map_scene::radar;
+use std::path::PathBuf;
 
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
@@ -26,16 +26,27 @@ fn main() -> Result<()> {
                 .clone(),
         );
         let radar = radar::terrain(&scene)?;
-        let flat = publisher.scene(
-            NewMapOptions {
-                width: scene.source.header.width as u16,
-                height: scene.source.header.height as u16,
-                level: 0,
-                ..Default::default()
-            }
-            .bytes()?,
-            &directory,
-        )?;
+        let flat_bytes = NewMapOptions {
+            width: scene.source.header.width as u16,
+            height: scene.source.header.height as u16,
+            theater: scene.source.header.theater.clone(),
+            level: 0,
+            ..Default::default()
+        }
+        .bytes()?;
+        let (source, _) = SourceMap::parse("flat.map".into(), "audit".into(), flat_bytes)?;
+        let mut flat_doc = MapDocument::new(source.edit_base.map_err(anyhow::Error::msg)?);
+        let header = &scene.source.header;
+        let mut options = ra2_map_document::map_settings::Options::from_document(&flat_doc);
+        options.local = [
+            header.local_left as i32,
+            header.local_top as i32,
+            header.local_width as i32,
+            header.local_height as i32,
+        ];
+        ra2_map_document::map_settings::plan(&flat_doc, options, &Default::default())?
+            .apply(&mut flat_doc)?;
+        let flat = publisher.scene(flat_doc.snapshot().bytes()?, &directory)?;
         let flat_radar = radar::terrain(&flat)?;
         ensure!(
             radar.bounds == flat_radar.bounds,
@@ -46,25 +57,24 @@ fn main() -> Result<()> {
             radar.image.size == flat_radar.image.size,
             "height changes changed map aspect ratio"
         );
-        let colours: HashSet<_> = scene
-            .cells
-            .iter()
-            .flat_map(|cell| [cell.radar_left, cell.radar_right])
-            .collect();
         ensure!(
-            radar.image.pixels.iter().all(|pixel| {
-                pixel.a() == 255 && colours.contains(&[pixel.r(), pixel.g(), pixel.b()])
-            }),
-            "radar contains uncovered pixels"
+            radar.image.pixels.iter().all(|pixel| pixel.a() == 255),
+            "radar background differs from RGB PreviewPack"
         );
-        let starts: Vec<_> = radar::symbols(&scene, &doc)
+        let starts: Vec<_> = ra2_map_document::player_starts::from_document(&doc)
             .into_iter()
-            .filter(|symbol| matches!(symbol.kind, SymbolKind::Start(_)))
+            .filter(|n| *n < 8)
+            .filter_map(|slot| {
+                doc.record_iter()
+                    .map(|(_, record)| record)
+                    .find(|r| r.section == "Waypoints" && r.key == slot.to_string())
+                    .and_then(|r| r.cell())
+            })
             .collect();
         ensure!(
             starts
                 .iter()
-                .all(|start| radar.bounds.contains(start.position)),
+                .all(|start| radar.bounds.contains(radar::cell_position(*start))),
             "player start cropped away"
         );
         let bytes = publication::embed_scene_preview(&scene)?;

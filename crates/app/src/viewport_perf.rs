@@ -94,28 +94,26 @@ fn real_map_ui_profile() {
         };
         reports.push(serde_json::json!({"view":name,"markers_ms":mean("markers_ms"),"labels_ms":mean("labels_ms"),"tessellate_ms":mean("tessellate_ms"),"total_ms":mean("total_ms"),"frames":frames}));
     }
-    let mut overview = crate::overview::OverviewOverlay::default();
     let mut navigator_frames = Vec::new();
+    let started = Instant::now();
+    let radar = ra2_map_scene::radar::render(&scene, editor.doc.as_ref()).unwrap();
+    let texture = ctx.load_texture(
+        "navigator-profile",
+        radar.image,
+        egui::TextureOptions::NEAREST,
+    );
+    let generation_ms = started.elapsed().as_secs_f64() * 1000.;
     for _ in 0..12 {
         let started = Instant::now();
-        let result = crate::test_support::run_ui(
-            &ctx,
-            egui::RawInput {
-                screen_rect: Some(rect),
-                ..Default::default()
-            },
-            |ui| {
-                overview.draw(
-                    ui.painter(),
-                    &scene,
-                    &editor,
-                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256., 128.)),
-                    [true; 4],
-                    scene.bounds,
-                );
-            },
-        );
-        navigator_frames.push(serde_json::json!({"ms":started.elapsed().as_secs_f64()*1000.,"shapes":result.shapes.len()}));
+        let result = crate::test_support::run_ui(&ctx, egui::RawInput::default(), |ui| {
+            ui.painter().image(
+                texture.id(),
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256., 128.)),
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                egui::Color32::WHITE,
+            );
+        });
+        navigator_frames.push(serde_json::json!({"ms":started.elapsed().as_secs_f64()*1000.,"generation_ms":generation_ms,"shapes":result.shapes.len()}));
     }
     let report = serde_json::json!({"map":map,"records":editor.records.len(),"draws":scene.visual.draws.len(),"views":reports,"navigator":navigator_frames});
     std::fs::write(output, serde_json::to_vec_pretty(&report).unwrap()).unwrap();

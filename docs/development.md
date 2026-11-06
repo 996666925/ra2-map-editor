@@ -105,6 +105,15 @@ $env:RA2_DIR = 'D:/Games/YR'
 cargo test --locked -p ra2-map-assets --lib retail_voxel_gpu -- --ignored
 ```
 
+传统预览的真实资源检查覆盖取景范围、起点及 PreviewPack 像素往返；高清导出检查会启动支持 `--map-picture` 的引擎并实际使用 GPU：
+
+```powershell
+cargo run --locked -p ra2-map-io --example radar_audit -- 'D:/Games/YR' target/radar-audit 'D:/Maps/test.map'
+$env:RA2_DIR = 'D:/Games/YR'
+$env:VERA20K_EXE = 'D:/Games/VERA20k/vera20k.exe'
+cargo test --locked -p ra2-map-io --lib retail_engine_hd_preview_exports_the_current_snapshot -- --ignored
+```
+
 窗口测试需要本机游戏目录；地图、截图与报告只写入本地 `target/`。
 
 ```powershell

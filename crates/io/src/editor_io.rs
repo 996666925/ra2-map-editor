@@ -72,6 +72,12 @@ pub enum Job {
         bytes: Arc<[u8]>,
         path: PathBuf,
     },
+    ExportHdPreview {
+        snapshot: Snapshot,
+        directory: PathBuf,
+        exe: PathBuf,
+        path: PathBuf,
+    },
     Export {
         snapshot: Snapshot,
         directory: PathBuf,
@@ -215,6 +221,27 @@ impl EditorIo {
                             result: crate::publication::preview_png(&bytes, &path),
                             path,
                         },
+                        Job::ExportHdPreview {
+                            snapshot,
+                            directory,
+                            exe,
+                            path,
+                        } => Done::Export {
+                            result: (|| {
+                                publisher.check_profile(
+                                    &directory,
+                                    snapshot.resource_profile.as_deref(),
+                                )?;
+                                crate::map_picture::export(
+                                    &snapshot.bytes()?,
+                                    &exe,
+                                    &directory,
+                                    &work_root,
+                                    &path,
+                                )
+                            })(),
+                            path,
+                        },
                         Job::Export {
                             snapshot,
                             directory,
@@ -275,7 +302,7 @@ pub fn data_root() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
         .join("ra2-map-editor")
 }
-fn unique() -> String {
+pub(crate) fn unique() -> String {
     format!(
         "{}-{}",
         std::process::id(),

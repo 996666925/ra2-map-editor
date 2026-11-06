@@ -180,20 +180,9 @@ fn main() -> Result<()> {
         .context("no PreviewPack")?;
     let expected_preview = ra2_map_io::publication::render_preview(&scene)?;
     let radar = ra2_map_scene::radar::terrain(&scene)?;
-    let radar_colours: std::collections::HashSet<_> = scene
-        .cells
-        .iter()
-        .flat_map(|cell| [cell.radar_left, cell.radar_right])
-        .collect();
     ensure!(
-        radar.image.pixels.iter().all(|pixel| {
-            pixel.a() == 255 && radar_colours.contains(&[pixel.r(), pixel.g(), pixel.b()])
-        }),
-        "navigator and PreviewPack terrain must use cell radar colours without empty edges"
-    );
-    ensure!(
-        preview.width.max(preview.height) <= 512 && preview.width.max(preview.height) > 256,
-        "saved PreviewPack must use the compact 512-pixel limit"
+        radar.image.pixels.iter().all(|p| p.a() == 255),
+        "preview is not opaque"
     );
     ensure!(
         [preview.width, preview.height] == [expected_preview.width(), expected_preview.height()]

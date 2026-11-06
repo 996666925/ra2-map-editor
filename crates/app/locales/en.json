@@ -1727,5 +1727,6 @@
   "＋事件": "+ Event",
   "＋列表行": "+ List row",
   "＋动作": "+ Action",
-  "；{warning}": "; {warning}"
+  "；{warning}": "; {warning}",
+  "使用试玩设置中的 VERA20k 引擎生成高清地图预览，最长边 4096 像素。包含未保存的修改，使用游戏实际渲染器。": "Generate an HD preview with the VERA20k executable selected in playtest settings, up to 4096 pixels per side. Includes unsaved edits and uses the game renderer."
 }

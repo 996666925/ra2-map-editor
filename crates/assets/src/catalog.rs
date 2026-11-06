@@ -45,6 +45,7 @@ pub struct TerrainSubtile {
 }
 #[derive(Clone)]
 pub struct Catalog {
+    pub radar: Arc<crate::radar::Palette>,
     /// Per-InfantryType retained banks projected by the production Rules owner.
     pub infantry_appearances: BTreeMap<String, crate::mission_resources::InfantryAppearance>,
     pub rules: IniFile,
@@ -72,6 +73,7 @@ pub struct Catalog {
 impl Default for Catalog {
     fn default() -> Self {
         Self {
+            radar: Default::default(),
             infantry_appearances: BTreeMap::new(),
             rules: IniFile::empty(),
             strings: None,
