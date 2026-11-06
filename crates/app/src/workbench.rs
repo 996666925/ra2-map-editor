@@ -379,7 +379,7 @@ impl MapView {
             });
         }
         if ui
-            .small_button("帮助")
+            .add_sized([56., 32.], egui::Button::new("帮助"))
             .on_hover_text("操作说明与快捷键  F1")
             .clicked()
         {
