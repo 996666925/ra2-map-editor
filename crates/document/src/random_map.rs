@@ -95,6 +95,7 @@ impl RandomMapOptions {
                 t.ruggedness,
                 t.vegetation,
                 t.accessibility,
+                t.region_size,
                 t.tiberium_layout
             ]
             .iter()
@@ -293,6 +294,7 @@ mod tests {
             "ruggedness",
             "vegetation",
             "accessibility",
+            "region_size",
             "tiberium",
             "tiberium_layout",
             "resources",
@@ -309,12 +311,18 @@ mod tests {
                 "ruggedness" => &mut bad.terrain.ruggedness,
                 "vegetation" => &mut bad.terrain.vegetation,
                 "accessibility" => &mut bad.terrain.accessibility,
+                "region_size" => &mut bad.terrain.region_size,
                 "tiberium" => &mut bad.terrain.tiberium,
                 "tiberium_layout" => &mut bad.terrain.tiberium_layout,
                 _ => &mut bad.terrain.resources,
             };
             *value = -1;
             assert!(bad.validate().is_err(), "{field}");
+        }
+        for region_size in [0, 100, 101] {
+            let mut options = options.clone();
+            options.terrain.region_size = region_size;
+            assert_eq!(options.validate().is_ok(), region_size <= 100);
         }
         for title in ["", "x\n[Map]", "x;comment"] {
             assert!(

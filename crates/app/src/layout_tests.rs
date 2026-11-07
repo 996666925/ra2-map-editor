@@ -1026,6 +1026,108 @@ fn creation_dialog_layout_stays_compact_and_actions_visible_after_resizing() {
 }
 
 #[test]
+fn random_map_reopening_and_landscape_changes_preserve_edits_until_recommendations_are_applied() {
+    let (mut view, root) = view();
+    view.workbench.random_options.terrain.seed = 43210;
+    view.workbench.random_options.terrain.water_amount = 37;
+    view.workbench.random_options.terrain.ruggedness = 43;
+    view.workbench.random_options.terrain.region_size = 62;
+    let before = view.workbench.random_options.terrain.clone();
+    view.show_random_map();
+    let view = std::cell::RefCell::new(view);
+    let mut directory = String::from("D:/YR");
+    let mut harness = crate::test_support::harness()
+        .with_context_setup(setup)
+        .with_accessibility_check(false)
+        .with_size([1280., 1000.])
+        .build_ui(|ui| view.borrow_mut().settings_dialogs(ui.ctx(), &mut directory));
+    harness.run();
+    harness.get_by_label("取消").click();
+    harness.run();
+    view.borrow_mut().show_random_map();
+    harness.run();
+    assert_eq!(view.borrow().workbench.random_options.terrain, before);
+
+    harness.get_by_value("内陆湖泊").click();
+    harness.run();
+    harness.get_by_label("山地").click();
+    harness.run();
+    let mut mountain = before.clone();
+    mountain.map_type = 4;
+    assert_eq!(view.borrow().workbench.random_options.terrain, mountain);
+
+    harness.get_by_label("应用推荐参数").click();
+    harness.run();
+    mountain.water_amount = 10;
+    mountain.ruggedness = 70;
+    assert_eq!(view.borrow().workbench.random_options.terrain, mountain);
+    drop(harness);
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn random_map_controls_follow_landscape_and_resource_availability_in_both_languages() {
+    use egui_kittest::kittest::NodeT as _;
+
+    for info in &crate::i18n::LANGUAGES {
+        let _language = crate::i18n::enter(info.language);
+        let (mut view, root) = view();
+        view.show_random_map();
+        let view = std::cell::RefCell::new(view);
+        let mut directory = String::from("D:/YR");
+        let mut harness = crate::test_support::harness()
+            .with_context_setup(setup)
+            .with_accessibility_check(false)
+            .with_size([1280., 1000.])
+            .build_ui(|ui| view.borrow_mut().settings_dialogs(ui.ctx(), &mut directory));
+        for landscape in [0, 1, 3, 4] {
+            view.borrow_mut().workbench.random_options.terrain.map_type = landscape;
+            harness.run();
+            for (label, enabled) in [
+                ("水域规模", landscape != 0),
+                ("区域连通程度", matches!(landscape, 3 | 4)),
+                ("区域大小", matches!(landscape, 3 | 4)),
+                ("树林数量", true),
+                ("矿区分散程度", true),
+            ] {
+                assert_eq!(
+                    harness
+                        .get_by_role_and_label(
+                            egui::accesskit::Role::Slider,
+                            crate::i18n::text(label)
+                        )
+                        .accesskit_node()
+                        .is_disabled(),
+                    !enabled,
+                    "{label}, landscape {landscape}"
+                );
+            }
+        }
+        harness
+            .get_by_label(crate::i18n::text("生成矿石资源"))
+            .click_accesskit();
+        harness.run();
+        assert!(!view.borrow().workbench.random_options.ore);
+        for (label, role) in [
+            ("矿区分散程度", egui::accesskit::Role::Slider),
+            ("资源丰度", egui::accesskit::Role::Slider),
+            ("矿区包含宝石", egui::accesskit::Role::CheckBox),
+        ] {
+            assert!(
+                harness
+                    .get_by_role_and_label(role, crate::i18n::text(label))
+                    .accesskit_node()
+                    .is_disabled()
+            );
+        }
+        drop(harness);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn information_rows_do_not_consume_the_panel_height() {
     let end = std::cell::Cell::new(egui::Rect::NOTHING);
     let mut harness = crate::test_support::harness()

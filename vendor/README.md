@@ -14,6 +14,11 @@ per GPU submission. CPU fallback follows the engine admission rules. Multi-part
 merging requests the CPU result once because the GPU image has no geometric depth.
 No game-client renderer sources are copied or modified.
 
+The extended random-map pipeline also calls the engine's shared
+`tech_buildings::run_start_flips_traced` phase before marking start clearings.
+This entry point must be public in the selected engine revision; keep its API
+change with the engine update rather than copying the placement algorithm here.
+
 When the engine publishes a renderer crate, both can become ordinary Cargo
 dependencies without retaining the source adapter.
 

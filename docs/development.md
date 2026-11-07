@@ -130,6 +130,8 @@ cargo run --locked -- --p2-smoke-test --game-dir 'D:/Games/YR' --new-map 80x80
 cargo run --locked -p ra2-map-scene --example random_map_audit -- 'D:/Games/YR' target/random-map-audit
 ```
 
+随机地图审计还对比 2 / 30 人内陆湖泊和山地的区域大小 0 / 100，检查参数保存、地形变化和同种子复现；群岛覆盖 2 / 9 / 30 人的科技建筑开关，检查中立归属，并用固定的 2 人样本验证实际生成。扩展群岛可能没有起点空闲岛屿，不能要求每张图都有科技建筑；无起点区域的放置、占地和禁用时随机流另由合成回归覆盖。
+
 窗口烟测的其他入口和输出目录参数见 `cargo run --locked -- --help`。格式校验和静态预览不能替代游戏运行时验证，当前功能边界见 [README](../README.md#当前范围)。
 
 TS SDK 的逻辑整链与呈现输入可分别生成；输出目录须不存在：

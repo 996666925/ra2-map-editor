@@ -3,7 +3,11 @@ use anyhow::{Context, Result, ensure};
 use ra2_map_assets::assets::Install;
 use ra2_map_document::{document::MapDocument, random_map::RandomMapOptions, source::SourceMap};
 use ra2_map_scene::{map::load_scene_bytes, random_map, visual::ViewOptions};
-use std::{collections::BTreeSet, path::PathBuf, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    time::Instant,
+};
 
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
@@ -66,7 +70,32 @@ fn main() -> Result<()> {
         options.terrain.height = size;
         cases.push((format!("thirty-players-size-{size}"), options));
     }
+    for players in [2, 30] {
+        for landscape in [3, 4] {
+            for region_size in [0, 100] {
+                let mut options = RandomMapOptions::default();
+                options.terrain.num_players = players;
+                options.terrain.map_type = landscape;
+                options.terrain.region_size = region_size;
+                cases.push((
+                    format!("region-size-{players}-{landscape}-{region_size}"),
+                    options,
+                ));
+            }
+        }
+    }
+    for players in [2, 9, 30] {
+        for enabled in [true, false] {
+            let mut options = RandomMapOptions::default();
+            options.terrain.num_players = players;
+            options.terrain.map_type = 0;
+            options.terrain.water_amount = 50;
+            options.tech_buildings = enabled;
+            cases.push((format!("archipelago-tech-{players}-{enabled}"), options));
+        }
+    }
     let mut fingerprints = BTreeSet::new();
+    let mut region_shapes = BTreeMap::new();
     for (name, options) in cases {
         eprintln!("Generating {name}");
         let result = (|| -> Result<serde_json::Value> {
@@ -96,6 +125,29 @@ fn main() -> Result<()> {
                 document.snapshot().bytes()? == bytes,
                 "document roundtrip changed output"
             );
+            ensure!(
+                map.ini
+                    .section_or_empty("RandomMap")
+                    .read_int("RegionSize", -1)
+                    == options.terrain.region_size,
+                "recipe lost region size"
+            );
+            if name.starts_with("region-size-") {
+                let key = (options.terrain.num_players, options.terrain.map_type);
+                let shape: Vec<_> = map
+                    .cells
+                    .iter()
+                    .map(|c| (c.tile_index, c.sub_tile, c.z))
+                    .collect();
+                if options.terrain.region_size == 0 {
+                    region_shapes.insert(key, shape);
+                } else {
+                    ensure!(
+                        region_shapes.get(&key) != Some(&shape),
+                        "region size did not affect terrain"
+                    );
+                }
+            }
             let scene = load_scene_bytes(
                 &mut install,
                 &name,
@@ -184,6 +236,18 @@ fn main() -> Result<()> {
                     "tech buildings disabled but remain"
                 );
             }
+            let tech: Vec<_> = map
+                .entities
+                .iter()
+                .filter(|e| e.type_id != "CABHUT")
+                .collect();
+            ensure!(
+                tech.iter().all(|e| e.owner == "Neutral"),
+                "incorrect tech owner"
+            );
+            if name == "archipelago-tech-2-true" {
+                ensure!(!tech.is_empty(), "start-free islands lost tech buildings");
+            }
             fingerprints.insert(
                 map.cells
                     .iter()
@@ -209,7 +273,7 @@ fn main() -> Result<()> {
                 image::ColorType::Rgba8,
             )?;
             Ok(
-                serde_json::json!({"case":name,"passed":true,"cells":map.cells.len(),"starts":map.waypoints.len(),"ore_cells":ore,"terrain_objects":map.terrain_objects.len(),"structures":map.entities.len(),"diagnostics":scene.diagnostics,"seed":options.terrain.seed}),
+                serde_json::json!({"case":name,"passed":true,"cells":map.cells.len(),"starts":map.waypoints.len(),"ore_cells":ore,"terrain_objects":map.terrain_objects.len(),"structures":map.entities.len(),"tech_buildings":tech.len(),"region_size":options.terrain.region_size,"diagnostics":scene.diagnostics,"seed":map.ini.section_or_empty("RandomMap").read_int("Seed", -1)}),
             )
         })();
         report.push(match result {

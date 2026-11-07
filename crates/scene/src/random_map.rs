@@ -9,7 +9,7 @@ use vera20k_core::{
         phases::shore::TileBlocks,
         theater_blocks::TheaterTileBlocks,
     },
-    rules::{ini_parser::IniFile, native_processing::RulesLayerStack, terrain_rules::TerrainRules},
+    rules::{ini_parser::IniFile, native_processing::RulesLayerStack, ruleset::RuleSet},
 };
 #[path = "random_archipelago.rs"]
 mod archipelago;
@@ -24,14 +24,19 @@ pub fn generate(
     ensure!(!cancelled(), "随机地图生成已取消");
     install.activate_theater(rmg::emit::theater_name(options.terrain.theater))?;
     progress("准备随机地图地形模板…");
-    let rules = TerrainRules::from_ini(&install.catalog.rules);
-    let resolved = ResolvedTheaterInputs::from_theater(&install.theater, &rules);
+    let processed = RulesLayerStack::new(install.catalog.rules.clone()).process()?;
+    let rules = RuleSet::from_processed_rules(&processed)?;
+    let resolved = ResolvedTheaterInputs::from_theater(
+        &install.theater,
+        &rules.terrain_rules,
+        rules.overlay_registry(),
+        rules.general.cliff_back_impassability,
+    );
     let blocks = TheaterTileBlocks::build(&install.theater.lookup, |name| {
         install.manager.get_ref(name).map(<[u8]>::to_vec)
     });
     let settings = rmg::RmgSettings::load(&install.manager);
     let tech = if options.tech_buildings {
-        let processed = RulesLayerStack::new(install.catalog.rules.clone()).process()?;
         let art = install
             .manager
             .get_ref("artmd.ini")
@@ -235,10 +240,13 @@ fn generate_candidate(
         blocks,
         morphable: &morphable,
         wheel_impassable: resolved.wheel_impassable,
+        cliff_back_impassability: resolved.cliff_back_impassability,
+        overlay_zones: &resolved.overlay_zones,
         tech_types: tech,
         trig: resolved.trig,
         map_type: options.map_type,
         accessibility: options.accessibility,
+        region_size: options.region_size,
         theater: options.theater,
         num_players: options.num_players,
         bridge_enabled,
