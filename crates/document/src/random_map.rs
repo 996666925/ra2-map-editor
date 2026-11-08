@@ -14,7 +14,7 @@ use vera20k_core::{
 
 pub const LANDSCAPES: [&str; 5] = ["群岛", "大陆", "海中岛屿", "内陆湖泊", "山地"];
 pub const ENVIRONMENTS: [&str; 5] = ["温带", "雪地", "城市", "沙漠", "新城市"];
-pub const SIZES: [&str; 4] = ["小", "中", "大", "特大"];
+pub const SIZES: [&str; 8] = ["小", "中", "大", "特大", "巨大", "超大", "极大", "最大"];
 
 #[derive(Clone, Debug)]
 pub struct RandomMapOptions {
@@ -54,26 +54,10 @@ impl RandomMapOptions {
         (geometry.map_w as u16, geometry.map_h as u16)
     }
 
-    /// Retain native dimensions through eight players. Above that, scale each
-    /// interior axis by sqrt(players / 8) to preserve land area per player.
+    /// Use Vera's native geometry, including extended player counts and sizes.
     pub fn geometry(&self) -> MapGeometry {
-        let mut geometry = MapGeometry::from_options(&self.terrain);
-        if self.terrain.num_players > 8 {
-            let players = self.terrain.num_players.min(i32::from(MAX_PLAYERS)) as u64;
-            let scale = |axis: i32| {
-                let squared = (axis as u64).pow(2) * players;
-                let root = (squared / 8).isqrt();
-                (root + u64::from(root * root * 8 < squared)) as i32
-            };
-            geometry.gen_w = scale(geometry.gen_w);
-            geometry.gen_h = scale(geometry.gen_h);
-            geometry.map_w = geometry.gen_w + 4;
-            geometry.map_h = geometry.gen_h + 12;
-            geometry.diamond_min = geometry.map_w;
-            geometry.diamond_max = geometry.map_w + 2 * geometry.map_h;
-            geometry.stride = (geometry.map_w + geometry.map_h + 1) as usize;
-        }
-        geometry
+        // VERA20k owns the player-count and extended-size geometry rules.
+        MapGeometry::from_options(&self.terrain)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -81,7 +65,8 @@ impl RandomMapOptions {
         ensure!((0..=4).contains(&t.theater), "随机地图环境无效");
         ensure!((0..=4).contains(&t.map_type), "随机地图地貌无效");
         ensure!(
-            (0..=3).contains(&t.width) && (0..=3).contains(&t.height),
+            (0..=vera20k_core::map::rmg::MAX_SIZE_OPTION).contains(&t.width)
+                && (0..=vera20k_core::map::rmg::MAX_SIZE_OPTION).contains(&t.height),
             "随机地图尺寸档位无效"
         );
         ensure!(
@@ -335,20 +320,17 @@ mod tests {
             );
         }
         for players in 2..=i32::from(MAX_PLAYERS) {
-            for size in 0..=3 {
+            for size in 0..=vera20k_core::map::rmg::MAX_SIZE_OPTION {
                 let mut options = options.clone();
                 options.terrain.num_players = players;
                 options.terrain.width = size;
                 options.terrain.height = size;
                 options.validate().unwrap();
-                if players > 8 {
-                    let eight = MapGeometry::from_options(&options.terrain);
-                    let geometry = options.geometry();
-                    assert!(geometry.gen_w > eight.gen_w && geometry.gen_h > eight.gen_h);
-                    assert!(
-                        geometry.gen_w * geometry.gen_h * 8 >= eight.gen_w * eight.gen_h * players
-                    );
-                }
+                assert_eq!(
+                    options.geometry(),
+                    MapGeometry::from_options(&options.terrain),
+                    "editor geometry must follow the engine for {players} players and size {size}"
+                );
             }
         }
         for players in [0, 1, 31, i32::MAX] {

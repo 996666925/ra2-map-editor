@@ -252,7 +252,7 @@ fn load_stage_with_options(
         loaded.overlay_grid,
         &roster,
         None,
-    );
+    )?;
     ensure!(post.navigation_published, "post-map navigation");
     sim.publish_scenario_started();
     if let Some(record) = incoming {

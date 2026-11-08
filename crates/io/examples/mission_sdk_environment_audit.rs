@@ -499,20 +499,24 @@ fn main() -> Result<()> {
     let mut install = Install::open(&game)?;
     let reference = campaign::load(&install, &doc.snapshot().bytes()?, 1)?;
     let rules = &reference.resources.rules;
+    let ore_variants = (0..12)
+        .map(|variant| {
+            rules
+                .overlay_registry()
+                .tiberium_placement_overlay_id(&rules.tiberium_types.types()[0], variant)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let prerequisites = json!({
         "weapons":(["NukePayload","ChemLauncher"].map(|name|json!({"id":name,"definition":rules.weapon(name).map(|w|json!({"damage":w.damage,"warhead":w.warhead,"projectile":w.projectile}))}))),
         "assets":(["METSMALL.SHP","METLARGE.SHP","IONBEAM.SHP","RING1.SHP"].map(|name|json!({"name":name,"exists":install.manager.resolve_ref(name).is_some()}))),
         "meteor_registered":(["METSMALL","METLARGE"].map(|name|rules.anim_type_names.contains(name))),
-        "ore_id":rules.overlay_registry().flat_tiberium_variant_ids(&rules.tiberium_types.types()[0]),
+        "ore_id":ore_variants,
     });
     std::fs::write(
         root.join("prerequisites.json"),
         serde_json::to_vec_pretty(&prerequisites)?,
     )?;
-    let ore = rules
-        .overlay_registry()
-        .flat_tiberium_variant_ids(&rules.tiberium_types.types()[0])
-        .context("ore variants")?[0];
+    let ore = ore_variants[0];
     let ore_section = rules.tiberium_types.types()[0].section.clone();
     drop(reference);
     if with_meteors {

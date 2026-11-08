@@ -256,7 +256,7 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
         loaded.overlay_grid,
         &roster,
         None,
-    );
+    )?;
     ensure!(post.navigation_published, "post-map navigation");
     sim.publish_scenario_started();
     let player = sim.session().current_house().context("campaign player")?;

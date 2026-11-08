@@ -11,9 +11,6 @@ use vera20k_core::{
     },
     rules::{ini_parser::IniFile, native_processing::RulesLayerStack, ruleset::RuleSet},
 };
-#[path = "random_archipelago.rs"]
-mod archipelago;
-
 pub fn generate(
     install: &mut Install,
     options: &RandomMapOptions,
@@ -199,9 +196,6 @@ struct Candidate {
     unfilled_start_slots: usize,
 }
 
-/// The retail builder normalizes NumPlayers back to eight. The underlying
-/// pipeline uses dynamic start/region lists, so extended maps call it directly
-/// with the editor's geometry and player quota, including resources/clearings.
 fn generate_candidate(
     recipe: &RandomMapOptions,
     settings: &rmg::RmgSettings,
@@ -210,91 +204,17 @@ fn generate_candidate(
     tech: &[rmg::phases::tech_buildings::TechType],
     observe: &mut dyn FnMut(GenerationPoint),
 ) -> Candidate {
-    let options = &recipe.terrain;
-    if options.num_players <= 8 {
-        let generated =
-            build::generate_map_observed(options, settings, resolved, blocks, tech, &mut |view| {
-                observe(view.point())
-            });
-        return Candidate {
-            map_file: generated.map_file,
-            unfilled_start_slots: generated.unfilled_start_slots,
-        };
-    }
-    let geometry = recipe.geometry();
-    let mut rng = rmg::RmgRng::new(options.seed_u16());
-    let bridge_enabled = rng.next_unit() < 0.25;
-    let mut grid = rmg::RmgGrid::new(geometry.stride, geometry.diamond_min, geometry.diamond_max);
-    let mut scratch =
-        rmg::RmgScratch::new(geometry.stride, geometry.diamond_min, geometry.diamond_max);
-    let mut gaussian = rmg::Gaussian::default();
-    let morphable = |tile: i32| {
-        usize::try_from(tile)
-            .ok()
-            .and_then(|id| resolved.morphable.get(id))
-            .copied()
-            .unwrap_or(false)
-    };
-    let inputs = rmg::pipeline::PipelineInputs {
-        ids: &resolved.ids,
+    let generated = build::generate_map_observed(
+        &recipe.terrain,
+        settings,
+        resolved,
         blocks,
-        morphable: &morphable,
-        wheel_impassable: resolved.wheel_impassable,
-        cliff_back_impassability: resolved.cliff_back_impassability,
-        overlay_zones: &resolved.overlay_zones,
-        tech_types: tech,
-        trig: resolved.trig,
-        map_type: options.map_type,
-        accessibility: options.accessibility,
-        region_size: options.region_size,
-        theater: options.theater,
-        num_players: options.num_players,
-        bridge_enabled,
-        water_percent: options.water_amount,
-        resources: options.resources,
-        tib_option: options.tiberium,
-        min_tib: settings.min_tiberium,
-        max_tib: settings.max_tiberium,
-        tiberium_layout: options.tiberium_layout,
-        ruggedness: options.ruggedness,
-        vegetation: options.vegetation,
-        width: options.width,
-        max_trees: settings.max_trees,
-    };
-    observe(GenerationPoint::Initial);
-    let output = if options.map_type == 0 {
-        archipelago::run(
-            &mut grid,
-            &mut scratch,
-            &mut rng,
-            &mut gaussian,
-            &geometry,
-            &inputs,
-            observe,
-        )
-    } else {
-        rmg::pipeline::run_pipeline(
-            &mut grid,
-            &mut scratch,
-            &mut rng,
-            &mut gaussian,
-            &geometry,
-            &inputs,
-            &mut |stage, _, _, _| observe(GenerationPoint::After(stage)),
-        )
-    };
-    let mut map_file =
-        rmg::emit::empty_map_file(options, geometry.gen_w as u32, geometry.gen_h as u32);
-    rmg::emit::populate(
-        &mut map_file,
-        &grid,
-        &output.terrain,
-        &output.structures,
-        &output.waypoints,
+        tech,
+        &mut |view| observe(view.point()),
     );
     Candidate {
-        map_file,
-        unfilled_start_slots: output.unfilled_start_slots,
+        map_file: generated.map_file,
+        unfilled_start_slots: generated.unfilled_start_slots,
     }
 }
 

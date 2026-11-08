@@ -129,8 +129,8 @@ fn main() -> Result<()> {
     let rules = &ref_runtime.resources.rules;
     let ore = rules
         .overlay_registry()
-        .flat_tiberium_variant_ids(&rules.tiberium_types.types()[0])
-        .context("ore")?[0];
+        .tiberium_placement_overlay_id(&rules.tiberium_types.types()[0], 0)
+        .context("ore")?;
     ensure!(
         rules.tiberium_types.types()[0].growth == 2200,
         "audit expects stock Riparius Growth=2200"
