@@ -871,6 +871,99 @@ fn framework_workspace_shows_matching_palette_in_compact_and_desktop_windows() {
 }
 
 #[test]
+fn map_boundaries_follow_camera_and_toggle_in_every_canvas_mode() {
+    let (mut view, root) = view();
+    let scene = terrain_scene();
+    view.editor.attach(&scene);
+    view.scene = Some(scene);
+    view.editor.tool = crate::editing::Tool::Terrain;
+    assert!(view.editor.map_boundaries);
+    let ctx = egui::Context::default();
+    let before = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    for (flat, framework) in [(false, false), (false, true), (true, false)] {
+        view.editor.flat_view = flat;
+        view.editor.framework = framework;
+        view.center = egui::pos2(-25., 650.);
+        view.fit = false;
+        for (zoom, pan) in [(0.25, egui::vec2(0., 0.)), (0.5, egui::vec2(13., -29.))] {
+            view.zoom = zoom;
+            view.center += pan;
+            for enabled in [true, false] {
+                view.editor.map_boundaries = enabled;
+                let output = crate::test_support::run_ui(
+                    &ctx,
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::pos2(40., 20.),
+                            egui::vec2(1000., 700.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| view.canvas_inner(ui, None),
+                );
+                let guides: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| {
+                        if let egui::Shape::Rect(r) = &s.shape
+                            && [
+                                egui::Color32::from_rgb(255, 64, 64),
+                                egui::Color32::from_rgb(64, 112, 255),
+                            ]
+                            .contains(&r.stroke.color)
+                        {
+                            Some((s.clip_rect, r.rect))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                assert_eq!(guides.len(), if enabled { 2 } else { 0 });
+                if enabled {
+                    let viewport = view.workbench.canvas_rect.unwrap();
+                    let camera = crate::camera::MapCamera {
+                        center: view.center,
+                        zoom,
+                    };
+                    let world = camera.world_rect(viewport);
+                    // Size=20x20, LocalSize=2,4,16,10; independent of view mode.
+                    for ((clip, actual), (origin, size)) in guides.iter().zip([
+                        (egui::pos2(-600., 330.), egui::vec2(1200., 600.)),
+                        (egui::pos2(-480., 450.), egui::vec2(960., 300.)),
+                    ]) {
+                        assert_eq!(*clip, viewport);
+                        assert!(
+                            (actual.min - (viewport.min + (origin - world.min) * zoom)).length()
+                                < 0.01
+                        );
+                        assert!((actual.size() - size * zoom).length() < 0.01);
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn canvas_mode_buttons_switch_exclusively_without_moving_the_map() {
     let (mut view, _, root) = flat_authoring_view();
     let before = view

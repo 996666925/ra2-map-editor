@@ -1,4 +1,6 @@
 {
+  "地图边界线": "Map boundaries",
+  "红线：完整地图范围（Size）；蓝线：可玩区域（LocalSize）。": "Red: full map bounds (Size); blue: playable area (LocalSize).",
   " · 有未保存修改": " · Unsaved changes",
   " 个": " players",
   " 层": " levels",

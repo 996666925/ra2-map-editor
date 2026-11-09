@@ -790,6 +790,9 @@ impl MapView {
             self.selected = self.hover;
         }
         let painter = ui.painter().with_clip_rect(rect);
+        if self.editor.map_boundaries {
+            crate::map_boundary::draw(&painter, &scene.source.header, rect, &camera);
+        }
         let at = self.hover.map(|i| [scene.cells[i].rx, scene.cells[i].ry]);
         self.editor.brush_modifiers(ui.input(|i| i.modifiers));
         if self.editor.flat_view {

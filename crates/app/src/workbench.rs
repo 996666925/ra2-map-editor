@@ -477,6 +477,10 @@ impl MapView {
         ui.separator();
         ui.add_space(6.);
         theme::section(ui, tr!("显示图层"), "");
+        ui.checkbox(&mut self.editor.map_boundaries, tr!("地图边界线"))
+            .on_hover_text(tr!(
+                "红线：完整地图范围（Size）；蓝线：可玩区域（LocalSize）。"
+            ));
         if self.editor.framework {
             ui.small(tr!("框架与 2D 地形互斥；Ctrl+F 切换框架，F2 切换 2D。"));
         }

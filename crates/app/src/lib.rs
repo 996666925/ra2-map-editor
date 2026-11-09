@@ -16,6 +16,7 @@ mod form_edit;
 mod framework_view;
 mod i18n;
 mod labels;
+mod map_boundary;
 mod map_loader;
 mod map_settings_ui;
 mod map_view;
