@@ -677,6 +677,28 @@ impl Editor {
         } else {
             Color32::from_rgb(90, 225, 170)
         };
+        // Objects and waypoints share the same move guide and validated footprint.
+        if self.tool == Tool::Move
+            && let Some(record) = self.selected.and_then(|id| self.records.get(&id))
+            && let Some(origin) = record.cell()
+        {
+            let project = |cell: Cell| {
+                let level = terrain_tools::value(doc, scene, cell).level;
+                let (x, y) = vera20k_core::map::terrain::iso_to_screen(cell[0], cell[1], level);
+                rect.min + (egui::pos2(x + 30., y + 15.) - world.min) * camera.zoom
+            };
+            let target = project(at);
+            painter.line_segment([project(origin), target], egui::Stroke::new(1.5, color));
+            if record.section == "Waypoints" {
+                painter.text(
+                    target + egui::vec2(10., -18.),
+                    egui::Align2::LEFT_BOTTOM,
+                    record.type_id(),
+                    egui::FontId::proportional(12.),
+                    color,
+                );
+            }
+        }
         if preview.error.is_none() && !preview.ground.is_empty() {
             let raw: HashMap<_, _> = scene
                 .catalog

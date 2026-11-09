@@ -132,6 +132,7 @@ pub struct Editor {
     pub owner: String,
     pub waypoint: u32,
     pub selected: Option<u64>,
+    move_press: Option<Cell>,
     pub(crate) records: BTreeMap<u64, Record>,
     pub(super) marker_cache: object_markers::MarkerCache,
     pub(crate) visual_revision: u64,
@@ -224,6 +225,7 @@ impl Editor {
             owner: "Neutral".into(),
             waypoint: 0,
             selected: None,
+            move_press: None,
             records: BTreeMap::new(),
             marker_cache: Default::default(),
             visual_revision: 0,
@@ -289,6 +291,7 @@ impl Editor {
             .map(|_| Stamp::bytes(scene.source.bytes()));
         self.selected = None;
         self.tool = Tool::Select;
+        self.move_press = None;
         self.brush = 0;
         self.last = None;
         self.stroking = false;
@@ -332,6 +335,7 @@ impl Editor {
         self.last_recovery = None;
         self.selected = None;
         self.records.clear();
+        self.move_press = None;
         self.marker_cache = Default::default();
         self.overlays.clear();
         self.stroking = false;
@@ -692,6 +696,7 @@ impl Editor {
         }
     }
     pub fn history(&mut self, redo: bool, scene: &MapScene) {
+        self.move_press = None;
         if self.cancel_active(scene) {
             return;
         }
@@ -916,7 +921,15 @@ impl Editor {
         if self.region_pointer(scene, at, press, down, release) {
             return;
         }
-        if press {
+        // A click picks up the object; dragging can also place it on release.
+        // Releasing the initial click in the same cell keeps click-to-place active.
+        let finish_move = release
+            && self.tool == Tool::Move
+            && self
+                .move_press
+                .take()
+                .is_some_and(|start| at.is_some_and(|at| at != start));
+        if press || finish_move {
             self.last = None;
             self.brush_segment = None;
             self.feedback.clear();
@@ -940,7 +953,18 @@ impl Editor {
                 template_level: self.template_level,
             });
             if self.tool == Tool::Select {
-                self.select_from_canvas(marker);
+                if self.select_from_canvas(marker)
+                    && self
+                        .selected
+                        .and_then(|id| self.records.get(&id))
+                        .and_then(Record::cell)
+                        .is_some()
+                {
+                    self.activate_tool(Tool::Move);
+                    if self.tool == Tool::Move {
+                        self.move_press = at;
+                    }
+                }
             } else if self.tool == Tool::Pick {
                 if let Some(at) = at
                     && let Some(value) = self.doc.as_ref().and_then(|doc| doc.terrain(at))
@@ -1003,6 +1027,9 @@ impl Editor {
                         self.commit(scene, self.tool.name());
                         let id = self.selected;
                         self.select(id);
+                        if self.tool == Tool::Move {
+                            self.activate_tool(Tool::Select);
+                        }
                     }
                     Err(e) => self.status = format!("{e:#}"),
                 }
@@ -1427,6 +1454,8 @@ impl Editor {
         }
         let mut hit = None;
         let mut distance = 18. * 18.;
+        let mut waypoint_hit = None;
+        let mut waypoint_distance = 18. * 18.;
         for marker in &self.marker_cache.markers {
             let waypoint = marker.waypoint;
             if (waypoint && !self.layers[2]) || (!waypoint && !self.layers[1]) {
@@ -1493,11 +1522,20 @@ impl Editor {
             }
             if let Some(pointer) = pointer {
                 let d = pointer.distance_sq(p);
+                if waypoint && (d < waypoint_distance || (d == waypoint_distance && selected)) {
+                    waypoint_distance = d;
+                    waypoint_hit = Some(id);
+                }
                 if d < distance || (d == distance && selected) {
                     distance = d;
                     hit = Some(id);
                 }
             }
+        }
+        // Waypoint handles are drawn over sprites and must remain clickable
+        // when a unit or building occupies the same screen position.
+        if waypoint_hit.is_some() {
+            return waypoint_hit;
         }
         if let Some(pointer) = pointer {
             if let Some(id) = scene
@@ -1537,3 +1575,7 @@ mod object_markers;
 
 #[path = "tunnel_edit.rs"]
 mod tunnel_edit;
+
+#[cfg(test)]
+#[path = "object_move_tests.rs"]
+mod object_move_tests;

@@ -27,12 +27,14 @@ pub(crate) const TERRAIN_KEYS: [(egui::Key, TerrainMode, &str); 3] = [
 impl Tool {
     pub(crate) fn hint(self) -> &'static str {
         match self {
-            Self::Select => tr!("单击选择格子或对象；M 移动，Ctrl+D 克隆，Delete 删除"),
+            Self::Select => tr!(
+                "点击对象或航点后拖动或再点击目标格移动；Esc / 右键取消，Ctrl+D 克隆，Delete 删除"
+            ),
             Self::Region => tr!("拖动框选；Shift 添加，Alt 减选；Ctrl+C/X/V 复制、剪切、粘贴"),
             Self::Paste => tr!("单击放置区域，可连续粘贴；Esc 或右键退出"),
             Self::RegionMove => tr!("单击目标位置移动整个区域；Esc 或右键取消"),
             Self::Clone => tr!("单击克隆完整对象，可连续放置；Esc 或右键退出"),
-            Self::Move => tr!("单击目标位置移动所选对象；Esc 或右键取消"),
+            Self::Move => tr!("拖到目标格松手，或单击目标格放下所选对象 / 航点；Esc 或右键取消"),
             Self::Place => {
                 tr!("单击放置，拖动连刷；按住 Shift 锁定地图轴向，松手提交，Esc 或右键取消")
             }
@@ -88,6 +90,7 @@ impl Editor {
             return;
         }
         self.tool = tool;
+        self.move_press = None;
         if tool == Tool::Tunnel && !self.tunnel_edit.has_draft() {
             self.tunnel_edit.begin_new();
         }
@@ -104,6 +107,14 @@ impl Editor {
 
     /// Cancel just the in-progress transaction; never pop committed history.
     pub(crate) fn cancel_active(&mut self, scene: &MapScene) -> bool {
+        if self.tool == Tool::Move {
+            self.move_press = None;
+            self.region.cancel();
+            self.feedback.clear();
+            self.tool = Tool::Select;
+            self.status = tr!("已取消当前操作；之前完成的修改已保留。").into();
+            return true;
+        }
         if !self.stroking {
             return false;
         }
@@ -127,6 +138,7 @@ impl Editor {
     }
 
     pub(crate) fn cancel_operation(&mut self, scene: &MapScene) {
+        self.move_press = None;
         if self.cancel_active(scene) {
             return;
         }

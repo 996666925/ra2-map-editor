@@ -228,6 +228,236 @@ fn flat_frame(
 }
 
 #[test]
+fn waypoint_canvas_click_move_cancel_history_and_reopen_preserve_identity() {
+    use crate::editing::Tool;
+
+    fn frame(view: &mut MapView, ctx: &egui::Context, events: Vec<egui::Event>) {
+        crate::test_support::run_ui(
+            ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200., 800.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| view.canvas_inner(ui, None),
+        );
+    }
+    fn button(pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+    let (mut view, scene, root) = flat_authoring_view();
+    view.editor.flat_view = false;
+    view.editor.activate_tool(Tool::Select);
+    view.editor.waypoint = 7; // Moving the clicked waypoint must ignore this palette index.
+    let origin = [35, 35];
+    let destination = [40, 37];
+    let doc = view.editor.doc.as_mut().unwrap();
+    doc.waypoint(42, origin).unwrap();
+    doc.set_ini("ScriptTypes", "0", Some(b"route".to_vec()))
+        .unwrap();
+    doc.set_ini("route", "0", Some(b"3,42".to_vec())).unwrap();
+    view.editor.commit(&scene, "fixture waypoint and route");
+    let id = view
+        .editor
+        .records
+        .iter()
+        .find(|(_, r)| r.section == "Waypoints" && r.key == "42")
+        .map(|(&id, _)| id)
+        .unwrap();
+    let before = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    let ctx = egui::Context::default();
+    frame(&mut view, &ctx, vec![]);
+    let rect = view.workbench.canvas_rect.unwrap();
+    let camera = crate::camera::MapCamera {
+        center: view.center,
+        zoom: view.zoom,
+    };
+    let marker = view
+        .editor
+        .marker_cache
+        .markers
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap();
+    let start = rect.min + (marker.origin - camera.world_rect(rect).min) * camera.zoom;
+    let cell = scene
+        .cells
+        .iter()
+        .find(|c| [c.rx, c.ry] == destination)
+        .unwrap();
+    // The fixture's TMP is only a few pixels wide; use one of its visible texels.
+    let target_world = scene.cell_rect(cell).unwrap().min + egui::vec2(1., 0.);
+    assert_eq!(
+        scene
+            .pick(target_world)
+            .map(|i| [scene.cells[i].rx, scene.cells[i].ry]),
+        Some(destination)
+    );
+    let target = rect.min + (target_world - camera.world_rect(rect).min) * camera.zoom;
+
+    // Cancel through both production input paths; hovering and release never write.
+    for cancel_with_escape in [true, false] {
+        frame(
+            &mut view,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(start),
+                button(start, egui::PointerButton::Primary, true),
+            ],
+        );
+        assert_eq!(view.editor.selected, Some(id));
+        assert_eq!(view.editor.tool, Tool::Move);
+        frame(
+            &mut view,
+            &ctx,
+            vec![button(start, egui::PointerButton::Primary, false)],
+        );
+        frame(&mut view, &ctx, vec![egui::Event::PointerMoved(target)]);
+        assert_eq!(
+            view.editor
+                .doc
+                .as_ref()
+                .unwrap()
+                .snapshot()
+                .bytes()
+                .unwrap(),
+            before
+        );
+        let cancel = if cancel_with_escape {
+            vec![
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                },
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers: Default::default(),
+                },
+            ]
+        } else {
+            vec![
+                button(target, egui::PointerButton::Secondary, true),
+                button(target, egui::PointerButton::Secondary, false),
+            ]
+        };
+        frame(&mut view, &ctx, cancel);
+        assert_eq!(view.editor.tool, Tool::Select);
+        assert_eq!(
+            view.editor
+                .doc
+                .as_ref()
+                .unwrap()
+                .snapshot()
+                .bytes()
+                .unwrap(),
+            before
+        );
+    }
+    frame(
+        &mut view,
+        &ctx,
+        vec![
+            egui::Event::PointerMoved(start),
+            button(start, egui::PointerButton::Primary, true),
+        ],
+    );
+    frame(
+        &mut view,
+        &ctx,
+        vec![button(start, egui::PointerButton::Primary, false)],
+    );
+    frame(&mut view, &ctx, vec![egui::Event::PointerMoved(target)]);
+    frame(
+        &mut view,
+        &ctx,
+        vec![button(target, egui::PointerButton::Primary, true)],
+    );
+    frame(
+        &mut view,
+        &ctx,
+        vec![button(target, egui::PointerButton::Primary, false)],
+    );
+    assert_eq!(view.editor.tool, Tool::Select);
+    assert_eq!(view.editor.selected, Some(id));
+    assert_eq!(view.editor.records[&id].cell(), Some(destination));
+    assert_eq!(view.editor.records[&id].key, "42");
+    assert_eq!(view.editor.waypoint, 7);
+    let after = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    assert_ne!(after, before);
+    view.editor.history(false, &scene);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    view.editor.history(true, &scene);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        after
+    );
+    let path = root.join("moved-waypoint.map");
+    std::fs::write(&path, &after).unwrap();
+    let (source, _) = crate::map::SourceMap::parse(
+        "moved.map".into(),
+        "test".into(),
+        std::fs::read(path).unwrap(),
+    )
+    .unwrap();
+    let reopened = crate::document::MapDocument::new(source.edit_base.unwrap());
+    assert_eq!(reopened.ini_text("route", "0"), "3,42");
+    assert_eq!(
+        reopened
+            .record_iter()
+            .find(|(_, r)| r.section == "Waypoints" && r.key == "42")
+            .unwrap()
+            .1
+            .cell(),
+        Some(destination)
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn flat_terrain_canvas_drag_preview_commit_and_history_share_exact_cells() {
     let (mut view, scene, root) = flat_authoring_view();
     let ctx = egui::Context::default();
