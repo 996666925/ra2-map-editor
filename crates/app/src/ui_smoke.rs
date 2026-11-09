@@ -55,6 +55,7 @@ pub(super) fn panels() -> Vec<(String, Panel)> {
         Tool::Move,
         Tool::Clone,
         Tool::Waypoint,
+        Tool::Tunnel,
         Tool::Pick,
         Tool::Paste,
         Tool::RegionMove,
@@ -176,6 +177,7 @@ impl MapView {
                             match tool {
                                 Tool::Place => 1,
                                 Tool::Waypoint => 2,
+                                Tool::Tunnel => 2,
                                 Tool::Ore | Tool::Gems | Tool::Overlay | Tool::Erase => 3,
                                 _ => 0,
                             },

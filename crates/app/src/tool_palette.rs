@@ -127,6 +127,7 @@ impl Editor {
                     (Tool::Ore, Icon::Ore, tr!("矿石")),
                     (Tool::Gems, Icon::Gem, tr!("宝石")),
                     (Tool::Waypoint, Icon::Flag, tr!("航点")),
+                    (Tool::Tunnel, Icon::Move, tr!("隧道")),
                     (Tool::Erase, Icon::Erase, tr!("擦除")),
                 ] {
                     if theme::button(ui, icon, label, 72., self.tool == tool)

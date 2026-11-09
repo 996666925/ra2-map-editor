@@ -505,6 +505,7 @@ impl MapView {
             ui.checkbox(&mut self.editor.remap, tr!("所属方换色"));
             ui.checkbox(&mut self.editor.lighting, tr!("地图基础光照"));
         }
+        ui.checkbox(&mut self.editor.tunnels_visible, tr!("隧道路径"));
         ui.add_space(8.);
         ui.separator();
         egui::CollapsingHeader::new(tr!("地图信息"))

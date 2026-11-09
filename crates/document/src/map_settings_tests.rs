@@ -142,6 +142,28 @@ fn expansion_migrates_objects_packs_tags_nodes_tubes_and_script_cells_as_one_his
         .unwrap();
     doc.set_ini("Tubes", "0", Some(b"24,40,2,26,40,2,2,-1".to_vec()))
         .unwrap();
+    doc.set_ini("TunnelPortalFacing", "0", Some(b"2".to_vec()))
+        .unwrap();
+    doc.set_ini("TunnelPortalFacing", "99", Some(b"6".to_vec()))
+        .unwrap();
+    doc.set_ini(
+        "TunnelPortalBackup",
+        "T0_24_40",
+        Some(b"24,40,12,0,5,7,600,2,5,7".to_vec()),
+    )
+    .unwrap();
+    doc.set_ini(
+        "TunnelPortalBackup",
+        "T0_26_40",
+        Some(b"26,40,0,0,5,0".to_vec()),
+    )
+    .unwrap();
+    doc.set_ini(
+        "TunnelPortalBackup",
+        "T99_24_40",
+        Some(b"24,40,0,0,5,0".to_vec()),
+    )
+    .unwrap();
     crate::base_nodes::write(
         &mut doc,
         "Americans",
@@ -183,6 +205,17 @@ fn expansion_migrates_objects_packs_tags_nodes_tubes_and_script_cells_as_one_his
         format!("4,{}", 43 * 128 + 27)
     );
     assert_eq!(doc.ini_text("Tubes", "0"), "27,43,2,29,43,2,2,-1");
+    assert_eq!(doc.ini_text("TunnelPortalFacing", "0"), "2");
+    assert!(doc.ini_value("TunnelPortalFacing", "99").is_none());
+    assert_eq!(
+        doc.ini_text("TunnelPortalBackup", "T0_27_43"),
+        "27,43,12,0,5,7,600,2,5,7"
+    );
+    assert_eq!(
+        doc.ini_text("TunnelPortalBackup", "T0_29_43"),
+        "29,43,0,0,5,0"
+    );
+    assert_eq!(doc.ini_entries("TunnelPortalBackup").len(), 2);
     assert_eq!(
         crate::base_nodes::read(&doc, "Americans").unwrap()[0].cell,
         [27, 43]

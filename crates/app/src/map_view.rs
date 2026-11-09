@@ -515,6 +515,7 @@ impl MapView {
             crate::editing::Tool::Select
                 | crate::editing::Tool::Terrain
                 | crate::editing::Tool::Pick
+                | crate::editing::Tool::Tunnel
         ) && !self.workbench.mission.open
             && !self.workbench.mission.picking();
         if self.editor.flat_view && !flat_supported {
@@ -690,6 +691,7 @@ impl MapView {
                         | crate::editing::Tool::Move
                         | crate::editing::Tool::Place
                         | crate::editing::Tool::Pick
+                        | crate::editing::Tool::Tunnel
                 ))
         {
             self.editor.cancel_operation(scene);
@@ -783,6 +785,7 @@ impl MapView {
         if self.editor.flat_view {
             self.editor
                 .terrain_preview(&painter, scene, rect, &camera, at);
+            self.editor.tunnel_preview(&painter, scene, rect, &camera);
             for &cell in &self.editor.feedback {
                 painter.add(egui::Shape::closed_line(
                     crate::flat_view::points(cell, rect, &camera).to_vec(),
@@ -844,6 +847,7 @@ impl MapView {
         }
         self.editor
             .terrain_preview(&painter, scene, rect, &camera, at);
+        self.editor.tunnel_preview(&painter, scene, rect, &camera);
         let marker = self
             .editor
             .markers(&painter, scene, rect, &camera, response.hover_pos());

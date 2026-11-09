@@ -5,7 +5,7 @@ use crate::map::MapScene;
 use eframe::egui;
 use ra2_map_scene::terrain_tools::TerrainMode;
 
-pub(crate) const TOOL_KEYS: [(egui::Key, Tool, &str); 9] = [
+pub(crate) const TOOL_KEYS: [(egui::Key, Tool, &str); 10] = [
     (egui::Key::V, Tool::Select, "V"),
     (egui::Key::R, Tool::Region, "R"),
     (egui::Key::B, Tool::Terrain, "B"),
@@ -13,6 +13,7 @@ pub(crate) const TOOL_KEYS: [(egui::Key, Tool, &str); 9] = [
     (egui::Key::M, Tool::Move, "M"),
     (egui::Key::P, Tool::Place, "P"),
     (egui::Key::W, Tool::Waypoint, "W"),
+    (egui::Key::T, Tool::Tunnel, "T"),
     (egui::Key::E, Tool::Erase, "E"),
     (egui::Key::O, Tool::Ore, "O"),
 ];
@@ -37,6 +38,7 @@ impl Tool {
             }
             Self::Pick => tr!("单击吸取地形，随后回到地形画笔"),
             Self::Waypoint => tr!("单击设置当前航点；编号已存在时会移动该航点"),
+            Self::Tunnel => tr!("点击或拖动依次绘制隧道路径；完成后在左侧保存"),
             Self::Erase => tr!("拖动擦除覆盖物与资源；按住 Shift 锁定地图轴向，Ctrl+Z 撤销整笔"),
             Self::Terrain => {
                 tr!("选择地形模式后绘制；画笔按住 Shift 锁定地图轴向，松开提交，Esc 取消")
@@ -86,12 +88,15 @@ impl Editor {
             return;
         }
         self.tool = tool;
+        if tool == Tool::Tunnel && !self.tunnel_edit.has_draft() {
+            self.tunnel_edit.begin_new();
+        }
         self.feedback.clear();
         self.status = tool.hint().into();
         self.ui_state.tab = match tool {
             Tool::Terrain | Tool::Pick => 0,
             Tool::Place => 1,
-            Tool::Waypoint => 2,
+            Tool::Waypoint | Tool::Tunnel => 2,
             Tool::Ore | Tool::Gems | Tool::Overlay | Tool::Erase => 3,
             _ => return,
         };
@@ -106,6 +111,7 @@ impl Editor {
         self.fill.cancel();
         self.object_brush.cancel();
         self.region.cancel();
+        self.tunnel_edit.cancel_draft();
         if let Some(doc) = &mut self.doc {
             doc.cancel();
         }
@@ -128,6 +134,7 @@ impl Editor {
         self.fill.cancel();
         self.object_brush.cancel();
         self.region.cancel();
+        self.tunnel_edit.cancel_draft();
         self.feedback.clear();
         self.tool = Tool::Select;
         self.status = tr!("已返回选择工具。").into();

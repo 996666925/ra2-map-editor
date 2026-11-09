@@ -97,6 +97,24 @@ fn shortcuts_switch_tools_but_text_entry_and_open_menus_do_not_edit_the_map() {
 }
 
 #[test]
+fn tunnel_shortcut_enters_route_tool_and_escape_discards_the_draft() {
+    let (mut editor, ctx, root) = editor();
+    let scene = terrain_scene();
+    editor.attach(&scene);
+    let _ = crate::test_support::run_ui(&ctx, key(egui::Key::T, egui::Modifiers::NONE), |ui| {
+        editor.shortcuts(ui.ctx(), &scene)
+    });
+    assert_eq!(editor.tool, Tool::Tunnel);
+    assert_eq!(editor.ui_state.tab, 2);
+    assert!(editor.tunnel_edit.has_draft());
+    editor.cancel_operation(&scene);
+    assert_eq!(editor.tool, Tool::Select);
+    assert!(!editor.tunnel_edit.has_draft());
+    drop(editor);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn escape_exits_repeat_placement_and_bracket_keys_clamp_the_brush() {
     let (mut e, ctx, root) = editor();
     let scene = terrain_scene();

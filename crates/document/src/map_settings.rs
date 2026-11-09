@@ -253,6 +253,8 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
             "Waypoints",
             "CellTags",
             "Tubes",
+            "TunnelPortalBackup",
+            "TunnelPortalFacing",
             "Actions",
             "ScriptTypes",
             "Houses",
@@ -507,6 +509,7 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
                 )?;
             }
         }
+        let mut retained_tubes = BTreeSet::new();
         for (line, row) in raw.entries("Tubes") {
             let bytes = raw.value(line);
             let f: Vec<_> = bytes.split(|b| *b == b',').collect();
@@ -560,6 +563,7 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
                     )?),
                 );
                 summary.references_moved += 1;
+                retained_tubes.insert(row.key.as_ref().unwrap().clone());
             } else {
                 patch.lines.insert(line, None);
                 lost(
@@ -568,6 +572,41 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
                     points[0],
                     false,
                 );
+            }
+        }
+        // Facing is keyed by tube identity and has no spatial payload.
+        for (line, row) in raw.entries("TunnelPortalFacing") {
+            if !retained_tubes.contains(row.key.as_ref().unwrap()) {
+                patch.lines.insert(line, None);
+            }
+        }
+        // Editor-owned portal underlays use absolute coordinates in both the
+        // key and the value. Move them with their tube, or discard backups
+        // belonging to clipped tubes instead of restoring unrelated cells.
+        for (line, row) in raw.entries("TunnelPortalBackup") {
+            let key = row.key.as_deref().unwrap();
+            let (owner, _) = key.rsplit_once('_').context("隧道洞口备份键无效")?;
+            let (owner, _) = owner.rsplit_once('_').context("隧道洞口备份键无效")?;
+            let owner = owner.strip_prefix('T').context("隧道洞口备份键无效")?;
+            let bytes = raw.value(line);
+            let fields: Vec<_> = bytes.split(|b| *b == b',').collect();
+            ensure!(matches!(fields.len(), 3 | 6 | 10), "隧道洞口备份字段无效");
+            let at = [
+                u16::try_from(number(fields[0])?)?,
+                u16::try_from(number(fields[1])?)?,
+            ];
+            patch.lines.insert(line, None);
+            if retained_tubes.contains(owner)
+                && let Some(at) = options.translated(at, delta)
+            {
+                patch
+                    .append
+                    .entry("TunnelPortalBackup".into())
+                    .or_default()
+                    .push((
+                        format!("T{owner}_{}_{}", at[0], at[1]),
+                        patch_columns(bytes, &[(0, i32::from(at[0])), (1, i32::from(at[1]))])?,
+                    ));
             }
         }
         for script in mission::ids(&scratch, Kind::Script) {

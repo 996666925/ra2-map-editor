@@ -32,6 +32,7 @@ pub enum Tool {
     Move,
     Waypoint,
     Pick,
+    Tunnel,
 }
 #[cfg(test)]
 #[path = "editing_tests.rs"]
@@ -53,6 +54,7 @@ impl Tool {
             Self::Move => tr!("移动选中对象"),
             Self::Waypoint => tr!("起点 / 航点"),
             Self::Pick => tr!("吸取地形"),
+            Self::Tunnel => tr!("隧道"),
         }
     }
     fn brush(self) -> bool {
@@ -95,6 +97,7 @@ pub struct Editor {
     pub framework: bool,
     pub task_labels: bool,
     pub base_nodes_visible: bool,
+    pub tunnels_visible: bool,
     pub remap: bool,
     pub layers: [bool; 3],
     ui_state: editing_ui::EditorUi,
@@ -104,6 +107,7 @@ pub struct Editor {
     pub brush: usize,
     pub radius: u16,
     region: region_edit::RegionEdit,
+    tunnel_edit: tunnel_edit::TunnelEdit,
     plateau: cliff_edit::PlateauEdit,
     fill: fill_edit::FillEdit,
     object_brush: object_brush::ObjectBrush,
@@ -183,6 +187,7 @@ impl Editor {
             framework: false,
             task_labels: true,
             base_nodes_visible: true,
+            tunnels_visible: true,
             remap: true,
             ui_state: Default::default(),
             document_name: String::new(),
@@ -191,6 +196,7 @@ impl Editor {
             brush: 0,
             radius: 1,
             region: Default::default(),
+            tunnel_edit: Default::default(),
             plateau: Default::default(),
             fill: Default::default(),
             object_brush: Default::default(),
@@ -255,6 +261,7 @@ impl Editor {
         self.fill.cancel();
         self.object_brush.cancel();
         self.region = Default::default();
+        self.tunnel_edit = Default::default();
         self.ui_state.textures.clear();
         self.ui_state.template_textures.clear();
         self.ui_state.terrain_group = None;
@@ -311,6 +318,7 @@ impl Editor {
         self.fill.cancel();
         self.object_brush.cancel();
         self.region = Default::default();
+        self.tunnel_edit = Default::default();
         self.document_name = meta.name.clone();
         let mut doc = MapDocument::new(base);
         doc.saved_state = None;
@@ -696,6 +704,7 @@ impl Editor {
         self.fill.cancel();
         self.object_brush.cancel();
         self.region.cancel();
+        self.tunnel_edit.cancel_draft();
         self.stroking = false;
         self.last = None;
         self.feedback.clear();
@@ -754,6 +763,7 @@ impl Editor {
         self.plateau.cancel();
         self.fill.cancel();
         self.object_brush.cancel();
+        self.tunnel_edit = Default::default();
         self.select(None);
         self.changed(scene, true);
     }
@@ -867,6 +877,25 @@ impl Editor {
         marker: Option<u64>,
     ) {
         if self.doc.is_none() {
+            return;
+        }
+        if self.tool == Tool::Tunnel {
+            if press && !self.check_property_draft() {
+                return;
+            }
+            if press && !self.tunnel_edit.has_draft() {
+                self.tunnel_edit.begin_new();
+            }
+            if (press || down || release)
+                && let Some(at) = at
+            {
+                if let Err(error) = self
+                    .tunnel_edit
+                    .append_pointer(self.doc.as_ref().unwrap(), at)
+                {
+                    self.status = format!("{error:#}");
+                }
+            }
             return;
         }
         if press && self.tool != Tool::Select && !self.check_property_draft() {
@@ -1507,3 +1536,6 @@ mod object_edit;
 
 #[path = "object_markers.rs"]
 mod object_markers;
+
+#[path = "tunnel_edit.rs"]
+mod tunnel_edit;

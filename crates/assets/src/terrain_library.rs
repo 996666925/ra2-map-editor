@@ -16,10 +16,11 @@ pub enum TerrainCategory {
     Water,
     Shore,
     Bridge,
+    Tunnel,
     Other,
 }
 impl TerrainCategory {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Ground,
         Self::Cliff,
         Self::Ramp,
@@ -27,6 +28,7 @@ impl TerrainCategory {
         Self::Water,
         Self::Shore,
         Self::Bridge,
+        Self::Tunnel,
         Self::Other,
     ];
     pub fn name(self) -> &'static str {
@@ -38,6 +40,7 @@ impl TerrainCategory {
             Self::Water => "水面",
             Self::Shore => "水岸 / 瀑布",
             Self::Bridge => "桥梁",
+            Self::Tunnel => "隧道",
             Self::Other => "其他",
         }
     }
@@ -58,6 +61,10 @@ pub fn groups(theater: &TheaterData) -> HashMap<u16, TerrainGroup> {
     let general = ini.section_or_empty("General");
     let declarations = [
         (Bridge, &["BridgeSet", "WoodBridgeSet"][..]),
+        (
+            Tunnel,
+            &["Tunnels", "TrackTunnels", "DirtTunnels", "DirtTrackTunnels"],
+        ),
         (
             Ramp,
             &["CliffRamps", "RampBase", "RampSmooth", "SlopeSetPieces"],
@@ -123,7 +130,9 @@ fn classify_name(name: &str) -> TerrainCategory {
     use TerrainCategory::*;
     let name = name.to_ascii_lowercase();
     let contains = |words: &[&str]| words.iter().any(|word| name.contains(word));
-    if contains(&["bridge", "桥"]) {
+    if contains(&["tunnel", "隧道"]) {
+        Tunnel
+    } else if contains(&["bridge", "桥"]) {
         Bridge
     } else if contains(&["ramp", "slope", "坡"]) {
         Ramp
@@ -227,16 +236,19 @@ mod tests {
     #[test]
     fn numeric_theater_groups_override_names_and_preserve_mod_group_identity() {
         let fixture = crate::test_support::Fixture::new();
-        std::fs::write(fixture.0.join("temperatmd.ini"), b"[General]\nClearTile=0\nCliffSet=1\nCliffRamps=2\n[TileSet0000]\nSetName=Clear\nFileName=clear\nTilesInSet=1\n[TileSet0001]\nSetName=Custom Escarpment\nFileName=mod\nTilesInSet=3\n[TileSet0002]\nSetName=Custom Pass\nFileName=pass\nTilesInSet=2\n[TileSet0003]\nSetName=Alien Surface\nFileName=alien\nTilesInSet=1\n").unwrap();
+        std::fs::write(fixture.0.join("temperatmd.ini"), b"[General]\nClearTile=0\nCliffSet=1\nCliffRamps=2\nTunnels=3\n[TileSet0000]\nSetName=Clear\nFileName=clear\nTilesInSet=1\n[TileSet0001]\nSetName=Custom Escarpment\nFileName=mod\nTilesInSet=3\n[TileSet0002]\nSetName=Custom Pass\nFileName=pass\nTilesInSet=2\n[TileSet0003]\nSetName=Tunnel Floor\nFileName=tunnel\nTilesInSet=4\n[TileSet0004]\nSetName=Alien Surface\nFileName=alien\nTilesInSet=1\n").unwrap();
         let install = fixture.install();
         let groups = groups(&install.theater);
         assert_eq!(groups[&1].category, TerrainCategory::Cliff);
         assert_eq!(groups[&3].id, 1);
         assert_eq!(groups[&4].category, TerrainCategory::Ramp);
-        assert_eq!(groups[&6].category, TerrainCategory::Other);
-        assert_eq!(groups[&6].name, "Alien Surface");
+        assert_eq!(groups[&6].category, TerrainCategory::Tunnel);
+        assert_eq!(groups[&9].category, TerrainCategory::Tunnel);
+        assert_eq!(groups[&10].category, TerrainCategory::Other);
+        assert_eq!(groups[&10].name, "Alien Surface");
         assert_eq!(classify_name("Water Cliffs"), TerrainCategory::Cliff);
         assert_eq!(classify_name("Cliff Ramps"), TerrainCategory::Ramp);
+        assert_eq!(classify_name("Track Tunnels"), TerrainCategory::Tunnel);
     }
 
     #[test]
