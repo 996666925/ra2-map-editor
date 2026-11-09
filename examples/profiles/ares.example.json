@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "name": "My Ares resource profile",
+  "schema": "vera20k-pinned-ares-v1",
+  "game_dir": "../../../game",
+  "playtest_exe": "../../../game/vera20k-ares.exe"
+}

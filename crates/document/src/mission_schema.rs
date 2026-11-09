@@ -1316,10 +1316,19 @@ pub const ACTIONS: &[Opcode] = &[
         "清除活动触发器所属 House 的备用基地格子。"
     ),
 ];
+#[path = "mission_ares.rs"]
+pub mod ares;
+
+pub fn opcodes(event: bool) -> impl Iterator<Item = &'static Opcode> {
+    (if event { EVENTS } else { ACTIONS }).iter().chain(
+        (if event { ares::EVENTS } else { ares::ACTIONS })
+            .iter()
+            .filter(|_| vera20k_core::rules::ARES_ENABLED),
+    )
+}
+
 pub fn opcode(event: bool, id: i32) -> Option<&'static Opcode> {
-    (if event { EVENTS } else { ACTIONS })
-        .iter()
-        .find(|s| s.id == id)
+    opcodes(event).find(|s| s.id == id)
 }
 pub fn row(event: bool, id: i32) -> Option<Vec<String>> {
     let schema = opcode(event, id)?;

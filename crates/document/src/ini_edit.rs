@@ -47,6 +47,18 @@ pub fn validate_target(section: &str, key: &str) -> Result<()> {
 impl MapDocument {
     /// Physical order and duplicate identities survive; pending additions follow.
     pub fn ini_entries(&self, section: &str) -> Vec<(Target, String, Vec<u8>)> {
+        let mut entries = self.physical_ini_entries(section);
+        if vera20k_core::rules::ARES_ENABLED {
+            let mut seen = std::collections::HashSet::new();
+            entries.reverse();
+            // Empty rows carry explicit authoring clears (e.g. reward type
+            // templates), even though the native value reader skips them.
+            entries.retain(|(_, key, _)| seen.insert(key.clone()));
+            entries.reverse();
+        }
+        entries
+    }
+    fn physical_ini_entries(&self, section: &str) -> Vec<(Target, String, Vec<u8>)> {
         let mut out = Vec::new();
         for (line, row) in self.base.raw.entries(section) {
             let target = Target::IniLine(line);
@@ -65,10 +77,16 @@ impl MapDocument {
         out
     }
     pub fn ini_value(&self, section: &str, key: &str) -> Option<Vec<u8>> {
-        self.ini_entries(section)
+        let mut values = self
+            .physical_ini_entries(section)
             .into_iter()
-            .find(|(_, k, v)| k == key && !v.is_empty())
-            .map(|(_, _, v)| v)
+            .filter(|(_, k, v)| k == key && !v.is_empty());
+        let selected = if vera20k_core::rules::ARES_ENABLED {
+            values.next_back()
+        } else {
+            values.next()
+        };
+        selected.map(|(_, _, value)| value)
     }
     pub fn ini_text(&self, section: &str, key: &str) -> String {
         self.ini_value(section, key)
@@ -87,7 +105,7 @@ impl MapDocument {
     pub fn set_ini(&mut self, section: &str, key: &str, value: Option<Vec<u8>>) -> Result<()> {
         validate_target(section, key)?;
         let entries: Vec<_> = self
-            .ini_entries(section)
+            .physical_ini_entries(section)
             .into_iter()
             .filter(|(_, k, _)| k == key)
             .collect();
@@ -105,12 +123,24 @@ impl MapDocument {
                 })
                 .count();
             ensure!(
-                bodies <= 1 && entries.len() <= 1,
+                bodies <= 1 && (entries.len() <= 1 || vera20k_core::rules::ARES_ENABLED),
                 "存在重复 section/key，表单无法确定原生 CRC 查找命中的物理行；请先用文本工具消歧（其他原文保持不变）"
             );
         }
-        if let Some((target, _, _)) = entries.first() {
+        let effective = if vera20k_core::rules::ARES_ENABLED {
+            entries.last()
+        } else {
+            entries.first()
+        };
+        if let Some((target, _, _)) = effective {
             if let Some(value) = value {
+                if vera20k_core::rules::ARES_ENABLED && value.is_empty() {
+                    for (shadow, _, _) in &entries {
+                        if shadow != target {
+                            self.set(shadow.clone(), None)?;
+                        }
+                    }
+                }
                 self.set(target.clone(), Some(Value::Ini(value)))?;
             } else {
                 for (target, _, _) in entries {

@@ -888,13 +888,11 @@ impl Editor {
             }
             if (press || down || release)
                 && let Some(at) = at
-            {
-                if let Err(error) = self
+                && let Err(error) = self
                     .tunnel_edit
                     .append_pointer(self.doc.as_ref().unwrap(), at)
-                {
-                    self.status = format!("{error:#}");
-                }
+            {
+                self.status = format!("{error:#}");
             }
             return;
         }

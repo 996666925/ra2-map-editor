@@ -1,5 +1,27 @@
 # TypeScript 任务制作
 
+## Ares 任务
+
+使用启用 `ares` feature 的编辑器和 VERA20k 客户端。默认编辑器在构建阶段拒绝 Ares SDK 调用，不会将不支持的编号写入任务。支持的事件、动作、绑定和参数可从能力清单查询，`runtime: "ares"` 表示扩展能力，`enabled` 表示本次编辑器构建已启用它。事件 66 缺少运行时通知，仍不提供 SDK 方法。
+
+```ts
+import { ares } from './sdk';
+
+// 放入 defineMission 的回调；techno 为 m.techno(...) 返回的类型引用，
+// country 为 m.country(...) 返回的目标国家引用。
+m.rule('reserve-power', {
+  when: ares.event.ownsAtLeast(techno, 3),
+  once: true,
+  actions: [ares.action.addAuxPower(country, 100)],
+});
+```
+
+`ares.event` 提供 EMP、驾驶员、接管、劫持、超武、逆向工程、类型数量、攻击/摧毁和 KeepAlive 条件。指定来源 House 的事件使用 House 数组索引，SDK 只允许单人任务；`noKeepAlive` / `noKeepAliveBuildings` 使用 Country 或多人起点选择器，不接受保留 House。House 类事件的所属方由规则 `owner` 决定。
+
+`ares.action` 提供 `firestorm`、`addAuxPower`、`killDrivers`、`setEvaVoice`、`setGroup`；分组和驾驶员动作依赖规则的附着对象。`ares.order` 提供 `enterOccupiableVehicle` 与 `convertScript`；后者读取单位类型的 `Convert.Script`。EVA 语音数量由实际客户端检查。
+
+本地资源 INI 的 include、继承和迭代键交给引擎解析。地图中的继承或迭代键仍保留原文，物理编辑前需展开为显式键值。默认 YR 与 Ares 的资源配置 schema 不混用。
+
 [SDK 扩展计划与功能清单](../../docs/mission-sdk-plan.zh-CN.md)
 
 编辑器内置纯 Rust SWC 转译器和 Boa 0.22 引擎。类型检查由外部代码编辑器完成，
@@ -668,7 +690,7 @@ action.reduceTiberiumAt(at); // 连续减少航点中心矿石，不会清掉周
 `combatFlash` 只请求C4冲击光照，原版弹头是否发亮由规则决定；它不会直接伤害单位。
 
 固定引擎当前已提供具名接口的编号为事件 **58**、动作 **138**、小队命令 **54**。
-能力矩阵在 `capabilities::matrix()`，包括 286 个编号、空洞、模式与特性门控。默认可用事件 58、动作 138、小队命令 54 已暴露；事件 2/3 有条件处理器但缺少生产通知入口，未提供默认 API。默认关闭的 Ares 事件和命令不作为默认能力。接口覆盖与呈现验收分别记录在扩展计划中。
+能力矩阵在 `capabilities::matrix()`，包括 308 个编号、空洞、模式与特性门控。默认可用事件 58、动作 138、小队命令 54 已暴露；事件 2/3 有条件处理器但缺少生产通知入口，未提供默认 API。Ares 事件、动作和命令保留独立特性标记，由 `enabled` 表示当前构建是否启用。接口覆盖与呈现验收分别记录在扩展计划中。
 
 | 类别 | 接口示例与语义 |
 | --- | --- |

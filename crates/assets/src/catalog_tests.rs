@@ -2,6 +2,37 @@ use super::*;
 use crate::test_support::Fixture;
 
 #[test]
+fn selected_ini_dialect_expands_ares_includes_and_preserves_input_files() {
+    let fixture = Fixture::new();
+    let root = b"[Base]\nHealth=1\nHealth=9\nOther=7\n[#include]\n0=child.ini\n";
+    // The native include merge arm skips inheritance on its first header.
+    let child = b"[Preamble]\nMarker=1\n[Child]:[Base]\nHealth=2\n[Names]\n+=A\n+=B\n";
+    std::fs::write(fixture.0.join("custom.ini"), root).unwrap();
+    std::fs::write(fixture.0.join("child.ini"), child).unwrap();
+    let install = fixture.install();
+    let ini = crate::assets::read_ini(&install.manager, "custom.ini").unwrap();
+    if vera20k_core::rules::ARES_ENABLED {
+        let section = ini.section_or_empty("Child");
+        assert_eq!(section.read_int("Health", 0), 2);
+        assert_eq!(section.read_int("Other", 0), 7);
+        let section = ini.section_or_empty("Names");
+        assert_eq!(
+            section
+                .keys()
+                .map(|key| section.read_string(key, "", 64))
+                .collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+        assert_eq!(ini.section_or_empty("Base").read_int("Health", 0), 9);
+    } else {
+        assert!(ini.section("Child").is_none());
+        assert_eq!(ini.section_or_empty("Base").read_int("Health", 0), 1);
+    }
+    assert_eq!(std::fs::read(fixture.0.join("custom.ini")).unwrap(), root);
+    assert_eq!(std::fs::read(fixture.0.join("child.ini")).unwrap(), child);
+}
+
+#[test]
 fn mission_registries_keep_existing_positions_and_detect_registry_only_map_overrides() {
     let mut catalog = Catalog {
         rules: IniFile::from_str(

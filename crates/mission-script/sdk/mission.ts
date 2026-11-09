@@ -165,6 +165,7 @@ export type WarheadType = Ref<"warhead">;
 
 /** 规则条件；all 遵循各原生事件的锁存/状态检查语义。 */
 export type Event =
+  | { readonly kind: "ares"; readonly event: AresEvent }
   | { readonly kind: "damagedByHouse"; readonly object: MapObject; readonly house: House }
   | { readonly kind: "buildingBuilt" | "buildingExists" | "buildingAbsent"; readonly building: BuildingType }
   | { readonly kind: "vehicleBuilt" | "infantryBuilt" | "aircraftBuilt" | "spyDisguisedAsInfantry"; readonly type: TechnoType }
@@ -193,6 +194,7 @@ export type Event =
 
 /** 小队行为脚本的一条命令，使用 order 中的方法构造，按数组顺序交给游戏执行。 */
 export type Order =
+  | { readonly kind: "ares"; readonly order: { readonly kind: "enterOccupiableVehicle" | "convertScript" } }
   | { readonly kind: "startLightningStorm"; readonly frames: number }
   | { readonly kind: "followFriendlies" | "scout" | "scoutHouses" | "stopLightningStorm" | "fireSale" | "gatherAtEnemyBase" | "regroupAtBase" | "ironCurtain" | "enterGrinder" | "enterTankBunker" | "enterBioReactor" | "enterBattleBunker" | "enterNearestOccupiable" }
   | { readonly kind: "idleAnimation"; readonly animation: number }
@@ -225,6 +227,7 @@ export type Order =
 
 /** 规则触发后执行的一个动作，使用 action 中的方法构造。 */
 export type Action =
+  | { readonly kind: "ares"; readonly action: AresAction }
   | { readonly kind: "playVoxelAnimAt"; readonly animation: VoxelAnimType; readonly at: Waypoint }
   | { readonly kind: "setSpotlightBehavior"; readonly mode: 0|1|2|3 }
   | { readonly kind: "playAnimationAt"; readonly animation: AnimationType; readonly at: Waypoint }
@@ -2014,3 +2017,72 @@ export function defineCampaign(options: CampaignOptions) {
   });
   return {project:{version:1,id:options.id,entry:options.entry,missions,strings,assets:options.assets??[]},scripts,transitions};
 }
+
+/** Ares authoring requires --features ares and an Ares-enabled game client. */
+export type AresEvent =
+  | { readonly kind: "underEmp" | "empEnded" | "driverKilled" | "vehicleTaken" | "abducted" | "abducts" | "objectReverseEngineered" | "attackedOrDestroyed"; readonly object: MapObject }
+  | { readonly kind: "underEmpByHouse" | "empEndedByHouse" | "driverKilledByHouse" | "vehicleTakenByHouse" | "abductedByHouse" | "abductsFromHouse" | "attackedOrDestroyedByHouse"; readonly object: MapObject; readonly house: House }
+  | { readonly kind: "superActivated" | "superDeactivated"; readonly superweapon: SuperWeaponType }
+  | { readonly kind: "superFiredNear"; readonly superweapon: SuperWeaponType; readonly waypoint: Waypoint }
+  | { readonly kind: "reverseEngineered"; readonly type: TechnoType }
+  | { readonly kind: "objectReverseEngineeredType"; readonly object: MapObject; readonly type: TechnoType }
+  | { readonly kind: "ownsAtLeast" | "ownsAtMost" | "existsAtMost"; readonly type: TechnoType; readonly count: number }
+  | { readonly kind: "destroyedByHouse"; readonly house: House }
+  | { readonly kind: "noKeepAlive" | "noKeepAliveBuildings"; readonly house: ActionHouse };
+export type AresAction =
+  | { readonly kind: "firestorm"; readonly enabled: boolean }
+  | { readonly kind: "addAuxPower"; readonly house: ActionHouse; readonly amount: number }
+  | { readonly kind: "killDrivers"; readonly house: ActionHouse }
+  | { readonly kind: "setEvaVoice"; readonly index: number }
+  | { readonly kind: "setGroup"; readonly group: number };
+const aresEvent = (event: AresEvent): Event => ({kind: "ares", event});
+const aresAction = (action: AresAction): Action => ({kind: "ares", action});
+export const ares = {
+  event: {
+    underEmp: (object: MapObject): Event => aresEvent({kind:"underEmp",object}),
+    empEnded: (object: MapObject): Event => aresEvent({kind:"empEnded",object}),
+    driverKilled: (object: MapObject): Event => aresEvent({kind:"driverKilled",object}),
+    vehicleTaken: (object: MapObject): Event => aresEvent({kind:"vehicleTaken",object}),
+    abducted: (object: MapObject): Event => aresEvent({kind:"abducted",object}),
+    abducts: (object: MapObject): Event => aresEvent({kind:"abducts",object}),
+    objectReverseEngineered: (object: MapObject): Event => aresEvent({kind:"objectReverseEngineered",object}),
+    attackedOrDestroyed: (object: MapObject): Event => aresEvent({kind:"attackedOrDestroyed",object}),
+    /** Source House array indices: single-player only. */
+    underEmpByHouse: (object: MapObject, house: House): Event => aresEvent({kind:"underEmpByHouse",object,house}),
+    /** Source House array indices: single-player only. */
+    empEndedByHouse: (object: MapObject, house: House): Event => aresEvent({kind:"empEndedByHouse",object,house}),
+    /** Source House array indices: single-player only. */
+    driverKilledByHouse: (object: MapObject, house: House): Event => aresEvent({kind:"driverKilledByHouse",object,house}),
+    /** Source House array indices: single-player only. */
+    vehicleTakenByHouse: (object: MapObject, house: House): Event => aresEvent({kind:"vehicleTakenByHouse",object,house}),
+    /** Source House array indices: single-player only. */
+    abductedByHouse: (object: MapObject, house: House): Event => aresEvent({kind:"abductedByHouse",object,house}),
+    /** Source House array indices: single-player only. */
+    abductsFromHouse: (object: MapObject, house: House): Event => aresEvent({kind:"abductsFromHouse",object,house}),
+    /** Source House array indices: single-player only. */
+    attackedOrDestroyedByHouse: (object: MapObject, house: House): Event => aresEvent({kind:"attackedOrDestroyedByHouse",object,house}),
+    superActivated: (superweapon: SuperWeaponType): Event => aresEvent({kind:"superActivated",superweapon}),
+    superDeactivated: (superweapon: SuperWeaponType): Event => aresEvent({kind:"superDeactivated",superweapon}),
+    superFiredNear: (superweapon: SuperWeaponType, waypoint: Waypoint): Event => aresEvent({kind:"superFiredNear",superweapon,waypoint}),
+    reverseEngineered: (type: TechnoType): Event => aresEvent({kind:"reverseEngineered",type}),
+    objectReverseEngineeredType: (object: MapObject, type: TechnoType): Event => aresEvent({kind:"objectReverseEngineeredType",object,type}),
+    ownsAtLeast: (type: TechnoType, count: number): Event => aresEvent({kind:"ownsAtLeast",type,count}),
+    ownsAtMost: (type: TechnoType, count: number): Event => aresEvent({kind:"ownsAtMost",type,count}),
+    existsAtMost: (type: TechnoType, count: number): Event => aresEvent({kind:"existsAtMost",type,count}),
+    /** Source House array index: single-player only. */
+    destroyedByHouse: (house: House): Event => aresEvent({kind:"destroyedByHouse",house}),
+    noKeepAlive: (house: ActionHouse): Event => aresEvent({kind:"noKeepAlive",house}),
+    noKeepAliveBuildings: (house: ActionHouse): Event => aresEvent({kind:"noKeepAliveBuildings",house}),
+  },
+  action: {
+    firestorm: (enabled: boolean): Action => aresAction({kind:"firestorm",enabled}),
+    addAuxPower: (house: ActionHouse, amount: number): Action => aresAction({kind:"addAuxPower",house,amount}),
+    killDrivers: (house: ActionHouse): Action => aresAction({kind:"killDrivers",house}),
+    setEvaVoice: (index: number): Action => aresAction({kind:"setEvaVoice",index}),
+    setGroup: (group: number): Action => aresAction({kind:"setGroup",group}),
+  },
+  order: {
+    enterOccupiableVehicle: (): Order => ({kind:"ares",order:{kind:"enterOccupiableVehicle"}}),
+    convertScript: (): Order => ({kind:"ares",order:{kind:"convertScript"}}),
+  },
+} as const;

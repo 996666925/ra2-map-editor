@@ -23,8 +23,16 @@ defaults:
 
 jobs:
   checks:
-    name: Check windows-x86_64
+    name: Check windows-x86_64 (${{ matrix.engine }})
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: yr
+            feature_args: ""
+          - engine: ares
+            feature_args: "--features ra2-map-editor/ares"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,6 +53,8 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.engine }}
 
       - name: Fetch dependencies
         run: cargo fetch --locked
@@ -56,7 +66,7 @@ jobs:
         run: python tools/check_i18n.py
 
       - name: Clippy all targets
-        run: cargo clippy --locked --workspace --no-deps --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --no-deps --all-targets ${{ matrix.feature_args }} -- -D warnings
 
       - name: Test workspace
-        run: cargo test --locked --workspace
+        run: cargo test --locked --workspace ${{ matrix.feature_args }} -- --test-threads=1

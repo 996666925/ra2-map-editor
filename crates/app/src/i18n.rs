@@ -294,6 +294,9 @@ mod tests {
                 .iter()
                 .chain(schema::ACTIONS)
                 .chain(schema::scripts::OPCODES)
+                .chain(schema::ares::EVENTS)
+                .chain(schema::ares::ACTIONS)
+                .chain(schema::ares::ORDERS)
             {
                 require(opcode.name);
                 require(opcode.hint);

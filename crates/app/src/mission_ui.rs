@@ -993,11 +993,7 @@ fn list_editor(
         let mut copy = None;
         for (i, row) in rows.iter_mut().enumerate() {
             ui.push_id(i, |ui| {
-                let specs = if event {
-                    mission::schema::EVENTS
-                } else {
-                    mission::schema::ACTIONS
-                };
+                let specs: Vec<_> = mission::schema::opcodes(event).collect();
                 ui.horizontal_wrapped(|ui| {
                     ui.label(format!("{}", i + 1));
                     egui::ComboBox::from_id_salt("opcode")

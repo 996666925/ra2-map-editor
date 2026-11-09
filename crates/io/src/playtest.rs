@@ -110,7 +110,8 @@ impl PlayOptions {
     pub fn spawn_ini(&self, map: &MapFile) -> Result<String> {
         if self.mission {
             ensure!(
-                self.mission_difficulty <= 2 && self.speed <= 6,
+                self.mission_difficulty <= 2
+                    && vera20k_core::sim::game_options::is_selectable_game_speed(self.speed),
                 "任务难度或速度超出范围"
             );
             let player = map
@@ -137,7 +138,7 @@ impl PlayOptions {
                 && self.start < MAX_PLAYTEST_PLAYERS
                 && self.ai < MAX_PLAYTEST_PLAYERS
                 && self.difficulty <= 2
-                && self.speed <= 6
+                && vera20k_core::sim::game_options::is_selectable_game_speed(self.speed)
                 && self.tech <= 10
                 && self.credits <= i32::MAX as u32,
             "试玩参数超出 VERA -SPAWN 支持范围"
@@ -390,6 +391,19 @@ mod tests {
         assert!(s.read_bool("IsSinglePlayer", false));
         assert_eq!(s.read_int("DifficultyModeComputer", -1), 0);
         assert!(!s.is_present("AIPlayers"));
+        let fast = PlayOptions {
+            speed: vera20k_core::sim::game_options::GAME_SPEED_90_TPS,
+            ..o.clone()
+        };
+        let settings =
+            vera20k_core::rules::ini_parser::IniFile::from_str(&fast.spawn_ini(&map).unwrap());
+        assert_eq!(
+            settings
+                .section_or_empty("Settings")
+                .read_int("GameSpeed", -1),
+            8
+        );
+        assert!(PlayOptions { speed: 7, ..fast }.spawn_ini(&map).is_err());
     }
     #[test]
     fn configured_ai_slots_have_distinct_starts_colors_and_reject_missing_starts() {
@@ -450,7 +464,7 @@ mod tests {
             .bytes()
             .unwrap();
         let map = vera20k_core::map::map_file::load_from_bytes(bytes).unwrap();
-        for speed in 0..=6 {
+        for speed in (0..=6).chain([vera20k_core::sim::game_options::GAME_SPEED_90_TPS]) {
             for (ai, difficulty) in [(0, 1), (1, 2)] {
                 let options = PlayOptions {
                     speed,

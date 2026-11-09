@@ -39,8 +39,17 @@ const COUNTRIES: [&str; 10] = [
     "苏俄",
     "尤里",
 ];
-// Spawn GameSpeed is reversed: 0 fastest, 6 slowest. Present slow -> fast.
-const SPEEDS: [&str; 7] = ["最慢", "更慢", "慢", "正常", "快", "更快", "最快"];
+// Display order differs from the persisted engine values: 8 is 90 TPS, 0 is unlimited.
+const SPEEDS: [(&str, u8); 8] = [
+    ("最慢", 6),
+    ("更慢", 5),
+    ("慢", 4),
+    ("正常", 3),
+    ("快", 2),
+    ("更快", 1),
+    ("90 TPS", vera20k_core::sim::game_options::GAME_SPEED_90_TPS),
+    ("最快", 0),
+];
 
 /// Query current document records, including pending edits, for launch starts.
 fn map_starts(doc: &MapDocument) -> Vec<u8> {
@@ -61,18 +70,21 @@ fn country(ui: &mut egui::Ui, id: &str, label: &str, value: &mut u8) {
 }
 
 fn speed(ui: &mut egui::Ui, options: &mut PlayOptions) {
-    let mut position = 6 - options.speed.min(6);
+    let mut position = SPEEDS
+        .iter()
+        .position(|&(_, speed)| speed == options.speed)
+        .unwrap_or(2);
     ui.horizontal(|ui| {
         ui.label(tr!("游戏速度"));
         if ui
             .add(
-                egui::Slider::new(&mut position, 0..=6).custom_formatter(|n, _| {
-                    crate::i18n::text(SPEEDS[(n as usize).min(6)]).to_owned()
+                egui::Slider::new(&mut position, 0..=7).custom_formatter(|n, _| {
+                    crate::i18n::text(SPEEDS[(n as usize).min(7)].0).to_owned()
                 }),
             )
             .changed()
         {
-            options.speed = 6 - position;
+            options.speed = SPEEDS[position].1;
         }
     });
     ui.small(tr!("向右加快；最快档不限制游戏帧率。"));
@@ -429,7 +441,7 @@ mod tests {
             ai_side: 2,
             difficulty: 0,
             credits: 25000,
-            speed: 6,
+            speed: vera20k_core::sim::game_options::GAME_SPEED_90_TPS,
             units: 10,
             tech: 8,
             superweapons: false,

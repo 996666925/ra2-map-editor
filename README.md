@@ -106,6 +106,16 @@ Windows 可执行文件位于 `target/release/ra2-map-editor.exe`。也可通过
 
 ## 当前范围
 
+### 可选 Ares 构建
+
+使用 `cargo run --locked --features ares` 编译启用 Ares 的编辑器，试玩时搭配同样启用 Ares 的 VERA20k 客户端。默认构建继续使用原版 YR 语义。[Ares 资源配置示例](examples/profiles/ares.example.json)使用 `vera20k-pinned-ares-v1`，与默认的 `vera20k-pinned-yr-v1` 分开。
+
+Ares 构建使用引擎的 INI 解析和 include 展开，开放已审计的 Ares 事件、火风暴/辅助电力/驾驶员/EVA/分组动作与脚本 67、68。任务脚本通过 `ares.event`、`ares.action`、`ares.order` 调用，详见[任务脚本说明](examples/missions/README.md#ares-任务)。普通显式键值地图可编辑；含 `[Child]:[Base]` 或 `+` 迭代键的地图可预览和原样导出，修改前需展开为显式键值，以保留引擎实际解析的含义。
+
+随机地图可选择中立城镇及规模，使用当前环境可绘制的民用建筑；试玩速度增加 90 TPS 档，最快档仍为不限速。
+
+### 静态场景范围
+
 地图预览使用静态场景，已覆盖常见 SHP/VXL 外观、共享像素深度、House 换色与基础地图光照。完整动画、建筑损伤状态、局部光源及部分桥梁和对象阴影尚未完全实现。
 
 对象放置包含占地、等高、占用与步兵子格检查；完整通行性及自定义 Mod Foundation 仍待补齐。保存会保留未知字段和未修改的原文，但静态预览与格式校验不代表已完整验证所有游戏运行时行为。

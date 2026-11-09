@@ -6,7 +6,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const SCHEMA: &str = "vera20k-pinned-yr-v1";
+pub const SCHEMA: &str = if vera20k_core::rules::ARES_ENABLED {
+    "vera20k-pinned-ares-v1"
+} else {
+    "vera20k-pinned-yr-v1"
+};
 
 pub fn hash(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325, |h, b| {
@@ -33,6 +37,7 @@ fn file_hash_controlled(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<u64
 }
 pub fn schema_id() -> String {
     let mut bytes = include_bytes!("../../document/src/mission_schema.rs").to_vec();
+    bytes.extend_from_slice(include_bytes!("../../document/src/mission_ares.rs"));
     bytes.extend_from_slice(include_bytes!(
         "../../../vendor/vera20k/src/map/map_file.rs"
     ));

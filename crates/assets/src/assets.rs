@@ -13,6 +13,36 @@ use vera20k_core::assets::{
 };
 use vera20k_core::map::theater::{self, TheaterData};
 
+/// Read through the engine's selected INI dialect and include traversal.
+pub fn read_ini(
+    manager: &AssetManager,
+    name: &str,
+) -> Result<vera20k_core::rules::ini_parser::IniFile> {
+    use vera20k_core::rules::ini_parser::{
+        IniFile,
+        directives::{DirectiveOptions, process_directives},
+    };
+    let bytes = manager
+        .get_ref(name)
+        .with_context(|| format!("缺少 {name}"))?;
+    let ini = IniFile::from_bytes(bytes)?;
+    if vera20k_core::rules::ARES_ENABLED {
+        let expanded = process_directives(
+            ini,
+            name,
+            |file| Ok(manager.get_ref(file).map(<[u8]>::to_vec)),
+            DirectiveOptions {
+                strict: true,
+                ..DirectiveOptions::production()
+            },
+        )
+        .map_err(|error| anyhow::anyhow!("{}", error.message))?;
+        Ok(expanded.ini)
+    } else {
+        Ok(ini)
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AssetSelection {

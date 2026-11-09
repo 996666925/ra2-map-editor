@@ -7,9 +7,13 @@ use ra2_map_document::document::{Cell, MapDocument, Target, TerrainValue, Value}
 use std::collections::{BTreeSet, HashMap};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 use vera20k_core::map::{
+    corner_heights::{CornerGrid, FinalTiles},
     lat::{LatConfig, SlopeFixupConfig, apply_load_recalc_sweeps},
     map_file::MapCell,
-    rmg::{RmgGrid, RmgScratch, phases::hills_corners::CornerGrid},
+    rmg::{
+        RmgGrid, RmgScratch,
+        phases::hills_corners::{RMG_HEIGHTS, RmgCornerCells, write_finals},
+    },
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -523,7 +527,12 @@ pub fn height(
             || (ids.ramp_base..ids.ramp_base + 20).contains(&tile)
             || ids.ramp_smooth >= 0 && (ids.ramp_smooth..ids.ramp_smooth + 12).contains(&tile)
     };
-    let mut corners = CornerGrid::build(&grid, &scratch, span as i32 - 1, &ids, &morphable);
+    let cells = RmgCornerCells {
+        grid: &grid,
+        scratch: &scratch,
+        morphable: &morphable,
+    };
+    let mut corners = CornerGrid::build(&cells, (1, 1), span as i32, RMG_HEIGHTS);
     for &at in selected {
         doc.check_cell(at)?;
         let (x, y) = (i32::from(at[0]), i32::from(at[1]));
@@ -538,7 +547,7 @@ pub fn height(
             "自动坡面不能修改水面、道路、建筑或覆盖物占用的格子"
         );
         for _ in 0..28 {
-            let current = corners.current_level(&grid, &scratch, x, y, &ids, &morphable);
+            let current = corners.current_level(&cells, x, y);
             // Equal base height alone does not flatten an existing slope.
             let flat = corners.pick_mask(x, y, 1) == corners.pick_mask(x, y, -1);
             if current == i32::from(goal) && (mode != TerrainMode::Flatten || flat) {
@@ -552,11 +561,19 @@ pub fn height(
             );
         }
         ensure!(
-            corners.current_level(&grid, &scratch, x, y, &ids, &morphable) == i32::from(goal),
+            corners.current_level(&cells, x, y) == i32::from(goal),
             "无法构造连续坡面"
         );
     }
-    corners.finalize(&mut grid, &scratch, &ids, &morphable);
+    let finals = corners.finalize(
+        &cells,
+        grid.native_cells(),
+        FinalTiles {
+            clear: ids.clear,
+            ramp_base: ids.ramp_base,
+        },
+    );
+    write_finals(&mut grid, &finals);
     let mut edits = Vec::new();
     for (x, y) in grid.native_cells() {
         let c = grid.get(x, y).context("坡面格网无效")?;

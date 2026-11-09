@@ -26,14 +26,15 @@ impl SourceMap {
             .as_ref()
             .ok()
             .and_then(|base| {
-                base.raw
-                    .lines
-                    .iter()
-                    .enumerate()
-                    .find(|(_, line)| {
-                        line.section == "Basic" && line.key.as_deref() == Some("Name")
-                    })
-                    .and_then(|(i, _)| std::str::from_utf8(base.raw.value(i)).ok())
+                let mut names = base.raw.lines.iter().enumerate().filter(|(_, line)| {
+                    line.section == "Basic" && line.key.as_deref() == Some("Name")
+                });
+                let selected = if vera20k_core::rules::ARES_ENABLED {
+                    names.next_back()
+                } else {
+                    names.next()
+                };
+                selected.and_then(|(i, _)| std::str::from_utf8(base.raw.value(i)).ok())
             })
             .map(|name| name.split(';').next().unwrap_or_default().trim().to_owned())
             .unwrap_or_else(|| map.basic.name.clone().unwrap_or_default());

@@ -36,6 +36,7 @@ impl Default for RandomMapOptions {
                 water_amount: 20,
                 ruggedness: 20,
                 vegetation: 35,
+                urban_presence: 50,
                 tiberium: 60,
                 tiberium_layout: 50,
                 accessibility: 70,
@@ -49,6 +50,19 @@ impl Default for RandomMapOptions {
 }
 
 impl RandomMapOptions {
+    /// Restore the complete editor recipe when reopening a generated map.
+    pub fn from_ini(ini: &vera20k_core::rules::ini_parser::IniFile, title: &str) -> Option<Self> {
+        let section = ini.section("RandomMap")?;
+        let mut options = Self::default();
+        options.terrain.apply_sed(ini);
+        // The source owns decoded user-facing text; native INI strings widen
+        // legacy bytes instead of decoding editor-authored UTF-8.
+        options.title = title.to_owned();
+        options.ore = section.read_bool("EditorOre", true);
+        options.tech_buildings = section.read_bool("EditorTechBuildings", true);
+        options.validate().ok()?;
+        Some(options)
+    }
     pub fn dimensions(&self) -> (u16, u16) {
         let geometry = self.geometry();
         (geometry.map_w as u16, geometry.map_h as u16)
@@ -81,7 +95,8 @@ impl RandomMapOptions {
                 t.vegetation,
                 t.accessibility,
                 t.region_size,
-                t.tiberium_layout
+                t.tiberium_layout,
+                t.urban_presence
             ]
             .iter()
             .all(|v| (0..=100).contains(v))
@@ -228,10 +243,12 @@ mod tests {
             overlay_id: 102,
             frame: 9,
         });
-        let options = RandomMapOptions {
+        let mut options = RandomMapOptions {
             title: "随机战场".into(),
             ..Default::default()
         };
+        options.terrain.urban_enabled = true;
+        options.terrain.urban_presence = 73;
         let bytes = options
             .map_bytes(&map, |tile| Ok(if tile == 100 { 97 } else { tile }))
             .unwrap();
@@ -245,6 +262,15 @@ mod tests {
         assert_eq!(reopened.terrain_objects[0].name, "TREE01");
         assert_eq!(reopened.entities[0].type_id, "CAOILD");
         assert_eq!(reopened.waypoints.len(), 2);
+        let mut recipe = RmgOptions::default();
+        recipe.apply_sed(&reopened.ini);
+        assert!(recipe.urban_enabled);
+        assert_eq!(recipe.urban_presence, 73);
+        let restored = RandomMapOptions::from_ini(&reopened.ini, &source.title).unwrap();
+        assert!(restored.terrain.urban_enabled);
+        assert_eq!(restored.terrain.urban_presence, 73);
+        assert_eq!(restored.terrain.seed, options.terrain.seed);
+        assert_eq!(restored.ore, options.ore);
         assert_eq!(
             reopened
                 .ini
@@ -282,6 +308,7 @@ mod tests {
             "region_size",
             "tiberium",
             "tiberium_layout",
+            "urban_presence",
             "resources",
         ] {
             let mut bad = options.clone();
@@ -299,6 +326,7 @@ mod tests {
                 "region_size" => &mut bad.terrain.region_size,
                 "tiberium" => &mut bad.terrain.tiberium,
                 "tiberium_layout" => &mut bad.terrain.tiberium_layout,
+                "urban_presence" => &mut bad.terrain.urban_presence,
                 _ => &mut bad.terrain.resources,
             };
             *value = -1;

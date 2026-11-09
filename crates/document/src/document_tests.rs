@@ -11,6 +11,38 @@ use vera20k_core::{
 use crate::test_support::{document, fixture};
 
 #[test]
+fn ares_source_keeps_effective_names_and_preserves_uneditable_syntax_for_export() {
+    let bytes = crate::new_map::NewMapOptions {
+        title: "First".into(),
+        ..Default::default()
+    }
+    .bytes()
+    .unwrap();
+    let bytes = String::from_utf8(bytes)
+        .unwrap()
+        .replace("Name=First", "Name=First\r\nName=Last")
+        .into_bytes();
+    let (source, map) =
+        crate::source::SourceMap::parse("names.map".into(), "test".into(), bytes).unwrap();
+    assert_eq!(source.title, map.basic.name.unwrap());
+    if vera20k_core::rules::ARES_ENABLED {
+        for syntax in [
+            b"[Custom]\n+=item\n".as_slice(),
+            b"[Base]\nX=1\n[Child]:[Base]\n".as_slice(),
+            b"[Base]\nX=1\n[Child] : [Base]\n".as_slice(),
+        ] {
+            let mut bytes = crate::new_map::NewMapOptions::default().bytes().unwrap();
+            bytes.extend_from_slice(syntax);
+            let (source, _) =
+                crate::source::SourceMap::parse("syntax.map".into(), "test".into(), bytes.clone())
+                    .unwrap();
+            assert!(source.edit_base.is_err());
+            assert_eq!(source.bytes(), bytes);
+        }
+    }
+}
+
+#[test]
 fn borrowed_records_merge_pending_updates_and_deletions_in_id_order() {
     let mut doc = document();
     let original = doc.base.records.clone();
@@ -541,7 +573,16 @@ fn sparse_terrain_edit_keeps_all_eleven_bytes_duplicate_and_sentinel_tail() {
             .iter()
             .any(|line| matches!(line.section.as_str(), "Digest" | "Preview" | "PreviewPack"))
     );
-    assert!(bytes.windows(15).any(|w| w == b"A=first\r\nA=seco"));
+    let untouched = if vera20k_core::rules::ARES_ENABLED {
+        b"A=second\r\nA=first".as_slice()
+    } else {
+        b"A=first\r\nA=second".as_slice()
+    };
+    assert!(
+        bytes
+            .windows(untouched.len())
+            .any(|window| window == untouched)
+    );
     let parsed = map_file::load_from_bytes(bytes).unwrap();
     assert!(
         parsed

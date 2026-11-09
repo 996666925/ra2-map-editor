@@ -452,6 +452,7 @@ pub struct Script {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Order {
+    Ares { order: ares::AresOrder },
     FollowFriendlies,
     IdleAnimation { animation: u8 },
     Scout,
@@ -561,6 +562,9 @@ pub struct VariableReference {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Event {
+    Ares {
+        event: ares::AresEvent,
+    },
     DamagedByHouse {
         object: Reference,
         house: Reference,
@@ -744,6 +748,9 @@ pub enum Event {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Action {
+    Ares {
+        action: ares::AresAction,
+    },
     PlayVoxelAnimAt {
         animation: Reference,
         at: Waypoint,
@@ -1125,6 +1132,8 @@ pub enum Action {
 
 pub use crate::catalog::Catalog;
 
+#[path = "ares.rs"]
+pub mod ares;
 #[path = "conditions.rs"]
 mod conditions;
 #[path = "crate_lottery.rs"]

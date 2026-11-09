@@ -759,6 +759,16 @@ cargo run --locked --offline -p ra2-map-io --example mission_sdk_crate_lottery_a
 
 ## 引擎版本管理
 
+默认 YR 和可选 Ares 两种构建都由 CI 验证。Ares 专项检查使用：
+
+```powershell
+cargo check --locked --workspace --all-targets --features ares
+cargo clippy --locked --workspace --no-deps --all-targets --features ares -- -D warnings
+cargo test --locked --workspace --lib --features ares -- --test-threads=1
+```
+
+Ares 使用独立资源 profile schema；引擎客户端也需启用 Ares。INIs 的 include、继承、迭代键和覆盖策略由引擎解析器拥有。编辑器不重写这些规则；带继承/迭代键的地图保留只读预览和原文导出。常规物理键值地图按引擎选择有效行，空字段仍保留作为任务构建的显式清空请求。
+
 编辑器使用 `vendor/vera20k` 子模块固定的引擎提交，切换编辑器版本后运行：
 
 ```powershell

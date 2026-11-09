@@ -90,6 +90,16 @@ pub(super) fn panels() -> Vec<(String, Panel)> {
 impl MapView {
     pub(super) fn ui_smoke_step(&mut self, ctx: &egui::Context, output: &Path) -> Result<bool> {
         let panels = panels();
+        ensure!(
+            self.ui_smoke.phase == 0
+                || self
+                    .ui_smoke
+                    .started
+                    .is_none_or(|started| started.elapsed() < Duration::from_secs(10)),
+            "UI capture stalled at panel {} phase {}",
+            self.ui_smoke.index,
+            self.ui_smoke.phase
+        );
         if self.ui_smoke.index == panels.len() * 2 {
             ensure!(
                 self.editor.doc.as_ref().unwrap().snapshot().bytes()?

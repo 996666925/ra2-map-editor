@@ -91,7 +91,9 @@ impl MapView {
             return Ok(false);
         }
         ensure!(
-            self.started.elapsed() < Duration::from_secs(120),
+            // The screenshot gallery bounds each panel separately; its total
+            // duration grows with the number of tools and dialogs.
+            self.p2.stage == 80 || self.started.elapsed() < Duration::from_secs(120),
             "P2 烟测超时：stage {}；{}",
             self.p2.stage,
             self.editor.status

@@ -202,7 +202,7 @@ fn tunnel_art_families(scene: &MapScene) -> Vec<TunnelArtFamily> {
 
 fn tunnel_cardinal(direction: u8) -> u8 {
     let direction = direction & 7;
-    if direction % 2 == 0 {
+    if direction.is_multiple_of(2) {
         direction
     } else {
         direction.wrapping_add(1) & 7
@@ -875,7 +875,7 @@ impl TunnelEdit {
                 "出口朝向选择门洞素材和箭头方向；入口通行方向由路径起步自动确定。"
             ));
             ui.label(tr!("当前路径格数：{arg0} / 100", arg0 = draft.points.len()));
-            if let Some(steps) = draft_steps(&draft.points).ok() {
+            if let Ok(steps) = draft_steps(&draft.points) {
                 save = ui.button(tr!("保存隧道路径")).clicked();
                 if save {
                     let _ = steps;

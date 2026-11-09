@@ -16,6 +16,9 @@ fn main() -> Result<()> {
         args.next()
             .unwrap_or_else(|| "target/random-map-audit".into()),
     );
+    let filter = args
+        .next()
+        .map(|value| value.to_string_lossy().into_owned());
     std::fs::create_dir_all(&output)?;
     let mut install = Install::open(&directory)?;
     let mut report = vec![];
@@ -94,8 +97,24 @@ fn main() -> Result<()> {
             cases.push((format!("archipelago-tech-{players}-{enabled}"), options));
         }
     }
+    for (enabled, presence) in [(false, 100), (true, 0), (true, 100)] {
+        let mut options = RandomMapOptions::default();
+        options.terrain.urban_enabled = enabled;
+        options.terrain.urban_presence = presence;
+        cases.push((format!("towns-{enabled}-{presence}"), options));
+    }
+    type TownBaseline = (
+        Vec<(i32, u8, u8)>,
+        BTreeSet<(u32, u16, u16)>,
+        Vec<(String, u16, u16)>,
+    );
+    let mut town_baseline: Option<TownBaseline> = None;
     let mut fingerprints = BTreeSet::new();
     let mut region_shapes = BTreeMap::new();
+    if let Some(filter) = &filter {
+        cases.retain(|(name, _)| name.contains(filter));
+        ensure!(!cases.is_empty(), "no audit cases match {filter}");
+    }
     for (name, options) in cases {
         eprintln!("Generating {name}");
         let result = (|| -> Result<serde_json::Value> {
@@ -104,6 +123,50 @@ fn main() -> Result<()> {
             ensure!(bytes == repeated, "same seed is not deterministic");
             let (source, map) =
                 SourceMap::parse(format!("{name}.map"), "audit".into(), bytes.clone())?;
+            if name.starts_with("towns-") {
+                let shape: Vec<_> = map
+                    .cells
+                    .iter()
+                    .map(|c| (c.tile_index, c.sub_tile, c.z))
+                    .collect();
+                let starts: BTreeSet<_> = map
+                    .waypoints
+                    .iter()
+                    .map(|(id, w)| (*id, w.rx, w.ry))
+                    .collect();
+                let objects = map
+                    .entities
+                    .iter()
+                    .map(|e| (e.type_id.clone(), e.cell_x, e.cell_y))
+                    .collect::<Vec<_>>();
+                let stored = map.ini.section_or_empty("RandomMap");
+                ensure!(
+                    stored.read_bool("VeraUrban", false) == options.terrain.urban_enabled,
+                    "town switch lost"
+                );
+                ensure!(
+                    stored.read_int("UrbanPresence", -1) == options.terrain.urban_presence,
+                    "town presence lost"
+                );
+                if let Some((base_shape, base_starts, base_objects)) = &town_baseline {
+                    ensure!(&shape == base_shape, "towns changed terrain");
+                    ensure!(&starts == base_starts, "towns changed starts");
+                    if options.terrain.urban_presence == 0 {
+                        ensure!(&objects == base_objects, "zero presence added towns");
+                    } else {
+                        ensure!(
+                            objects.len() > base_objects.len(),
+                            "towns were not generated"
+                        );
+                        ensure!(
+                            objects.starts_with(base_objects),
+                            "towns changed existing structures"
+                        );
+                    }
+                } else {
+                    town_baseline = Some((shape, starts, objects));
+                }
+            }
             let document = MapDocument::new(source.edit_base.map_err(anyhow::Error::msg)?);
             ensure!(
                 (map.header.width as u16, map.header.height as u16) == options.dimensions(),
@@ -293,7 +356,7 @@ fn main() -> Result<()> {
         "random-map audit failed; see report.json"
     );
     ensure!(
-        fingerprints.len() > 5,
+        filter.is_some() || fingerprints.len() > 5,
         "landscapes and seed produced identical terrain"
     );
     println!("{} random-map cases passed", report.len());

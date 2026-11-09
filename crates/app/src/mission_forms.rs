@@ -167,7 +167,7 @@ pub(super) fn slots(
                             ),
                         )
                         .show_ui(ui, |ui| {
-                            for spec in scripts::OPCODES {
+                            for spec in scripts::opcodes() {
                                 if ui
                                     .selectable_label(
                                         fields[0] == spec.id.to_string(),

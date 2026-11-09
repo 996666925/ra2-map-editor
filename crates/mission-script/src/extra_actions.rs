@@ -10,6 +10,7 @@ pub(super) fn encode(
     mode: MissionMode,
 ) -> Result<Vec<String>> {
     let row = match action {
+        Action::Ares { action } => ares::action(action, catalog, mode)?,
         Action::PlayVoxelAnimAt { animation, at } => action_row(
             43,
             Some(

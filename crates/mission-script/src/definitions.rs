@@ -160,6 +160,7 @@ pub(super) fn script(
         .enumerate()
     {
         let (opcode, operand) = match order {
+            Order::Ares { order } => ares::order(order)?,
             Order::FollowFriendlies => (10, "0".into()),
             Order::IdleAnimation { animation } => {
                 ensure!(*animation <= 1, "步兵 idle 变体须为 0 或 1");

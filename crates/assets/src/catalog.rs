@@ -314,13 +314,11 @@ impl Catalog {
         })
     }
     pub fn load(manager: &AssetManager, theater: &TheaterData) -> Arc<Self> {
-        let rules = manager
-            .get_ref(manager.ini_roots().rules())
-            .and_then(|b| IniFile::from_bytes(b).ok())
+        let rules = crate::assets::read_ini(manager, manager.ini_roots().rules())
+            .ok()
             .unwrap_or_else(IniFile::empty);
-        let art = manager
-            .get_ref(manager.ini_roots().art())
-            .and_then(|b| IniFile::from_bytes(b).ok())
+        let art = crate::assets::read_ini(manager, manager.ini_roots().art())
+            .ok()
             .unwrap_or_else(IniFile::empty);
         let mut catalog = Self {
             rules,

@@ -19,6 +19,97 @@ fn plan() -> Mission {
 }
 
 #[test]
+fn ares_sdk_lowering_is_gated_and_preserves_engine_operands_and_attachments() {
+    use crate::catalog::ResourceKind;
+    let bytes = ra2_map_document::new_map::NewMapOptions::default()
+        .bytes()
+        .unwrap();
+    let (source, _) =
+        ra2_map_document::source::SourceMap::parse("ares.map".into(), "test".into(), bytes)
+            .unwrap();
+    let mut doc = MapDocument::new(source.edit_base.unwrap());
+    doc.add_record("Infantry", [80, 80], "Neutral", "E1")
+        .unwrap();
+    mission::create(&mut doc, Kind::House, "Neutral", "Neutral", None).unwrap();
+    doc.commit("fixture");
+    let mut catalog = Catalog::from_document(&doc, vec!["E1".into()], vec![]);
+    catalog.register(ResourceKind::Techno, vec!["E1".into()]);
+    catalog.register(ResourceKind::Country, vec!["Neutral".into()]);
+    catalog.register(ResourceKind::SuperWeapon, vec!["NukeSpecial".into()]);
+    catalog
+        .registry_order
+        .insert("countries".into(), vec!["Neutral".into()]);
+    catalog
+        .registry_order
+        .insert("superWeapons".into(), vec!["NukeSpecial".into()]);
+    let source = r#"import {defineMission,ares} from './sdk';
+import {map,House,Country,Techno,SuperWeapon,Waypoint,MapObject} from './map.generated';
+export default defineMission(map,{id:'ares',player:House.Neutral},m=>{
+ m.rule('counts',{when:ares.event.ownsAtLeast(m.techno(Techno.E1),3),once:true,
+  actions:[ares.action.addAuxPower(m.country(Country.Neutral),-37),ares.action.firestorm(true),ares.action.firestorm(false),ares.action.killDrivers(m.country(Country.Neutral)),ares.action.setEvaVoice(-1)]});
+ m.rule('emp',{when:ares.event.underEmp(m.object(MapObject.Infantry_0)),once:true,actions:[ares.action.setGroup(-7)]});
+ m.rule('launch',{when:ares.event.superFiredNear(m.superWeapon(SuperWeapon.NukeSpecial),m.waypoint(Waypoint.WP0)),once:true,actions:[ares.action.setEvaVoice(2)]});
+ m.script('convert',[ares.order.enterOccupiableVehicle(),ares.order.convertScript()]);
+});"#;
+    let plan = Compiler::new()
+        .unwrap()
+        .build(BTreeMap::from([
+            ("/mission.ts".into(), source.into()),
+            ("/map.generated.ts".into(), catalog.typescript().unwrap()),
+        ]))
+        .unwrap();
+    if !vera20k_core::rules::ARES_ENABLED {
+        assert!(
+            prepare(&doc, &plan, &catalog)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("--features ares")
+        );
+        assert!(mission::schema::opcode(false, 146).is_none());
+        return;
+    }
+    let build = prepare(&doc, &plan, &catalog).unwrap();
+    let map = vera20k_core::map::map_file::load_from_bytes(build.bytes.clone()).unwrap();
+    let conditions: Vec<_> = map.events.values().flat_map(|e| e.conditions()).collect();
+    assert!(
+        conditions
+            .iter()
+            .any(|e| e.kind == 81 && e.value == 3 && e.type_name.as_deref() == Some("E1"))
+    );
+    assert!(
+        conditions
+            .iter()
+            .any(|e| e.kind == 77 && e.value == 0 && e.type_name.as_deref() == Some("NukeSpecial"))
+    );
+    build.apply(&mut doc).unwrap();
+    let actions: Vec<_> = mission::ids(&doc, Kind::Trigger)
+        .iter()
+        .flat_map(|id| mission::decode_list(&doc.ini_text("Actions", id), false).unwrap())
+        .collect();
+    let power = actions.iter().find(|row| row[0] == "146").unwrap();
+    assert_eq!(
+        (&power[1], &power[2], &power[7]),
+        (&"11".into(), &"0".into(), &"-37".into())
+    );
+    let actor = doc
+        .record_iter()
+        .find(|(_, r)| r.section == "Infantry")
+        .unwrap()
+        .1;
+    assert_ne!(actor.fields()[8], "None");
+    let script = mission::ids(&doc, Kind::Script).pop().unwrap();
+    assert_eq!(doc.ini_text(&script, "0"), "67,0");
+    assert_eq!(doc.ini_text(&script, "1"), "68,0");
+    assert!(
+        !prepare(&doc, &plan, &catalog)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap()
+    );
+}
+
+#[test]
 fn crate_lottery_uses_isolated_triggers_and_restores_legacy_crate_fields() {
     let (mut doc, _) = fixture();
     doc.set_ini("TSBOX", "Strength", Some(b"900".to_vec()))

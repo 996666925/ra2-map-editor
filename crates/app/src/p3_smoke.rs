@@ -254,7 +254,9 @@ pub(super) fn check(
     }
     undo_redo(&mut editor, scene, before)?;
     let before = editor.doc.as_ref().unwrap().snapshot().bytes()?;
-    editor.template_level = Some(14);
+    // A multi-height template at the maximum level must overflow its upper
+    // subtile. The editor now accepts levels through 127, including 14.
+    editor.template_level = Some(ra2_map_scene::cliff_tools::MAX_CLIFF_LEVEL);
     editor.pointer(scene, Some([95, 95]), true, false, true, None);
     ensure!(
         editor.status.starts_with("本笔未修改"),

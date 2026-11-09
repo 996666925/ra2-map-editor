@@ -9,7 +9,7 @@ use vera20k_core::{
         phases::shore::TileBlocks,
         theater_blocks::TheaterTileBlocks,
     },
-    rules::{ini_parser::IniFile, native_processing::RulesLayerStack, ruleset::RuleSet},
+    rules::{native_processing::RulesLayerStack, ruleset::RuleSet},
 };
 pub fn generate(
     install: &mut Install,
@@ -22,7 +22,10 @@ pub fn generate(
     install.activate_theater(rmg::emit::theater_name(options.terrain.theater))?;
     progress("准备随机地图地形模板…");
     let processed = RulesLayerStack::new(install.catalog.rules.clone()).process()?;
-    let rules = RuleSet::from_processed_rules(&processed)?;
+    let mut rules = RuleSet::from_processed_rules(&processed)?;
+    let art =
+        ra2_map_assets::assets::read_ini(&install.manager, install.manager.ini_roots().art())?;
+    rules.install_art_data(vera20k_core::rules::art_data::ArtRegistry::from_ini(&art));
     let resolved = ResolvedTheaterInputs::from_theater(
         &install.theater,
         &rules.terrain_rules,
@@ -32,15 +35,20 @@ pub fn generate(
     let blocks = TheaterTileBlocks::build(&install.theater.lookup, |name| {
         install.manager.get_ref(name).map(<[u8]>::to_vec)
     });
-    let settings = rmg::RmgSettings::load(&install.manager);
+    let mut settings = rmg::RmgSettings::load(&install.manager);
+    let tech_types = rmg::tech_catalog::resolve(processed.neutral_tech_buildings(), &art);
+    if options.terrain.urban_enabled {
+        settings.urban_types = rmg::tech_catalog::resolve_urban(
+            &rules,
+            &art,
+            &tech_types,
+            install.theater.extension,
+            rmg::emit::theater_name(options.terrain.theater),
+            |file| install.manager.contains(file),
+        );
+    }
     let tech = if options.tech_buildings {
-        let art = install
-            .manager
-            .get_ref("artmd.ini")
-            .map(IniFile::from_bytes)
-            .transpose()?
-            .unwrap_or_else(IniFile::empty);
-        rmg::tech_catalog::resolve(processed.neutral_tech_buildings(), &art)
+        tech_types
     } else {
         vec![]
     };
@@ -209,7 +217,7 @@ fn generate_candidate(
         settings,
         resolved,
         blocks,
-        tech,
+        &build::GenerationObjects::tech(tech),
         &mut |view| observe(view.point()),
     );
     Candidate {

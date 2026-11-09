@@ -101,6 +101,8 @@ pub struct Capability {
     pub opcode: i32,
     pub name: Option<&'static str>,
     pub runtime: RuntimeSupport,
+    /// Whether this editor build contains the required engine capability.
+    pub enabled: bool,
     pub sdk: SdkCoverage,
     /// False means that the dispatch arm is inventoried, not fully audited.
     pub schema_audited: bool,
@@ -132,6 +134,15 @@ fn named(family: Family, id: i32) -> Option<&'static Opcode> {
         Family::Action => schema::opcode(false, id),
         Family::Order => schema::scripts::opcode(id),
     }
+    .or_else(|| {
+        match family {
+            Family::Event => schema::ares::EVENTS,
+            Family::Action => schema::ares::ACTIONS,
+            Family::Order => schema::ares::ORDERS,
+        }
+        .iter()
+        .find(|entry| entry.id == id)
+    })
 }
 
 pub fn capability(family: Family, id: i32) -> Capability {
@@ -140,7 +151,7 @@ pub fn capability(family: Family, id: i32) -> Capability {
         Family::Event => match id {
             33 | 44 => RuntimeSupport::SinglePlayer,
             1..=17 | 19..=61 => RuntimeSupport::Handler,
-            62..=65 | 67..=70 => RuntimeSupport::Ares,
+            62..=65 | 67..=88 => RuntimeSupport::Ares,
             _ => RuntimeSupport::Unsupported,
         },
         Family::Action => {
@@ -148,6 +159,8 @@ pub fn capability(family: Family, id: i32) -> Capability {
                 RuntimeSupport::SinglePlayer
             } else if id == 0 {
                 RuntimeSupport::NoOp
+            } else if matches!(id, 92 | 93 | 146..=149) {
+                RuntimeSupport::Ares
             } else if ACTION_HANDLERS.contains(&id) {
                 RuntimeSupport::Handler
             } else {
@@ -167,6 +180,9 @@ pub fn capability(family: Family, id: i32) -> Capability {
         }
     };
     let sdk = match (family, id) {
+        (Family::Event, 62..=65 | 67..=88)
+        | (Family::Action, 92 | 93 | 146..=149)
+        | (Family::Order, 67 | 68) => SdkCoverage::Complete,
         (Family::Event, 1 | 4..=17 | 19..=61)
         | (
             Family::Action,
@@ -242,6 +258,10 @@ pub fn capability(family: Family, id: i32) -> Capability {
         _ => SdkCoverage::Missing,
     };
     let binding = match (family, id) {
+        (Family::Event, 62..=65 | 67..=74 | 79 | 80 | 83 | 84) => Binding::Object,
+        (Family::Event, 75..=78 | 81 | 82 | 85 | 87 | 88) => Binding::House,
+        (Family::Event, 86) => Binding::Logic,
+        (Family::Action, 147 | 149) => Binding::Object,
         (Family::Event, 1 | 24 | 31) => Binding::CellOrObject,
         (Family::Event, 25 | 26 | 53 | 54 | 59) => Binding::CellOrObject,
         (Family::Event, 4 | 6 | 7 | 29 | 33..=35 | 38..=44 | 48 | 49) => Binding::Object,
@@ -264,6 +284,8 @@ pub fn capability(family: Family, id: i32) -> Capability {
         opcode: id,
         name: schema.map(|s| s.name),
         runtime,
+        enabled: runtime != RuntimeSupport::Unsupported
+            && (runtime != RuntimeSupport::Ares || vera20k_core::rules::ARES_ENABLED),
         sdk,
         schema_audited: schema.is_some(),
         binding,
@@ -279,6 +301,7 @@ pub fn capability(family: Family, id: i32) -> Capability {
                 .collect()
         }),
         notes: match (family, id) {
+            (Family::Event, 66) => Some("Ares 只有恒真谓词，没有对应的生产通知；不提供 SDK 接口。"),
             (Family::Action, 1) => Some(
                 "仅单人；比较 Country 与当前玩家 House 的 Country，相同=玩家胜、不同=玩家负。结果属于 PlayerPtr，不是触发器 owner。",
             ),
@@ -322,6 +345,9 @@ pub fn capability(family: Family, id: i32) -> Capability {
             _ => schema.map(|s| s.hint),
         },
         implementation: match family {
+            Family::Event | Family::Action if runtime == RuntimeSupport::Ares => {
+                "vendor/vera20k/src/sim/trigger_runtime_ares.rs"
+            }
             Family::Event => {
                 "vendor/vera20k/src/sim/trigger_runtime.rs:has_occurred/evaluate_event"
             }
@@ -339,8 +365,8 @@ pub fn capability(family: Family, id: i32) -> Capability {
 /// Unknown IDs outside these pinned ranges still return Unsupported via capability().
 pub fn matrix() -> Vec<Capability> {
     [
-        (Family::Event, 70),
-        (Family::Action, 145),
+        (Family::Event, 88),
+        (Family::Action, 149),
         (Family::Order, 68),
     ]
     .into_iter()
@@ -377,7 +403,7 @@ mod tests {
             assert!(entry.schema_audited);
             assert!(matches!(
                 entry.runtime,
-                RuntimeSupport::Handler | RuntimeSupport::SinglePlayer
+                RuntimeSupport::Handler | RuntimeSupport::SinglePlayer | RuntimeSupport::Ares
             ));
         }
     }
@@ -441,6 +467,9 @@ mod tests {
             (Family::Event, schema::EVENTS),
             (Family::Action, schema::ACTIONS),
             (Family::Order, schema::scripts::OPCODES),
+            (Family::Event, schema::ares::EVENTS),
+            (Family::Action, schema::ares::ACTIONS),
+            (Family::Order, schema::ares::ORDERS),
         ] {
             for entry in entries {
                 let capability = capability(family, entry.id);
@@ -449,8 +478,66 @@ mod tests {
                 assert_ne!(capability.runtime, RuntimeSupport::Unsupported);
             }
         }
-        assert_eq!(matrix().len(), 71 + 146 + 69);
+        assert_eq!(matrix().len(), 89 + 150 + 69);
         serde_json::to_string(&matrix()).unwrap();
+    }
+
+    #[test]
+    fn ares_inventory_matches_the_pinned_extension_dispatchers() {
+        let source = include_str!("../../../vendor/vera20k/src/sim/trigger_runtime_ares.rs");
+        let arms = |marker: &str| -> BTreeSet<i32> {
+            let body = source
+                .split(marker)
+                .nth(1)
+                .unwrap()
+                .split("            _ => return None,")
+                .next()
+                .unwrap();
+            let mut ids = BTreeSet::new();
+            for line in body.lines() {
+                let Some(line) = line
+                    .strip_prefix("            ")
+                    .filter(|line| !line.starts_with(' '))
+                else {
+                    continue;
+                };
+                let Some((pattern, _)) = line.split_once(" =>") else {
+                    continue;
+                };
+                for item in pattern.split('|').map(str::trim) {
+                    if let Some((start, end)) = item.split_once("..=") {
+                        ids.extend(start.parse::<i32>().unwrap()..=end.parse::<i32>().unwrap());
+                    } else if let Ok(id) = item.parse::<i32>() {
+                        ids.insert(id);
+                    }
+                }
+            }
+            ids
+        };
+        let mut events = arms("Some(match kind {");
+        // 60/61 replace stock predicates; 66 has a true predicate but no
+        // production spotlight notification and is deliberately not offered.
+        for id in [60, 61, 66] {
+            assert!(events.remove(&id));
+        }
+        assert_eq!(
+            events,
+            schema::ares::EVENTS.iter().map(|entry| entry.id).collect()
+        );
+        assert_eq!(
+            arms("Some(match action.entry.kind {"),
+            schema::ares::ACTIONS.iter().map(|entry| entry.id).collect()
+        );
+        assert_eq!(
+            capability(Family::Event, 66).runtime,
+            RuntimeSupport::Unsupported
+        );
+        for id in [62, 77, 88] {
+            assert_eq!(
+                capability(Family::Event, id).enabled,
+                vera20k_core::rules::ARES_ENABLED
+            );
+        }
     }
 
     #[test]
@@ -486,7 +573,11 @@ mod tests {
         );
         let inventoried = matrix()
             .into_iter()
-            .filter(|entry| entry.family == Family::Event && entry.binding == Binding::House)
+            .filter(|entry| {
+                entry.family == Family::Event
+                    && entry.binding == Binding::House
+                    && entry.runtime != RuntimeSupport::Ares
+            })
             .map(|entry| entry.opcode)
             .collect();
         assert_eq!(registered, inventoried);
@@ -601,7 +692,7 @@ mod tests {
             );
         }
         for opcode in gated {
-            assert_eq!(capability(Family::Order, opcode).sdk, SdkCoverage::Missing);
+            assert_eq!(capability(Family::Order, opcode).sdk, SdkCoverage::Complete);
         }
     }
 }

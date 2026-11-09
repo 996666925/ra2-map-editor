@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
+ares = ["vera20k-core/ares"]
 ui-test-video = ["egui_kittest/video", "egui_kittest/wgpu"]
 
 [dependencies]

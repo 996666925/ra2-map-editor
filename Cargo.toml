@@ -55,6 +55,9 @@ anyhow.workspace = true
 eframe.workspace = true
 env_logger.workspace = true
 
+[features]
+ares = ["ra2-map-app/ares"]
+
 [profile.dev]
 opt-level = 1
 debug = "line-tables-only"

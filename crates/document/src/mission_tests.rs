@@ -55,13 +55,18 @@ fn physical_ini_edits_preserve_duplicates_legacy_bytes_and_share_spatial_history
     let mut bytes = crate::test_support::fixture();
     bytes.extend_from_slice(b"\r\n[Triggers]\r\nT=Neutral,<none>,\xD6\xD0,0,1,1,1,0 ; untouched\r\nT=shadow\r\n[Custom]\r\n  X = old ; keep\r\nX=shadow\r\n");
     let mut doc = parse(bytes.clone());
-    assert!(
-        doc.set_ini("Custom", "X", Some(b"ambiguous".to_vec()))
-            .is_err()
-    );
-    let rows = doc.ini_entries("Custom");
-    doc.set(rows[1].0.clone(), Some(Value::Ini(b"physical".to_vec())))
-        .unwrap();
+    if !vera20k_core::rules::ARES_ENABLED {
+        assert!(
+            doc.set_ini("Custom", "X", Some(b"ambiguous".to_vec()))
+                .is_err()
+        );
+    }
+    let last = doc.base.raw.entries("Custom").last().unwrap().0;
+    doc.set(
+        Target::IniLine(last),
+        Some(Value::Ini(b"physical".to_vec())),
+    )
+    .unwrap();
     doc.set_ini("Basic", "Author", Some(b"Author".to_vec()))
         .unwrap();
     doc.waypoint(30, [2, 2]).unwrap();
@@ -96,6 +101,45 @@ fn physical_ini_edits_preserve_duplicates_legacy_bytes_and_share_spatial_history
         doc.set_ini("Triggers", "BAD", Some(b"line\n[Other]".to_vec()))
             .is_err()
     );
+}
+
+#[test]
+fn selected_dialect_keeps_the_same_effective_ini_value_after_save_reopen_and_undo() {
+    let mut bytes = crate::new_map::NewMapOptions::default().bytes().unwrap();
+    bytes.extend_from_slice(b"[Custom]\nX=first\nX=last\n");
+    let mut doc = parse(bytes.clone());
+    let expected = if vera20k_core::rules::ARES_ENABLED {
+        "last"
+    } else {
+        "first"
+    };
+    assert_eq!(doc.ini_text("Custom", "X"), expected);
+    if vera20k_core::rules::ARES_ENABLED {
+        doc.set_ini("Custom", "X", Some(b"edited".to_vec()))
+            .unwrap();
+        doc.commit("edit last key");
+        let saved = doc.snapshot().bytes().unwrap();
+        let runtime = IniFile::from_bytes(&saved).unwrap();
+        assert_eq!(
+            runtime.section_or_empty("Custom").read_string("X", "", 64),
+            "edited"
+        );
+        assert_eq!(parse(saved).ini_text("Custom", "X"), "edited");
+        doc.undo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), bytes);
+        doc.set_ini("Custom", "X", Some(Vec::new())).unwrap();
+        doc.commit("clear last key and shadows");
+        assert!(doc.ini_fields("Custom")["X"].is_empty());
+        assert!(doc.ini_value("Custom", "X").is_none());
+        let saved = doc.snapshot().bytes().unwrap();
+        assert!(
+            !IniFile::from_bytes(&saved)
+                .unwrap()
+                .section_or_empty("Custom")
+                .is_present("X")
+        );
+        assert!(parse(saved).ini_fields("Custom")["X"].is_empty());
+    }
 }
 #[test]
 fn minimum_mission_roundtrips_through_engine_readers_and_undoes_as_one_command() {

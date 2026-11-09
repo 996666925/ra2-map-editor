@@ -234,6 +234,9 @@ impl Events<'_> {
         Ok(())
     }
     fn leaf(&mut self, event: &Event) -> Result<Vec<String>> {
+        if let Event::Ares { event } = event {
+            return ares::event(event, self);
+        }
         let (opcode, value) = match event {
             Event::DamagedByHouse { object, house } => {
                 ensure!(
@@ -503,6 +506,7 @@ impl Events<'_> {
 
 fn event_object(event: &Event) -> Option<&Reference> {
     match event {
+        Event::Ares { event } => event.object(),
         Event::DamagedByHouse { object, .. }
         | Event::Destroyed { object }
         | Event::NearWaypoint { object, .. }

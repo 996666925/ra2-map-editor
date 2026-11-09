@@ -400,6 +400,16 @@ impl MapView {
                     }
                     if message.preview.is_none() {
                         self.editor.attach(&scene);
+                        if let Ok(ini) = vera20k_core::rules::ini_parser::IniFile::from_bytes(
+                            scene.source.bytes(),
+                        ) && let Some(recipe) =
+                            ra2_map_document::random_map::RandomMapOptions::from_ini(
+                                &ini,
+                                &scene.source.title,
+                            )
+                        {
+                            self.workbench.random_options = recipe;
+                        }
                         if message.created {
                             self.editor.mark_new();
                             if let Ok(ini) = vera20k_core::rules::ini_parser::IniFile::from_bytes(

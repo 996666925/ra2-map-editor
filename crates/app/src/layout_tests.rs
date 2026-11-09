@@ -1109,6 +1109,17 @@ fn random_map_controls_follow_landscape_and_resource_availability_in_both_langua
             .click_accesskit();
         harness.run();
         assert!(!view.borrow().workbench.random_options.ore);
+        harness
+            .get_by_label(crate::i18n::text("生成中立城镇"))
+            .click_accesskit();
+        harness.run();
+        assert!(view.borrow().workbench.random_options.terrain.urban_enabled);
+        assert!(
+            !harness
+                .get_by_role_and_label(egui::accesskit::Role::Slider, crate::i18n::text("城镇规模"))
+                .accesskit_node()
+                .is_disabled()
+        );
         for (label, role) in [
             ("矿区分散程度", egui::accesskit::Role::Slider),
             ("资源丰度", egui::accesskit::Role::Slider),

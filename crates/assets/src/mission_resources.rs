@@ -14,9 +14,7 @@ pub struct MissionResources {
 }
 pub(crate) fn load(manager: &AssetManager) -> MissionResources {
     let mut out = MissionResources::default();
-    if let Some(bytes) = manager.get_ref(manager.ini_roots().art())
-        && let Ok(art) = IniFile::from_bytes(bytes)
-    {
+    if let Ok(art) = crate::assets::read_ini(manager, manager.ini_roots().art()) {
         out.choices.insert(
             "Movie".into(),
             movie_names(&art)
@@ -29,11 +27,7 @@ pub(crate) fn load(manager: &AssetManager) -> MissionResources {
         ("Sound", manager.ini_roots().sound()),
         ("Eva", manager.ini_roots().eva()),
     ] {
-        match manager
-            .get_ref(file)
-            .ok_or_else(|| format!("缺少 {file}"))
-            .and_then(|bytes| IniFile::from_bytes(bytes).map_err(|e| e.to_string()))
-        {
+        match crate::assets::read_ini(manager, file).map_err(|error| error.to_string()) {
             Ok(ini) => {
                 let ids = audio_names(name, &ini);
                 out.choices.insert(

@@ -169,6 +169,25 @@ pub struct Baseline {
 impl Baseline {
     pub fn parse(bytes: Arc<[u8]>, map: &MapFile) -> Result<Arc<Self>> {
         let raw = RawIni::parse(bytes)?;
+        if vera20k_core::rules::ARES_ENABLED {
+            // These records have no unambiguous physical edit identity: Ares
+            // can synthesize inherited entries or rename iterator keys. The
+            // engine may preview them; retain their source for exact export.
+            ensure!(
+                !raw.lines.iter().any(|line| {
+                    let text = raw.bytes[line.bytes.clone()].trim_ascii();
+                    line.key.as_deref() == Some("+")
+                        || text.first() == Some(&b'[')
+                            && text
+                                .iter()
+                                .position(|byte| *byte == b']')
+                                .is_some_and(|close| {
+                                    text[close + 1..].trim_ascii_start().starts_with(b":")
+                                })
+                }),
+                "Ares 继承或 + 迭代键地图可预览并原样导出；物理记录编辑需要先展开为显式键值"
+            );
+        }
         ensure!(
             raw.lines.iter().any(|line| line.section == "Map"),
             "P2 暂不编辑 MIX 包装地图，请先提取 INI"
@@ -207,7 +226,11 @@ impl Baseline {
         let frames = decode("OverlayDataPack").context("OverlayDataPack 不可编辑")?;
         let mut records = BTreeMap::new();
         let mut seen = HashSet::new();
-        for (id, line) in raw.lines.iter().enumerate() {
+        let mut physical: Vec<_> = raw.lines.iter().enumerate().collect();
+        if vera20k_core::rules::ARES_ENABLED {
+            physical.reverse();
+        }
+        for (id, line) in physical {
             if matches!(
                 line.section.as_str(),
                 "Units"
@@ -219,8 +242,8 @@ impl Baseline {
                     | "Smudge"
             ) && let Some(key) = &line.key
             {
-                // First physical duplicate is the core's effective record. Keep
-                // all other duplicates byte-exact, and never target them by key.
+                // Vanilla keeps the first physical key; Ares keeps the last.
+                // Other duplicates survive byte-exact and are never edited by key.
                 if seen.insert((line.section.clone(), key.clone())) {
                     records.insert(
                         id as u64,
