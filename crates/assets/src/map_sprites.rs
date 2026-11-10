@@ -9,7 +9,9 @@ use ra2_map_voxel::vxl_raster::{self, VxlRenderParams, VxlSprite};
 use std::{collections::HashMap, sync::Arc};
 use vera20k_core::{
     assets::{hva_file::HvaFile, pal_file::Palette, vpl_file::VplFile, vxl_file::VxlFile},
-    rules::art_data::BuildingAnimKind,
+    rules::{
+        art_data::BuildingAnimKind, ruleset::RuleSet, voxel_frame_catalog::building_voxel_names,
+    },
 };
 
 pub struct ObjectSprite {
@@ -33,6 +35,17 @@ pub(crate) fn load(
     library: &SpritePalette,
 ) -> HashMap<(String, String), ObjectSprite> {
     let mut result = HashMap::new();
+    let voxel_rules = catalog.object_types.get("Structures").and_then(|ids| {
+        ids.iter()
+            .any(|id| {
+                catalog
+                    .rules
+                    .section_or_empty(id)
+                    .read_bool("TurretAnimIsVoxel", false)
+            })
+            .then(|| RuleSet::from_ini(&catalog.rules).ok())
+            .flatten()
+    });
     for (section, types) in &catalog.object_types {
         if section == "Animations" {
             continue;
@@ -214,6 +227,20 @@ pub(crate) fn load(
                         facings = vec![Arc::new(image)];
                     }
                 }
+                if let Some(guns) = voxel_rules
+                    .as_ref()
+                    .and_then(|rules| building_gun_frames(install, catalog, rules, id, &image_id))
+                {
+                    let body = facings[0].clone();
+                    facings = guns
+                        .into_iter()
+                        .map(|gun| {
+                            composite(&[(body.clone(), [0, 0]), (gun, [0, 0])])
+                                .map(Arc::new)
+                                .unwrap_or_else(|| body.clone())
+                        })
+                        .collect();
+                }
                 // Union masks so overlapping body/bib/idle layers do not create
                 // seams or darken a single building's shadow multiple times.
                 shadow = composite(&shadows).map(Arc::new);
@@ -233,6 +260,109 @@ pub(crate) fn load(
         }
     }
     result
+}
+
+/// BuildingType45FA90 selects separate B8/C0 models; Building43DA80 draws
+/// them at TurretAnimX/Y relative to the same anchor as the SHP body.
+fn building_gun_frames(
+    install: &Install,
+    catalog: &Catalog,
+    rules: &RuleSet,
+    id: &str,
+    image: &str,
+) -> Option<Vec<Arc<DecodedImage>>> {
+    let (turret, barrel) = building_voxel_names(id, Some(rules))?;
+    let object = rules.object(id)?;
+    let vpl = install
+        .manager
+        .get_ref("voxels.vpl")
+        .and_then(|b| VplFile::from_bytes(b).ok());
+    let mut renderer = ra2_map_voxel::Renderer::new(vpl.as_ref());
+    let params: Vec<_> = (0..32)
+        .map(|step| VxlRenderParams {
+            facing: step * 8,
+            use_buffer: catalog.art.use_buffer(image),
+            ..Default::default()
+        })
+        .collect();
+    let turret_offset = catalog.art.get(image).map_or(0, |art| art.turret_offset);
+    let mut layers = vec![Vec::new(); 32];
+    let mut has_turret = false;
+    let mut info = None;
+    for (part, name) in [turret.as_deref(), Some(barrel.as_str())]
+        .into_iter()
+        .enumerate()
+    {
+        let Some(name) = name else { continue };
+        let filename = format!("{name}.vxl");
+        let Some(source) = install.manager.resolve_ref(&filename) else {
+            continue;
+        };
+        let Ok(model) = VxlFile::from_bytes(source.bytes) else {
+            continue;
+        };
+        let hva = install
+            .manager
+            .get_ref(&format!("{name}.hva"))
+            .and_then(|b| HvaFile::from_bytes(b).ok());
+        has_turret |= part == 0;
+        info.get_or_insert_with(|| AssetInfo {
+            name: filename,
+            source: source.source_archive.into(),
+            palette: "unit/VPL".into(),
+            palette_source: String::new(),
+            index: 0,
+            count: 32,
+            offset: [0, 0],
+            width: 0,
+            height: 0,
+        });
+        for ((mut sprite, params), layers) in renderer
+            .render_batch(&model, hva.as_ref(), &params, true)
+            .into_iter()
+            .zip(&params)
+            .zip(&mut layers)
+        {
+            let offsets = if has_turret {
+                vxl_raster::building_gun_screen_offsets(turret_offset, params.facing, 0, [0.; 2])
+                    [part]
+            } else {
+                [0.; 2]
+            };
+            sprite.offset_x += object.turret_anim_x as f32 + offsets[0].round();
+            sprite.offset_y += object.turret_anim_y as f32 + offsets[1].round();
+            layers.push(sprite);
+        }
+    }
+    let info = info?;
+    Some(
+        layers
+            .into_iter()
+            .enumerate()
+            .map(|(step, layers)| {
+                let sprite = merge_voxels(&layers);
+                let rgba = sprite
+                    .palette_indices
+                    .iter()
+                    .flat_map(|&i| {
+                        let color = install.theater.unit_palette.color(i);
+                        [color.r, color.g, color.b, if i == 0 { 0 } else { 255 }]
+                    })
+                    .collect();
+                Arc::new(DecodedImage {
+                    info: AssetInfo {
+                        index: step,
+                        offset: [sprite.offset_x as i32, sprite.offset_y as i32],
+                        width: sprite.width,
+                        height: sprite.height,
+                        ..info.clone()
+                    },
+                    indices: sprite.palette_indices,
+                    rgba,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Native SHP shadow companion: body frame n + physical frame count / 2.

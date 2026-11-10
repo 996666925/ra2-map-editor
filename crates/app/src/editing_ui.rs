@@ -665,7 +665,14 @@ pub(super) fn sprite_texture_frame(
     let image = if let Some(frame) = frame {
         scene.sprites.overlay_frames.get(&(id.to_owned(), frame))?
     } else {
-        scene.sprites.get(section, id)?.image.as_ref()?
+        // Map appearances include building bib/attached art and voxel gun parts.
+        // Keep raw previews as a fallback for animations and other standalone art.
+        scene
+            .sprites
+            .objects
+            .get(&(section.to_owned(), id.to_owned()))
+            .map(|object| object.image(0))
+            .or_else(|| scene.sprites.get(section, id)?.image.as_ref())?
     };
     if cache.len() >= 192 {
         cache.clear();

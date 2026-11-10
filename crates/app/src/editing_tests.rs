@@ -2,6 +2,91 @@ use super::*;
 use ra2_map_document::test_support::{document, fixture};
 
 #[test]
+fn library_thumbnails_include_building_layers_and_keep_standalone_and_overlay_frames() {
+    let fixture = ra2_map_assets::test_support::Fixture::new();
+    for name in ["bib.shp", "glow.shp"] {
+        std::fs::copy(fixture.0.join("gi.shp"), fixture.0.join(name)).unwrap();
+    }
+    std::fs::write(
+        fixture.0.join("rulesmd.ini"),
+        b"[BuildingTypes]\n0=GI\n[Animations]\n0=GLOW\n[OverlayTypes]\n0=WALL\n[WALL]\nImage=GI\nWall=yes\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.0.join("artmd.ini"),
+        b"[GI]\nBibShape=BIB\nActiveAnim=GLOW\nActiveAnimX=-4\nActiveAnimY=-3\n[GLOW]\nXDrawOffset=1\nYDrawOffset=-2\n",
+    )
+    .unwrap();
+    let mut install = fixture.install();
+    install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
+    let scene = ra2_map_scene::map::load_scene_bytes(
+        &mut install,
+        "library.map",
+        "fixture".into(),
+        crate::new_map::NewMapOptions {
+            width: 20,
+            height: 20,
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap(),
+        Instant::now(),
+    )
+    .unwrap();
+    let building = scene.sprites.objects[&("Structures".into(), "GI".into())].image(0);
+    assert_eq!([building.info.width, building.info.height], [5, 6]);
+    assert_eq!(
+        building
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] != 0)
+            .count(),
+        2,
+        "both the body and the offset attached animation must remain visible"
+    );
+    let ctx = egui::Context::default();
+    let mut cache = HashMap::new();
+    for (section, id, frame, expected) in [
+        ("Structures", "GI", None, building),
+        (
+            "Animations",
+            "GLOW",
+            None,
+            scene
+                .sprites
+                .get("Animations", "GLOW")
+                .unwrap()
+                .image
+                .as_ref()
+                .unwrap(),
+        ),
+        (
+            "Overlay",
+            "WALL",
+            Some(0),
+            &scene.sprites.overlay_frames[&("WALL".into(), 0)],
+        ),
+    ] {
+        let texture =
+            editing_ui::sprite_texture_frame(&mut cache, &ctx, &scene, section, id, frame).unwrap();
+        let mut delta = ctx.tex_manager().write().take_delta();
+        let uploaded = delta.set.get(&texture.id()).unwrap();
+        let egui::ImageData::Color(image) = &uploaded[0].image;
+        assert_eq!(
+            **image,
+            egui::ColorImage::from_rgba_unmultiplied(
+                [expected.info.width as usize, expected.info.height as usize],
+                &expected.rgba,
+            ),
+            "{section}/{id} must upload the complete appearance"
+        );
+        delta.clear();
+    }
+}
+
+#[test]
 fn ini_commits_and_history_keep_spatial_caches_until_the_scene_changes() {
     let (mut editor, ctx, root) = editor();
     let scene = terrain_scene();

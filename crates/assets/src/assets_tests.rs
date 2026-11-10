@@ -20,6 +20,83 @@ fn write_shp_frames(fixture: &Fixture, name: &str, frames: &[([u16; 2], [u8; 2])
     std::fs::write(fixture.0.join(name), shp).unwrap();
 }
 
+// Two voxel columns in an asymmetric box, with valid native span tables.
+fn write_gun_voxel(fixture: &Fixture, name: &str) {
+    let mut bytes = b"Voxel Animation\0".to_vec();
+    for value in [1u32, 1, 1, 26] {
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes.extend([0; 770]); // Embedded palette page; theater palette is used.
+    bytes.extend([0; 28]); // One section header.
+    for value in [0u32, 5, 4, 9] {
+        // Start/end offsets relative to span data.
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes.extend([0, 1, 1, 0, 1, 0, 1, 1, 0, 1]);
+    for value in [0u32, 8, 16] {
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes.extend(1.0f32.to_le_bytes());
+    for value in [1.0f32, 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.] {
+        bytes.extend(value.to_le_bytes());
+    }
+    for value in [0.0f32, 0., 0., 12., 4., 8.] {
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes.extend([2, 1, 1, 4]);
+    std::fs::write(fixture.0.join(name), bytes).unwrap();
+}
+
+#[test]
+fn building_voxel_guns_combine_with_shp_bodies_and_preserve_facings_and_shadows() {
+    let fixture = Fixture::new();
+    write_shp_frames(&fixture, "gi.shp", &[([1, 2], [1, 0]), ([2, 2], [1, 0])]);
+    for name in ["sam.vxl", "defensetur.vxl", "defensebarl.vxl"] {
+        write_gun_voxel(&fixture, name);
+    }
+    std::fs::write(fixture.0.join("rulesmd.ini"), b"[BuildingTypes]\n0=PATRIOT\n1=CANNON\n2=DISABLED\n3=MISSING\n[PATRIOT]\nImage=GI\nTurret=yes\nTurretAnim=SAM\nTurretAnimIsVoxel=yes\nTurretAnimX=7\nTurretAnimY=-40\n[CANNON]\nImage=GI\nTurret=yes\nTurretAnim=DEFENSETUR\nTurretAnimIsVoxel=yes\nTurretAnimY=-40\n[DISABLED]\nImage=GI\nTurretAnim=SAM\nTurretAnimIsVoxel=no\n[MISSING]\nImage=GI\nTurretAnim=ABSENT\nTurretAnimIsVoxel=yes\n").unwrap();
+    let install = fixture.install();
+    let catalog = crate::catalog::Catalog::load(&install.manager, &install.theater);
+    let sprites = crate::sprites::SpritePalette::load(&install, &catalog);
+    for id in ["PATRIOT", "CANNON"] {
+        let object = &sprites.objects[&("Structures".into(), id.into())];
+        assert_eq!(object.facings.len(), 32);
+        for facing in [0, 64, 128, 192] {
+            let image = object.image(facing);
+            assert!(image.info.offset[1] < -30, "{id}: gun is above the body");
+            assert!(image.info.height > 30);
+            let body_x = (-1 - image.info.offset[0]) as usize;
+            let body_y = -image.info.offset[1] as usize;
+            let pixel = (body_y * image.info.width as usize + body_x) * 4;
+            assert_eq!(&image.rgba[pixel..pixel + 4], &[60, 80, 100, 255]);
+            assert!(
+                image
+                    .rgba
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p[3] != 0)
+                    .count()
+                    > 1
+            );
+        }
+        let shadow = object.shadow.as_ref().unwrap();
+        assert_eq!(
+            shadow.info.offset,
+            [0, 0],
+            "gun must not move the body shadow"
+        );
+        assert_eq!([shadow.info.width, shadow.info.height], [2, 1]);
+    }
+    for id in ["DISABLED", "MISSING"] {
+        let object = &sprites.objects[&("Structures".into(), id.into())];
+        assert_eq!(
+            [object.image(0).info.width, object.image(0).info.height],
+            [2, 1]
+        );
+    }
+}
+
 #[test]
 fn building_art_anchor_stays_on_north_west_cell_for_all_foundations() {
     let fixture = Fixture::new();
