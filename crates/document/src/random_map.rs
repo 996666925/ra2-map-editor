@@ -6,6 +6,7 @@ use crate::{
 use anyhow::{Result, ensure};
 use vera20k_core::{
     map::{
+        entities::EntityCategory,
         map_file::MapFile,
         rmg::{MapGeometry, RmgOptions, emit},
     },
@@ -203,20 +204,39 @@ impl RandomMapOptions {
                 .as_bytes(),
             );
         }
-        out.extend_from_slice(b"[Structures]\r\n");
-        for (index, building) in map.entities.iter().enumerate() {
-            out.extend_from_slice(
-                format!(
-                    "{index}={},{},{},{},{},{},None,1,0,1,0,0,None,None,None,0\r\n",
-                    building.owner,
-                    building.type_id,
-                    building.health,
-                    building.cell_x,
-                    building.cell_y,
-                    building.facing
-                )
-                .as_bytes(),
-            );
+        // Urban generation emits civilian foots as well as buildings. Each
+        // class has its own scenario columns (infantry facing is column 7).
+        for (section, category) in [
+            ("Structures", EntityCategory::Structure),
+            ("Units", EntityCategory::Unit),
+            ("Infantry", EntityCategory::Infantry),
+            ("Aircraft", EntityCategory::Aircraft),
+        ] {
+            out.extend_from_slice(format!("[{section}]\r\n").as_bytes());
+            for (index, entity) in map
+                .entities
+                .iter()
+                .filter(|e| e.category == category)
+                .enumerate()
+            {
+                let tail = match category {
+                    EntityCategory::Structure => {
+                        format!("{},None,1,0,1,0,0,None,None,None,0", entity.facing)
+                    }
+                    EntityCategory::Infantry => {
+                        format!("{},None,{},None,0,-1,0,1,1", entity.sub_cell, entity.facing)
+                    }
+                    EntityCategory::Unit => format!("{},None,None,0,-1,0,-1,1,1", entity.facing),
+                    EntityCategory::Aircraft => format!("{},None,None,0,-1,1,1", entity.facing),
+                };
+                out.extend_from_slice(
+                    format!(
+                        "{index}={},{},{},{},{},{tail}\r\n",
+                        entity.owner, entity.type_id, entity.health, entity.cell_x, entity.cell_y
+                    )
+                    .as_bytes(),
+                );
+            }
         }
         Ok(out)
     }
@@ -288,6 +308,51 @@ mod tests {
         );
         map.waypoints.remove(&0);
         assert!(options.map_bytes(&map, Ok).is_err());
+    }
+
+    #[test]
+    fn generated_civilians_reopen_in_their_own_sections_with_facing_and_idle_mission() {
+        let mut bytes = NewMapOptions::default().bytes().unwrap();
+        bytes.extend_from_slice(
+            b"[Structures]\r\n0=Neutral,CAOILD,256,85,85,0\r\n\
+            [Units]\r\n0=Neutral,TRUCKA,256,81,82,192,None,None,0,-1,0,-1,1,1\r\n\
+            [Infantry]\r\n0=Neutral,CIV1,256,83,84,2,None,64,None,0,-1,0,1,1\r\n\
+            [Aircraft]\r\n0=Neutral,ORCA,256,86,87,128,None,None,0,-1,1,1\r\n",
+        );
+        let map = map_file::load_from_bytes(bytes).unwrap();
+        let saved = RandomMapOptions::default().map_bytes(&map, Ok).unwrap();
+        let (source, reopened) =
+            SourceMap::parse("town.map".into(), "test".into(), saved.clone()).unwrap();
+        assert_eq!(reopened.entities.len(), map.entities.len());
+        for original in &map.entities {
+            let entity = reopened
+                .entities
+                .iter()
+                .find(|e| e.type_id == original.type_id)
+                .unwrap();
+            assert_eq!(entity.category, original.category);
+            assert_eq!(entity.owner, original.owner);
+            assert_eq!(entity.health, original.health);
+            assert_eq!(
+                (entity.cell_x, entity.cell_y),
+                (original.cell_x, original.cell_y)
+            );
+            assert_eq!(entity.facing, original.facing);
+            assert_eq!(entity.sub_cell, original.sub_cell);
+            assert_eq!(entity.mission, None);
+            assert!(entity.recruitable_a && entity.recruitable_b);
+        }
+        let document = MapDocument::new(source.edit_base.unwrap());
+        for section in ["Structures", "Units", "Infantry", "Aircraft"] {
+            assert_eq!(
+                document
+                    .record_iter()
+                    .filter(|(_, r)| r.section == section)
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(document.snapshot().bytes().unwrap(), saved);
     }
 
     #[test]

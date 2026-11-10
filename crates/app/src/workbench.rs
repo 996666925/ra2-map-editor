@@ -6,6 +6,7 @@ use egui::RichText;
 #[derive(Default)]
 pub(super) struct Workbench {
     pub(super) flat_view: crate::flat_view::FlatView,
+    pub(super) size_guide: crate::map_boundary::SizeGuide,
     pub(super) task_overlay: crate::mission_overlay::MissionOverlay,
     pub(super) map_settings: crate::map_settings_ui::MapSettingsUi,
     pub(super) settings: bool,

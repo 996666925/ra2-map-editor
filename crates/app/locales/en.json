@@ -1816,7 +1816,7 @@
   "城镇": "Towns",
   "生成中立城镇": "Generate neutral towns",
   "城镇规模": "Town size",
-  "控制中立城镇的数量和规模；仅放置当前环境有素材的民用建筑，不改变地形与玩家起点。": "Controls the number and size of neutral towns. Uses civilian buildings with assets for this theater; terrain and player starts are preserved.",
+  "控制中立城镇的数量和规模；生成当前环境的道路、民用建筑、平民和车辆，保留玩家起点。": "Controls the number and size of neutral towns. Generates roads, civilian buildings, civilians and vehicles for this theater, preserving player starts.",
   "来源 House 数组索引": "Source House array index",
   "超武类型序号": "Superweapon type index",
   "超武类型": "Superweapon type",

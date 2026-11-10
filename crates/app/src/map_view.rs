@@ -184,6 +184,7 @@ impl MapView {
     }
     fn load_now(&mut self, directory: PathBuf, name: String, new_map: Option<MapCreation>) {
         self.workbench.flat_view.invalidate();
+        self.workbench.size_guide.invalidate();
         self.workbench.canvas_pan = false;
         self.workbench.cancel_secondary = false;
         self.editor.doc = None;
@@ -255,6 +256,7 @@ impl MapView {
         }
         if let Some((base, meta, path)) = self.editor.restored.take() {
             self.workbench.flat_view.invalidate();
+            self.workbench.size_guide.invalidate();
             self.directory = meta.directory.clone();
             self.name = meta.name.clone();
             self.editor.restore(base, meta, path);
@@ -791,7 +793,9 @@ impl MapView {
         }
         let painter = ui.painter().with_clip_rect(rect);
         if self.editor.map_boundaries {
-            crate::map_boundary::draw(&painter, &scene.source.header, rect, &camera);
+            self.workbench
+                .size_guide
+                .draw(&painter, scene, self.editor.flat_view, rect, &camera);
         }
         let at = self.hover.map(|i| [scene.cells[i].rx, scene.cells[i].ry]);
         self.editor.brush_modifiers(ui.input(|i| i.modifiers));

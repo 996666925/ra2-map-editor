@@ -37,20 +37,10 @@ pub fn generate(
     });
     let mut settings = rmg::RmgSettings::load(&install.manager);
     let tech_types = rmg::tech_catalog::resolve(processed.neutral_tech_buildings(), &art);
-    if options.terrain.urban_enabled {
-        settings.urban_types = rmg::tech_catalog::resolve_urban(
-            &rules,
-            &art,
-            &tech_types,
-            install.theater.extension,
-            rmg::emit::theater_name(options.terrain.theater),
-            |file| install.manager.contains(file),
-        );
-    }
     let tech = if options.tech_buildings {
-        tech_types
+        tech_types.as_slice()
     } else {
-        vec![]
+        &[]
     };
     ensure!(!cancelled(), "随机地图生成已取消");
     let mut recipe = options.clone();
@@ -61,13 +51,22 @@ pub fn generate(
     for attempt in 0..16 {
         ensure!(!cancelled(), "随机地图生成已取消");
         recipe.terrain.seed = (options.terrain.seed + attempt * 7919) & 0xffff;
-        let candidate = generate_candidate(
-            &recipe,
-            &settings,
-            &resolved,
-            &blocks,
-            &tech,
-            &mut |stage| {
+        // The engine selects civilian style families from this candidate's
+        // seed. Resolve again after a rejected candidate so the saved recipe
+        // regenerates the same catalog as the engine's setup/load paths.
+        if recipe.terrain.urban_enabled {
+            settings.vera_urban = rmg::tech_catalog::resolve_vera_urban(
+                &rules,
+                &art,
+                &tech_types,
+                install.theater.extension,
+                rmg::emit::theater_name(recipe.terrain.theater),
+                recipe.terrain.seed_u16(),
+                |file| install.manager.contains(file),
+            );
+        }
+        let candidate =
+            generate_candidate(&recipe, &settings, &resolved, &blocks, tech, &mut |stage| {
                 if cancelled() {
                     return;
                 }
@@ -78,8 +77,7 @@ pub fn generate(
                     GenerationPoint::After(Stage::Hills) => "生成树林与地表细节…",
                     _ => return,
                 });
-            },
-        );
+            });
         if valid_starts(&candidate, recipe.terrain.num_players) {
             accepted = Some(candidate);
             break;

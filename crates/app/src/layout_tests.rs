@@ -873,7 +873,11 @@ fn framework_workspace_shows_matching_palette_in_compact_and_desktop_windows() {
 #[test]
 fn map_boundaries_follow_camera_and_toggle_in_every_canvas_mode() {
     let (mut view, root) = view();
-    let scene = terrain_scene();
+    let mut scene = terrain_scene();
+    for cell in &mut scene.cells {
+        cell.z = 4;
+        cell.screen_y -= 60.;
+    }
     view.editor.attach(&scene);
     view.scene = Some(scene);
     view.editor.tool = crate::editing::Tool::Terrain;
@@ -933,9 +937,13 @@ fn map_boundaries_follow_camera_and_toggle_in_every_canvas_mode() {
                         zoom,
                     };
                     let world = camera.world_rect(viewport);
-                    // Size=20x20, LocalSize=2,4,16,10; independent of view mode.
+                    // Size encloses the elevated border and final half row.
+                    // LocalSize remains the logical plane reference.
                     for ((clip, actual), (origin, size)) in guides.iter().zip([
-                        (egui::pos2(-600., 330.), egui::vec2(1200., 600.)),
+                        (
+                            egui::pos2(-600., if flat { 330. } else { 270. }),
+                            egui::vec2(1200., 615.),
+                        ),
                         (egui::pos2(-480., 450.), egui::vec2(960., 300.)),
                     ]) {
                         assert_eq!(*clip, viewport);

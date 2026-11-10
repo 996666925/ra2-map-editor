@@ -8,6 +8,7 @@ use std::{
     path::PathBuf,
     time::Instant,
 };
+use vera20k_core::map::entities::EntityCategory;
 
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
@@ -97,11 +98,18 @@ fn main() -> Result<()> {
             cases.push((format!("archipelago-tech-{players}-{enabled}"), options));
         }
     }
-    for (enabled, presence) in [(false, 100), (true, 0), (true, 100)] {
+    for (enabled, presence) in [(false, 100), (true, 0), (true, 1), (true, 100)] {
         let mut options = RandomMapOptions::default();
         options.terrain.urban_enabled = enabled;
         options.terrain.urban_presence = presence;
         cases.push((format!("towns-{enabled}-{presence}"), options));
+    }
+    for theater in 1..5 {
+        let mut options = RandomMapOptions::default();
+        options.terrain.theater = theater;
+        options.terrain.urban_enabled = true;
+        options.terrain.urban_presence = 100;
+        cases.push((format!("urban-theater-{theater}"), options));
     }
     type TownBaseline = (
         Vec<(i32, u8, u8)>,
@@ -137,6 +145,7 @@ fn main() -> Result<()> {
                 let objects = map
                     .entities
                     .iter()
+                    .filter(|e| e.category == EntityCategory::Structure)
                     .map(|e| (e.type_id.clone(), e.cell_x, e.cell_y))
                     .collect::<Vec<_>>();
                 let stored = map.ini.section_or_empty("RandomMap");
@@ -149,17 +158,18 @@ fn main() -> Result<()> {
                     "town presence lost"
                 );
                 if let Some((base_shape, base_starts, base_objects)) = &town_baseline {
-                    ensure!(&shape == base_shape, "towns changed terrain");
                     ensure!(&starts == base_starts, "towns changed starts");
                     if options.terrain.urban_presence == 0 {
+                        ensure!(&shape == base_shape, "zero presence changed terrain");
                         ensure!(&objects == base_objects, "zero presence added towns");
                     } else {
+                        ensure!(&shape != base_shape, "urban districts did not pave terrain");
                         ensure!(
                             objects.len() > base_objects.len(),
                             "towns were not generated"
                         );
                         ensure!(
-                            objects.starts_with(base_objects),
+                            base_objects.iter().all(|object| objects.contains(object)),
                             "towns changed existing structures"
                         );
                     }
@@ -302,7 +312,7 @@ fn main() -> Result<()> {
             let tech: Vec<_> = map
                 .entities
                 .iter()
-                .filter(|e| e.type_id != "CABHUT")
+                .filter(|e| e.category == EntityCategory::Structure && e.type_id != "CABHUT")
                 .collect();
             ensure!(
                 tech.iter().all(|e| e.owner == "Neutral"),
@@ -336,7 +346,7 @@ fn main() -> Result<()> {
                 image::ColorType::Rgba8,
             )?;
             Ok(
-                serde_json::json!({"case":name,"passed":true,"cells":map.cells.len(),"starts":map.waypoints.len(),"ore_cells":ore,"terrain_objects":map.terrain_objects.len(),"structures":map.entities.len(),"tech_buildings":tech.len(),"region_size":options.terrain.region_size,"diagnostics":scene.diagnostics,"seed":map.ini.section_or_empty("RandomMap").read_int("Seed", -1)}),
+                serde_json::json!({"case":name,"passed":true,"cells":map.cells.len(),"starts":map.waypoints.len(),"ore_cells":ore,"terrain_objects":map.terrain_objects.len(),"structures":map.entities.iter().filter(|e| e.category == EntityCategory::Structure).count(),"infantry":map.entities.iter().filter(|e| e.category == EntityCategory::Infantry).count(),"vehicles":map.entities.iter().filter(|e| e.category == EntityCategory::Unit).count(),"tech_buildings":tech.len(),"region_size":options.terrain.region_size,"diagnostics":scene.diagnostics,"seed":map.ini.section_or_empty("RandomMap").read_int("Seed", -1)}),
             )
         })();
         report.push(match result {

@@ -131,7 +131,7 @@ impl MapView {
                         ui.checkbox(&mut t.urban_enabled, tr!("生成中立城镇"));
                         ui.end_row();
                         percentage(ui, tr!("城镇规模"), &mut t.urban_presence, t.urban_enabled,
-                            tr!("控制中立城镇的数量和规模；仅放置当前环境有素材的民用建筑，不改变地形与玩家起点。"));
+                            tr!("控制中立城镇的数量和规模；生成当前环境的道路、民用建筑、平民和车辆，保留玩家起点。"));
                         ui.label(tr!("随机种子"));
                         ui.horizontal(|ui| {
                             crate::form_edit::number(ui, egui::DragValue::new(&mut t.seed).range(0..=65535), tr!("随机种子"));
