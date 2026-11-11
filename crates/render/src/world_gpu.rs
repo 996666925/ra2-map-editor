@@ -45,6 +45,8 @@ fn visible_commands(ids: &[u32], batches: &[Batch]) -> Vec<Command> {
         if let Some(last) = commands.last_mut()
             && last.batch.page == batch.page
             && last.batch.pipeline == batch.pipeline
+            && batch.layer < 256
+            && last.batch.layer < 256
         {
             last.range.end += 1;
         } else {
@@ -205,7 +207,7 @@ impl WorldGpu {
                 size: s.size.map(|n| n as f32),
                 atlas,
                 base: d.base,
-                layer: d.layer,
+                layer: d.layer | (u32::from(s.blend) << 8),
                 tint: [
                     d.tint[0],
                     d.tint[1],
@@ -223,7 +225,7 @@ impl WorldGpu {
             batches.push(Batch {
                 page,
                 pipeline: pipe,
-                layer: d.layer,
+                layer: d.layer | (u32::from(s.blend) << 8),
             });
         }
         let visibility = VisibilityIndex::new(
@@ -255,7 +257,7 @@ impl WorldGpu {
                         size: scene.surfaces[d.surface].size.map(|v| v as f32),
                         atlas,
                         base: d.base,
-                        layer: d.layer,
+                        layer: d.layer | (u32::from(scene.surfaces[d.surface].blend) << 8),
                         tint: [
                             d.tint[0],
                             d.tint[1],
@@ -326,7 +328,7 @@ impl WorldGpu {
                 size: scene.surfaces[d.surface].size.map(|v| v as f32),
                 atlas,
                 base: d.base,
-                layer: d.layer,
+                layer: d.layer | (u32::from(scene.surfaces[d.surface].blend) << 8),
                 tint: [
                     d.tint[0],
                     d.tint[1],
@@ -347,7 +349,7 @@ impl WorldGpu {
                 } else {
                     2
                 },
-                layer: d.layer,
+                layer: d.layer | (u32::from(scene.surfaces[d.surface].blend) << 8),
             });
         }
         let stride = std::mem::size_of::<Instance>();
@@ -414,6 +416,7 @@ impl WorldGpu {
         device: &wgpu::Device,
         uniform: &wgpu::Buffer,
         visible: &wgpu::Buffer,
+        destination: &wgpu::Texture,
     ) -> Vec<wgpu::BindGroup> {
         self.pages
             .iter()
@@ -458,6 +461,12 @@ impl WorldGpu {
                                 &p.framework.create_view(&Default::default()),
                             ),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 7,
+                            resource: wgpu::BindingResource::TextureView(
+                                &destination.create_view(&Default::default()),
+                            ),
+                        },
                     ],
                 })
             })
@@ -488,7 +497,7 @@ impl WorldGpu {
             return;
         }
         let mut visible = self.visibility.visible(rect);
-        visible.retain(|&id| match self.batches[id as usize].layer {
+        visible.retain(|&id| match self.batches[id as usize].layer & 255 {
             1 => options.overlays,
             2 => options.objects,
             _ => true,
@@ -510,36 +519,106 @@ impl WorldGpu {
         );
         let color = target.color.create_view(&Default::default());
         let depth = target.depth.create_view(&Default::default());
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Static scene shared depth pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &color,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 11. / 255.,
-                        g: 15. / 255.,
-                        b: 20. / 255.,
-                        a: 1.,
+        let mut cursor = 0;
+        let mut first = true;
+        loop {
+            let start = cursor;
+            let packed = commands
+                .get(start)
+                .is_some_and(|command| command.batch.layer >= 256);
+            if packed && !first {
+                // A native translucent leaf reads the preceding framebuffer,
+                // including any earlier overlapping turret. Snapshot each such
+                // draw; ordinary opaque batches retain the single-pass path.
+                let instance =
+                    self.cpu_instances[visible[commands[start].range.start as usize] as usize];
+                let scale = egui::vec2(
+                    target.size[0] as f32 / rect.width(),
+                    target.size[1] as f32 / rect.height(),
+                );
+                let position =
+                    (egui::pos2(instance.position[0], instance.position[1]) - rect.min) * scale;
+                let end = position + egui::vec2(instance.size[0], instance.size[1]) * scale;
+                let min = [
+                    position.x.floor().max(0.) as u32,
+                    position.y.floor().max(0.) as u32,
+                ];
+                let max = [
+                    (end.x.ceil().max(0.) as u32).min(target.size[0]),
+                    (end.y.ceil().max(0.) as u32).min(target.size[1]),
+                ];
+                if max[0] > min[0] && max[1] > min[1] {
+                    let origin = wgpu::Origin3d {
+                        x: min[0],
+                        y: min[1],
+                        z: 0,
+                    };
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            origin,
+                            ..target.color.as_image_copy()
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            origin,
+                            ..target.destination.as_image_copy()
+                        },
+                        wgpu::Extent3d {
+                            width: max[0] - min[0],
+                            height: max[1] - min[1],
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                cursor += 1;
+            } else if !packed {
+                while cursor < commands.len() && commands[cursor].batch.layer < 256 {
+                    cursor += 1;
+                }
+            }
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Static scene shared depth pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &color,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: if first {
+                            wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 11. / 255.,
+                                g: 15. / 255.,
+                                b: 20. / 255.,
+                                a: 1.,
+                            })
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: if first {
+                            wgpu::LoadOp::Clear(1.)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
+                        store: wgpu::StoreOp::Store,
                     }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &depth,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.),
-                    store: wgpu::StoreOp::Discard,
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            ..Default::default()
-        });
-        for command in &commands {
-            pass.set_pipeline(&self.pipelines[command.batch.pipeline]);
-            pass.set_bind_group(0, &target.world_bind[command.batch.page], &[]);
-            pass.draw(0..6, command.range.clone());
+                ..Default::default()
+            });
+            for command in &commands[start..cursor] {
+                pass.set_pipeline(&self.pipelines[command.batch.pipeline]);
+                pass.set_bind_group(0, &target.world_bind[command.batch.page], &[]);
+                pass.draw(0..6, command.range.clone());
+            }
+            drop(pass);
+            first = false;
+            if cursor == commands.len() {
+                break;
+            }
         }
         cache.key = Some(key);
         cache.stats.total_instances = self.batches.len();
@@ -619,6 +698,7 @@ pub(crate) fn pipelines(device: &wgpu::Device) -> std::sync::Arc<[wgpu::RenderPi
             tex(2, wgpu::TextureSampleType::Float { filterable: false }),
             tex(3, wgpu::TextureSampleType::Uint),
             tex(6, wgpu::TextureSampleType::Float { filterable: false }),
+            tex(7, wgpu::TextureSampleType::Float { filterable: false }),
             buffer(
                 4,
                 wgpu::BufferBindingType::Storage { read_only: true },

@@ -246,8 +246,8 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
     )?;
     sim.intern_rule_type_ids(&rules);
     sim.resolve_type_handles(&rules);
-    sim.install_team_ai_registry(&teams, &rules)
-        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    // The engine logs unresolved AI references and installs the remaining data.
+    sim.install_team_ai_registry(&teams, &rules);
     let post = vera20k_core::sim::runtime::finalize_constructed_scenario(
         &mut sim,
         &map,

@@ -10,7 +10,9 @@ use std::{collections::HashMap, sync::Arc};
 use vera20k_core::{
     assets::{hva_file::HvaFile, pal_file::Palette, vpl_file::VplFile, vxl_file::VxlFile},
     rules::{
-        art_data::BuildingAnimKind, ruleset::RuleSet, voxel_frame_catalog::building_voxel_names,
+        art_data::{self, BuildingAnimKind},
+        ruleset::RuleSet,
+        voxel_frame_catalog::building_voxel_names,
     },
 };
 
@@ -22,10 +24,67 @@ pub struct ObjectSprite {
     /// Ground mask in the same canvas/anchor coordinates as the building body.
     /// Kept separate so shadows never participate in object picking.
     pub shadow: Option<Arc<DecodedImage>>,
+    /// Retain the SHP turret separately for scene sorting and pixel depth.
+    /// `facings` stays composited for thumbnails, bounds and placement ghosts.
+    pub shp_turret: Option<ShpTurretSprite>,
+    pub voxel_turret: Option<VoxelTurretSprite>,
+}
+pub struct VoxelTurretSprite {
+    pub body: Arc<DecodedImage>,
+    pub facings: Vec<Arc<DecodedImage>>,
+    pub z_adjust: i32,
+    /// Turret and barrel keep their own native crop/Z-gradient seeds.
+    pub parts: Vec<Vec<Arc<DecodedImage>>>,
+}
+struct GunFrames {
+    facings: Vec<Arc<DecodedImage>>,
+    parts: Vec<Vec<Arc<DecodedImage>>>,
+}
+pub struct ShpTurretSprite {
+    pub body: Arc<DecodedImage>,
+    pub facings: Vec<Arc<DecodedImage>>,
+    /// Floor phase of the native pixel projection, baked into preview frames.
+    pub pixel_offset: [i32; 2],
+    /// Native conversion of the RULES offsets for positioning and GetYSort.
+    pub world_offset: [i32; 2],
+    /// Native GetYSort adjustment, in leptons rather than screen pixels.
+    pub y_sort: i32,
+    pub z_adjust: i32,
+    pub y_draw_offset: i32,
+    pub flat: bool,
+    pub remap: bool,
+    pub normal_light: bool,
+    pub blend: Vec<u8>,
+    pub shadows: Vec<Option<Arc<DecodedImage>>>,
+    /// Four native truncation phases, decoded once on the resource worker.
+    pub previews: Vec<Vec<Arc<DecodedImage>>>,
+}
+impl ShpTurretSprite {
+    pub fn image(&self, facing: u8) -> &Arc<DecodedImage> {
+        &self.facings[usize::from(vxl_raster::voxel_facing_step(facing)) % self.facings.len()]
+    }
 }
 impl ObjectSprite {
     pub fn image(&self, facing: u8) -> &Arc<DecodedImage> {
         &self.facings[usize::from(vxl_raster::voxel_facing_step(facing)) % self.facings.len()]
+    }
+    pub fn image_at(&self, facing: u8, at: [u16; 2]) -> &Arc<DecodedImage> {
+        let Some(turret) = &self.shp_turret else {
+            return self.image(facing);
+        };
+        let world_x = i32::from(at[0]) * 256;
+        let world_y = i32::from(at[1]) * 256;
+        let (x, y) = vera20k_core::util::lepton::project_absolute_lepton_xy(
+            world_x + turret.world_offset[0],
+            world_y + turret.world_offset[1],
+        );
+        let offset = [
+            x - (i32::from(at[0]) - i32::from(at[1])) * 30,
+            y - (i32::from(at[0]) + i32::from(at[1])) * 15,
+        ];
+        let phase = usize::from(offset[0] > turret.pixel_offset[0])
+            + 2 * usize::from(offset[1] > turret.pixel_offset[1]);
+        &turret.previews[phase][usize::from(vxl_raster::voxel_facing_step(facing))]
     }
 }
 
@@ -35,13 +94,11 @@ pub(crate) fn load(
     library: &SpritePalette,
 ) -> HashMap<(String, String), ObjectSprite> {
     let mut result = HashMap::new();
-    let voxel_rules = catalog.object_types.get("Structures").and_then(|ids| {
+    let building_rules = catalog.object_types.get("Structures").and_then(|ids| {
         ids.iter()
             .any(|id| {
-                catalog
-                    .rules
-                    .section_or_empty(id)
-                    .read_bool("TurretAnimIsVoxel", false)
+                let section = catalog.rules.section_or_empty(id);
+                section.read_bool("Turret", false) || section.read_bool("TurretAnimIsVoxel", false)
             })
             .then(|| RuleSet::from_ini(&catalog.rules).ok())
             .flatten()
@@ -131,6 +188,8 @@ pub(crate) fn load(
             };
             let mut anchor = [0., 0.];
             let mut shadow = None;
+            let mut shp_turret = None;
+            let mut voxel_turret = None;
             if section == "Smudge" {
                 anchor[1] = -15.;
             }
@@ -227,19 +286,64 @@ pub(crate) fn load(
                         facings = vec![Arc::new(image)];
                     }
                 }
-                if let Some(guns) = voxel_rules
-                    .as_ref()
-                    .and_then(|rules| building_gun_frames(install, catalog, rules, id, &image_id))
-                {
+                if let Some(guns) = building_rules.as_ref().and_then(|rules| {
+                    building_gun_frames(install, catalog, rules, id, &image_id)
+                        .map(|guns| {
+                            voxel_turret = Some(VoxelTurretSprite {
+                                body: facings[0].clone(),
+                                facings: guns.facings.clone(),
+                                z_adjust: rules.object(id).unwrap().turret_anim_z_adjust,
+                                parts: guns.parts,
+                            });
+                            guns.facings
+                        })
+                        .or_else(|| {
+                            shp_turret = building_shp_turret(
+                                install,
+                                catalog,
+                                rules,
+                                id,
+                                &palette,
+                                facings[0].clone(),
+                            );
+                            shp_turret.as_ref().map(|turret| turret.facings.clone())
+                        })
+                }) {
                     let body = facings[0].clone();
+                    let offset = if shp_turret.is_some() {
+                        art.map_or([0, 0], |art| [-art.x_draw_offset, -art.y_draw_offset])
+                    } else {
+                        [0, 0]
+                    };
                     facings = guns
                         .into_iter()
                         .map(|gun| {
-                            composite(&[(body.clone(), [0, 0]), (gun, [0, 0])])
+                            composite(&[(body.clone(), [0, 0]), (gun, offset)])
                                 .map(Arc::new)
                                 .unwrap_or_else(|| body.clone())
                         })
                         .collect();
+                    if let Some(turret) = &mut shp_turret {
+                        let offset =
+                            art.map_or([0, 0], |art| [-art.x_draw_offset, -art.y_draw_offset]);
+                        turret.previews = (0..4)
+                            .map(|phase| {
+                                turret
+                                    .facings
+                                    .iter()
+                                    .map(|gun| {
+                                        let shift = [
+                                            offset[0] + (phase & 1),
+                                            offset[1] + ((phase >> 1) & 1),
+                                        ];
+                                        composite(&[(body.clone(), [0, 0]), (gun.clone(), shift)])
+                                            .map(Arc::new)
+                                            .unwrap_or_else(|| body.clone())
+                                    })
+                                    .collect()
+                            })
+                            .collect();
+                    }
                 }
                 // Union masks so overlapping body/bib/idle layers do not create
                 // seams or darken a single building's shadow multiple times.
@@ -255,11 +359,112 @@ pub(crate) fn load(
                     facings,
                     anchor,
                     shadow,
+                    shp_turret,
+                    voxel_turret,
                 },
             );
         }
     }
     result
+}
+
+/// Slot 9 is read from RULES, separately from ART's idle/active animations.
+/// Use the same facing table as Simulation::aim_building_turret_anim; the
+/// healthy turret is held at that frame rather than played as an animation.
+fn building_shp_turret(
+    install: &Install,
+    catalog: &Catalog,
+    rules: &RuleSet,
+    id: &str,
+    palette: &Palette,
+    body: Arc<DecodedImage>,
+) -> Option<ShpTurretSprite> {
+    let object = rules.object(id)?;
+    if !object.has_turret {
+        return None;
+    }
+    let config = art_data::shp_turret_anim_config(object)?;
+    if !rules.anim_type_names.contains(&config.anim_type) {
+        return None;
+    }
+    let image = catalog.art.resolve_anim_image_id(&config.anim_type);
+    let candidates = art_data::effect_shp_candidates(
+        art_data::EffectImageKind::Animation,
+        Some(&catalog.art),
+        &config.anim_type,
+        &image,
+        install.theater.extension,
+        &install.theater_name,
+    );
+    let name = candidates
+        .iter()
+        .find(|name| install.manager.contains(name))?;
+    let offsets = catalog.art.draw_offsets(&config.anim_type);
+    let runtime = catalog.art.anim_runtime_config(&config.anim_type)?;
+    let selected_palette = if runtime.should_use_cell_drawer {
+        palette.clone()
+    } else if runtime.alt_palette {
+        install.theater.unit_palette.clone()
+    } else {
+        Palette::from_bytes(install.manager.get_ref("anim.pal")?).ok()?
+    };
+    let (dx, dy) = vera20k_core::util::pixel_conversion::PixelConversionBounds::default()
+        .offset_to_leptons(config.x, config.y);
+    // Positive authored map coordinates use the native integer projection of
+    // the retained offset, so ghosts and committed draws share its rounding.
+    let project = |n: i32| n.div_euclid(256);
+    let pixel_offset = [project((dx - dy) * 30), project((dx + dy) * 15)];
+    let mut shadows = Vec::new();
+    let mut blend = Vec::new();
+    let facings = vera20k_core::util::direction_tables::DRAGON_FRAME_TABLE
+        .iter()
+        .map(|&frame| {
+            let physical = usize::try_from(frame.wrapping_add(runtime.start)).ok()?;
+            let mut image = decode_shp_frame(install, name, &selected_palette, physical).ok()?;
+            let shadow = (runtime.shadow && !runtime.flat)
+                .then(|| embedded_shadow(install, &image, &selected_palette))
+                .flatten()
+                .map(|mut shadow| {
+                    shadow.info.offset[0] += pixel_offset[0] + offsets.0;
+                    shadow.info.offset[1] += pixel_offset[1];
+                    Arc::new(shadow)
+                });
+            shadows.push(shadow);
+            let flags = vera20k_core::sim::anim_class::anim_translucency_selection(
+                vera20k_core::sim::anim_class::AnimTranslucencyInput {
+                    base_flags: 0x1600,
+                    forced_translucent: false,
+                    double_thick: runtime.double_thick,
+                    translucency_detail_level: runtime.translucency_detail_level,
+                    game_detail_level: 2,
+                    translucent_ramp: runtime.translucent,
+                    current_frame: frame,
+                    end_frame: runtime.loaded_end(image.info.count as i32),
+                    explicit_translucency: runtime.translucency,
+                    instance_ramp: 0,
+                },
+            );
+            blend.push((flags.flags & 6) as u8);
+            image.info.offset[0] += pixel_offset[0] + offsets.0;
+            image.info.offset[1] += pixel_offset[1] + offsets.1;
+            Some(Arc::new(image))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(ShpTurretSprite {
+        body,
+        facings,
+        pixel_offset,
+        world_offset: [dx, dy],
+        y_sort: config.y_sort,
+        z_adjust: config.z_adjust,
+        y_draw_offset: offsets.1,
+        flat: runtime.flat,
+        remap: runtime.should_use_cell_drawer,
+        normal_light: runtime.use_normal_light,
+        blend,
+        shadows,
+        previews: Vec::new(),
+    })
 }
 
 /// BuildingType45FA90 selects separate B8/C0 models; Building43DA80 draws
@@ -270,7 +475,7 @@ fn building_gun_frames(
     rules: &RuleSet,
     id: &str,
     image: &str,
-) -> Option<Vec<Arc<DecodedImage>>> {
+) -> Option<GunFrames> {
     let (turret, barrel) = building_voxel_names(id, Some(rules))?;
     let object = rules.object(id)?;
     let vpl = install
@@ -289,6 +494,7 @@ fn building_gun_frames(
     let mut layers = vec![Vec::new(); 32];
     let mut has_turret = false;
     let mut info = None;
+    let mut parts = Vec::new();
     for (part, name) in [turret.as_deref(), Some(barrel.as_str())]
         .into_iter()
         .enumerate()
@@ -317,6 +523,7 @@ fn building_gun_frames(
             width: 0,
             height: 0,
         });
+        let mut frames = Vec::new();
         for ((mut sprite, params), layers) in renderer
             .render_batch(&model, hva.as_ref(), &params, true)
             .into_iter()
@@ -331,12 +538,32 @@ fn building_gun_frames(
             };
             sprite.offset_x += object.turret_anim_x as f32 + offsets[0].round();
             sprite.offset_y += object.turret_anim_y as f32 + offsets[1].round();
+            let rgba = sprite
+                .palette_indices
+                .iter()
+                .flat_map(|&i| {
+                    let color = install.theater.unit_palette.color(i);
+                    [color.r, color.g, color.b, if i == 0 { 0 } else { 255 }]
+                })
+                .collect();
+            frames.push(Arc::new(DecodedImage {
+                info: AssetInfo {
+                    index: frames.len(),
+                    offset: [sprite.offset_x as i32, sprite.offset_y as i32],
+                    width: sprite.width,
+                    height: sprite.height,
+                    ..info.as_ref().unwrap().clone()
+                },
+                indices: sprite.palette_indices.clone(),
+                rgba,
+            }));
             layers.push(sprite);
         }
+        parts.push(frames);
     }
     let info = info?;
-    Some(
-        layers
+    Some(GunFrames {
+        facings: layers
             .into_iter()
             .enumerate()
             .map(|(step, layers)| {
@@ -362,7 +589,8 @@ fn building_gun_frames(
                 })
             })
             .collect(),
-    )
+        parts,
+    })
 }
 
 /// Native SHP shadow companion: body frame n + physical frame count / 2.

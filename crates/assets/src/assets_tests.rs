@@ -98,6 +98,132 @@ fn building_voxel_guns_combine_with_shp_bodies_and_preserve_facings_and_shadows(
 }
 
 #[test]
+fn building_shp_turrets_use_rules_names_parent_palette_offsets_and_facing_frames() {
+    let fixture = Fixture::new();
+    write_shp_frames(&fixture, "gi.shp", &[([1, 2], [1, 0]), ([2, 2], [1, 0])]);
+    let frames: Vec<_> = (0..32).map(|frame| ([1, 2], [frame + 3, 0])).collect();
+    write_shp_frames(&fixture, "gunpic.shp", &frames);
+    let mut palette = std::fs::read(fixture.0.join("unittem.pal")).unwrap();
+    for index in 3..35 {
+        palette[index * 3] = index as u8;
+    }
+    std::fs::write(fixture.0.join("unittem.pal"), palette).unwrap();
+    std::fs::write(fixture.0.join("anim.pal"), [63; 768]).unwrap();
+    std::fs::write(
+        fixture.0.join("rulesmd.ini"),
+        b"[BuildingTypes]\n0=GUN\n1=ARTONLY\n2=DISABLED\n3=UNLISTED\n4=MISSING\n\
+          [Animations]\n0=GUNTUR\n1=ARTTUR\n2=ABSENT\n\
+          [GUN]\nImage=GI\nTurret=yes\nTurretAnim=GUNTUR\nTurretAnimX=7\nTurretAnimY=-10\nTurretAnimYSort=7\nTurretAnimZAdjust=-30\n\
+          [ARTONLY]\nImage=GI\nTurret=yes\n\
+          [DISABLED]\nImage=GI\nTurretAnim=GUNTUR\n\
+          [UNLISTED]\nImage=GI\nTurret=yes\nTurretAnim=UNLISTEDTUR\n\
+          [MISSING]\nImage=GI\nTurret=yes\nTurretAnim=ABSENT\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.0.join("artmd.ini"),
+        b"[GI]\nTurretAnim=ARTTUR\n\
+          [GUNTUR]\nImage=GUNPIC\nXDrawOffset=3\nYDrawOffset=4\n\
+          [ARTTUR]\nImage=GUNPIC\n\
+          [UNLISTEDTUR]\nImage=GUNPIC\n",
+    )
+    .unwrap();
+    let install = fixture.install();
+    let catalog = crate::catalog::Catalog::load(&install.manager, &install.theater);
+    let sprites = crate::sprites::SpritePalette::load(&install, &catalog);
+    let gun = &sprites.objects[&("Structures".into(), "GUN".into())];
+    let turret = gun.shp_turret.as_ref().unwrap();
+    assert_eq!((turret.y_sort, turret.z_adjust), (7, -30));
+    assert_eq!(turret.pixel_offset, [7, -10]);
+    assert_eq!(turret.world_offset, [-55, -115]);
+    assert_eq!(turret.y_draw_offset, 4);
+    assert!(!turret.flat);
+    assert_eq!([turret.body.info.width, turret.body.info.height], [2, 1]);
+    assert_eq!(gun.facings.len(), 32);
+    for (facing, frame) in [(0, 28), (64, 20), (128, 12), (192, 4), (224, 0)] {
+        assert_eq!(turret.image(facing).info.index, usize::from(frame));
+        let image = gun.image(facing);
+        assert_eq!(image.info.offset, [-1, -6]);
+        let turret_pixel = 10 * 4; // (-1, 0) crop + (7, -10) RULES + (3, 4) ART.
+        assert_eq!(
+            &image.rgba[turret_pixel..turret_pixel + 4],
+            &[(frame + 3) * 4, 0, 0, 255],
+            "facing {facing} must hold SHP frame {frame} in the building palette"
+        );
+        let body_pixel = 6 * image.info.width as usize * 4;
+        assert_eq!(&image.rgba[body_pixel..body_pixel + 4], &[60, 80, 100, 255]);
+    }
+    assert_eq!(gun.shadow.as_ref().unwrap().info.offset, [0, 0]);
+    for id in ["ARTONLY", "DISABLED", "UNLISTED", "MISSING"] {
+        let image = sprites.objects[&("Structures".into(), id.into())].image(0);
+        assert_eq!([image.info.width, image.info.height], [2, 1], "{id}");
+    }
+}
+
+#[test]
+fn turret_start_and_global_palette_apply_to_all_facings_and_shadow_frames() {
+    let fixture = Fixture::with_shp_turret();
+    let frames: Vec<_> = (0..128)
+        .map(|frame| {
+            (
+                [1, 2],
+                [
+                    if frame < 32 {
+                        3
+                    } else if frame < 64 {
+                        4
+                    } else {
+                        1
+                    },
+                    0,
+                ],
+            )
+        })
+        .collect();
+    write_shp_frames(&fixture, "guntur.shp", &frames);
+    let path = fixture.0.join("artmd.ini");
+    let art = std::fs::read_to_string(&path).unwrap().replace(
+        "LoopEnd=32",
+        "Start=32\nEnd=64\nLoopEnd=64\nShadow=yes\nShouldUseCellDrawer=no\nTranslucency=50",
+    );
+    std::fs::write(&path, art).unwrap();
+    let mut anim = vec![0; 768];
+    anim[12..15].copy_from_slice(&[0, 0, 50]);
+    std::fs::write(fixture.0.join("anim.pal"), anim).unwrap();
+    let install = fixture.install();
+    let catalog = crate::catalog::Catalog::load(&install.manager, &install.theater);
+    let sprites = crate::sprites::SpritePalette::load(&install, &catalog);
+    let turret = sprites.objects[&("Structures".into(), "GUN".into())]
+        .shp_turret
+        .as_ref()
+        .unwrap();
+    for (step, frame) in vera20k_core::util::direction_tables::DRAGON_FRAME_TABLE
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(turret.facings[step].info.index, *frame as usize + 32);
+        assert_eq!(&turret.facings[step].rgba[..4], &[0, 0, 200, 255]);
+        assert_eq!(turret.blend[step], 4);
+        assert_eq!(
+            turret.shadows[step].as_ref().unwrap().info.index,
+            *frame as usize + 96
+        );
+    }
+    assert!(!turret.remap);
+    // Global AltPalette uses the theater unit palette, not the building's custom palette.
+    let art = std::fs::read_to_string(&path).unwrap() + "AltPalette=yes\n";
+    std::fs::write(path, art).unwrap();
+    let install = fixture.install();
+    let catalog = crate::catalog::Catalog::load(&install.manager, &install.theater);
+    let sprites = crate::sprites::SpritePalette::load(&install, &catalog);
+    let turret = sprites.objects[&("Structures".into(), "GUN".into())]
+        .shp_turret
+        .as_ref()
+        .unwrap();
+    assert_eq!(&turret.image(0).rgba[..4], &[0, 200, 0, 255]);
+}
+
+#[test]
 fn building_art_anchor_stays_on_north_west_cell_for_all_foundations() {
     let fixture = Fixture::new();
     let mut rules = String::from("[BuildingTypes]\n");

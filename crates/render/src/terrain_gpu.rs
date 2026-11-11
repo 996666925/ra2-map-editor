@@ -95,6 +95,7 @@ impl TerrainGpu {
 }
 pub struct Target {
     pub color: wgpu::Texture,
+    pub(crate) destination: wgpu::Texture,
     pub(crate) depth: wgpu::Texture,
     pub(crate) uniform: wgpu::Buffer,
     pub(crate) world_bind: Vec<wgpu::BindGroup>,
@@ -344,6 +345,10 @@ impl TerrainGpu {
             wgpu::TextureFormat::Depth32Float,
             wgpu::TextureUsages::RENDER_ATTACHMENT,
         );
+        let destination = create(
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Terrain camera"),
             size: 32,
@@ -388,10 +393,13 @@ impl TerrainGpu {
         });
         let world_visible = self.world.visible_buffer(device);
         Arc::new(Target {
-            world_bind: self.world.bindings(device, &uniform, &world_visible),
+            world_bind: self
+                .world
+                .bindings(device, &uniform, &world_visible, &destination),
             world_visible,
             world_cache: Default::default(),
             color,
+            destination,
             depth,
             uniform,
             terrain_bind,
@@ -659,3 +667,7 @@ mod world_checks;
 #[cfg(test)]
 #[path = "framework_tests.rs"]
 mod framework_tests;
+
+#[cfg(test)]
+#[path = "shp_turret_tests.rs"]
+mod shp_turret_tests;

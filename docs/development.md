@@ -111,6 +111,16 @@ $env:RA2_DIR = 'D:/Games/YR'
 cargo test --locked -p ra2-map-assets --lib retail_voxel_gpu -- --ignored
 ```
 
+建筑 SHP 炮塔在地图场景中保留独立绘制层：`TurretAnimYSort` 使用引擎的 lepton 排序键，`TurretAnimZAdjust` 与动画 ART 的 Y 偏移共同进入像素深度；建筑主体继续使用自身的深度形状。VXL 炮塔和炮管分别保留自身的裁剪框及深度起点，不合入建筑深度。SHP 物理帧为 32 向帧表值加 ART `Start`；`ShouldUseCellDrawer`、`AltPalette` 和 `UseNormalLight` 控制选色及换色。透明度按引擎选择 25/50/75% 档位，CPU 和 GPU 都进行 RGB565 掩码混色；GPU 在每个透明绘制项前读取已有画面，重叠透明炮塔按顺序累积。`Shadow=yes` 的非 Flat 炮塔使用所选物理帧加 SHP 总帧数的一半绘制阴影，保持独立裁剪，阴影不参与对象拾取。
+
+缩略图、选择边界与放置提示保留合成图；放置/粘贴根据目标格的正负投影选取预解码的坐标相位，避免原始像素偏移与引擎 lepton 换算出现一像素差异。主体和炮塔均补偿 15 级以上地形的投影高度。CPU 回归覆盖新建地图有效起点高度区间、起始帧、选色/透明/阴影、正负排序、主体及邻近建筑/车辆遮挡、36 级高程、Flat 动画、地图两侧的偏移和移动后的撤销/重做。以下检查另外要求实际 GPU，只用合成资源，对比地图内规则覆盖后的画布像素、拾取与图片导出：
+
+```powershell
+cargo test --locked -p ra2-map-render --lib shp_turret_depth_and_y_sort_match_gpu_picking_and_export -- --ignored --test-threads=1
+```
+
+截图与报告写入 `target/shp-turret-depth-gpu/`，含 VXL 深度、起始帧、0/4/36 级高度、三档透明、重叠透明炮塔与独立阴影。该检查验证编辑器各路径一致及与引擎坐标/混色/深度函数的对应关系，不代表已完成原版游戏整屏像素对照。受损外观及其他建筑动画的完整独立排序仍属于既有静态场景范围。
+
 传统预览的真实资源检查覆盖取景范围、起点及 PreviewPack 像素往返；高清导出检查会启动支持 `--map-picture` 的引擎并实际使用 GPU：
 
 ```powershell

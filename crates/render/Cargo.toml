@@ -19,5 +19,6 @@ wgpu.workspace = true
 vera20k-core.workspace = true
 
 [dev-dependencies]
+ra2-map-voxel.workspace = true
 ra2-map-document.workspace = true
 ra2-map-assets = { workspace = true, features = ["test-support"] }

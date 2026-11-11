@@ -25,6 +25,36 @@ pub fn preview_mix(first: u16, second: u16, amount: u32) -> u16 {
     native_surface_format::RGB565.mix_packed_rgb16(first, second, amount)
 }
 
+/// Native building presentation correction beyond the stock terrain range.
+pub fn building_terrain_correction(level: i32) -> i32 {
+    if !(15..=127).contains(&level) {
+        return 0;
+    }
+    level * native_z::HEIGHT_LEVEL_PX
+        - util::native_x87::adjust_for_z_standard(level * util::lepton::GROUND_LEVEL_HEIGHT_LEPTONS)
+}
+
+/// The palette-index blitter's packed RGB565 translucency stages.
+/// `stage` is the native flags & 6: 2=25%, 4=50%, 6=75% transparent.
+pub fn packed_blend(destination: [u8; 3], source: [u8; 3], stage: u8) -> [u8; 3] {
+    let format = native_surface_format::RGB565;
+    let d = format.pack_rgb8(destination);
+    let s = format.pack_rgb8(source);
+    let half = |a: u16, b: u16| ((a & 0xf7de) >> 1).wrapping_add((b & 0xf7de) >> 1);
+    let word = match stage {
+        1 => (d >> 1) & 0x7bef,
+        2 => ((s >> 2) & 0x39e7) * 3 + ((d >> 2) & 0x39e7),
+        4 => half(d, s),
+        6 => ((s >> 2) & 0x39e7) + ((d >> 2) & 0x39e7) * 3,
+        _ => s,
+    };
+    // The engine's active RGB565 presentation codebook.
+    let rgb = format.unpack_rgb8(word);
+    let rgba = native_surface_format::ACTIVE_RETAIL_RGB565_PRESENTATION
+        .quantize_rgba8([rgb[0], rgb[1], rgb[2], 255]);
+    [rgba[0], rgba[1], rgba[2]]
+}
+
 // These path modules are upstream sources, linted in the engine workspace.
 // --no-deps does not exclude them; editor-owned adapter code stays linted here.
 #[rustfmt::skip]

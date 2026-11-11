@@ -32,7 +32,15 @@ pub fn object_anchor(
         i32::from(at[1]) * 256 + sub_y,
         world_z,
     );
-    [x + appearance.anchor[0], y + appearance.anchor[1]]
+    let correction = if record.section == "Structures" {
+        ra2_map_voxel::building_terrain_correction(world_z / 104)
+    } else {
+        0
+    };
+    [
+        x + appearance.anchor[0],
+        y + appearance.anchor[1] - correction as f32,
+    ]
 }
 
 pub fn object_on_bridge(record: &ra2_map_document::document::Record) -> bool {
@@ -80,6 +88,8 @@ pub struct Surface {
     /// Alternate terrain material with the same alpha and depth admission.
     pub framework: Vec<u8>,
     pub depth: Vec<u16>,
+    /// Native packed RGB565 selector; zero keeps ordinary RGBA drawing.
+    pub blend: u8,
 }
 impl Surface {
     /// Match the GPU's screen-pixel coverage filter for magnified framework art.
@@ -118,6 +128,11 @@ pub struct Draw {
     pub writes: bool,
     pub owner: Option<u64>,
 }
+#[derive(Clone)]
+struct CachedRecord {
+    record: ra2_map_document::document::Record,
+    passes: [std::ops::Range<usize>; 3],
+}
 #[derive(Clone, Default)]
 pub struct VisualScene {
     pub surfaces: Vec<Arc<Surface>>,
@@ -130,13 +145,9 @@ pub struct VisualScene {
     light: Option<Arc<lighting::CellLightGrid>>,
     pub(crate) profile: Option<ra2_map_document::lighting::Profile>,
     static_draws: usize,
-    records: HashMap<
-        u64,
-        (
-            ra2_map_document::document::Record,
-            [std::ops::Range<usize>; 3],
-        ),
-    >,
+    // Body and turret own separate pass ranges so other records can sort
+    // between them without invalidating incremental reuse.
+    records: HashMap<(u64, bool), CachedRecord>,
     pub dirty_chunks: usize,
     pub reused_surfaces: usize,
 }
@@ -239,6 +250,7 @@ impl VisualScene {
                             original: Vec::new(),
                             framework,
                             depth: image.depth.iter().map(|&n| 32768 + u16::from(n)).collect(),
+                            blend: 0,
                         }));
                         id
                     });
@@ -335,29 +347,46 @@ impl VisualScene {
         let mut objects: Vec<_> = records
             .iter()
             .filter(|(_, r)| r.section != "Waypoints")
+            .flat_map(|(&id, r)| {
+                let turret = scene
+                    .sprites
+                    .objects
+                    .get(&(r.section.clone(), r.type_id()))
+                    .is_some_and(|sprite| sprite.shp_turret.is_some());
+                std::iter::once((id, r, false)).chain(turret.then_some((id, r, true)))
+            })
             .collect();
-        objects.sort_by_cached_key(|(id, r)| {
-            (
-                r.section != "Smudge",
-                r.cell().map_or(0, |c| u32::from(c[0]) + u32::from(c[1])),
-                **id,
-            )
+        objects.sort_by_cached_key(|(id, r, turret)| {
+            let key = object_sort_key(r, &scene.catalog.rules);
+            let key = if *turret {
+                let sprite = &scene.sprites.objects[&(r.section.clone(), r.type_id())];
+                let turret = sprite.shp_turret.as_ref().unwrap();
+                let at = r.cell().unwrap();
+                (i32::from(at[0]) + i32::from(at[1]))
+                    .wrapping_mul(256)
+                    .wrapping_add(turret.world_offset[0])
+                    .wrapping_add(turret.world_offset[1])
+                    .wrapping_add(turret.y_sort)
+            } else {
+                key
+            };
+            (r.section != "Smudge", key, *id, *turret)
         });
         // Flat smudges, shadows, then opaque bodies, all sharing terrain Z.
         for pass in 0..3 {
-            for (object_index, &(id, r)) in objects.iter().enumerate() {
+            for (object_index, &(id, r, turret_part)) in objects.iter().enumerate() {
                 if object_index % 128 == 0 {
                     crate::work::checkpoint(cancelled)?;
                 }
-                let id = *id;
+                let cache_id = (id, turret_part);
                 let start = out.draws.len();
-                if let Some((_, ranges)) = previous
+                if let Some(cached) = previous
                     .filter(|_| !terrain_changed)
-                    .and_then(|old| old.records.get(&id))
-                    .filter(|(record, _)| record == r)
+                    .and_then(|old| old.records.get(&cache_id))
+                    .filter(|cached| &cached.record == r)
                 {
                     out.draws
-                        .extend_from_slice(&previous.unwrap().draws[ranges[pass].clone()]);
+                        .extend_from_slice(&previous.unwrap().draws[cached.passes[pass].clone()]);
                 } else {
                     (|| {
                         let Some(at) = r.cell() else { return };
@@ -386,6 +415,9 @@ impl VisualScene {
                         let level = cell.z.saturating_add(if high { 4 } else { 0 });
                         let point = object_anchor(r, appearance, world_z);
                         if pass == 1 {
+                            if turret_part {
+                                return;
+                            }
                             if let Some(shadow) = &appearance.shadow {
                                 out.add_sprite(
                                     &mut cache,
@@ -406,7 +438,19 @@ impl VisualScene {
                             .get(if r.section == "Infantry" { 7 } else { 5 })
                             .and_then(|s| s.parse().ok())
                             .unwrap_or(0);
-                        let image = appearance.image(facing);
+                        let image = if turret_part {
+                            appearance.shp_turret.as_ref().unwrap().image(facing)
+                        } else {
+                            appearance.shp_turret.as_ref().map_or_else(
+                                || {
+                                    appearance.voxel_turret.as_ref().map_or_else(
+                                        || appearance.image(facing),
+                                        |turret| &turret.body,
+                                    )
+                                },
+                                |turret| &turret.body,
+                            )
+                        };
                         let owner = f.first().map(String::as_str).unwrap_or("Neutral");
                         let color =
                             resolve_house_color(&ini, &scene.catalog.rules, &schemes, owner);
@@ -427,46 +471,85 @@ impl VisualScene {
                                 &rules_image
                             },
                         );
-                        let style = if r.section == "Structures" {
-                            let foundation = vera20k_core::rules::foundation::Foundation::Stock(
-                                art.and_then(|a| a.foundation).unwrap_or(0),
-                            )
-                            .dimensions();
-                            DepthStyle::Building {
-                                shape: shape.as_ref(),
-                                foundation,
-                                move_point: art.map_or((0, 0), |a| a.z_shape_point_move),
-                                adjust: art.map_or(0, |a| a.normal_z_adjust),
-                            }
-                        } else if r.section == "Smudge" {
-                            DepthStyle::Flat
-                        } else if matches!(r.section.as_str(), "Units" | "Infantry") {
-                            let rules = scene.catalog.rules.section_or_empty(&type_id);
-                            let (adjust, split) = ra2_map_voxel::static_foot_depth(
-                                resolved,
-                                at,
-                                high,
-                                facing,
+                        let (point, style) = if turret_part {
+                            let turret = appearance.shp_turret.as_ref().unwrap();
+                            // Replace the preview's raw pixel offset with the
+                            // native world projection, independent of body ART.
+                            let (x, y) = vera20k_core::util::lepton::absolute_leptons_to_screen(
+                                i32::from(at[0]) * 256 + turret.world_offset[0],
+                                i32::from(at[1]) * 256 + turret.world_offset[1],
                                 world_z,
-                                scene.palette.tile_ids.map_or(-1, |ids| ids.water_bridge),
-                                [
-                                    rules.read_int("ZFudgeCliff", 10),
-                                    rules.read_int("ZFudgeColumn", 5),
-                                    rules.read_int("ZFudgeTunnel", 10),
-                                    rules.read_int("ZFudgeBridge", 0),
-                                ],
-                                r.section == "Units"
-                                    && rules.read_bool("TooBigToFitUnderBridge", false),
                             );
-                            DepthStyle::Foot {
-                                adjust,
-                                split: split
-                                    && image.info.name.to_ascii_lowercase().ends_with(".vxl"),
-                            }
+                            let correction =
+                                ra2_map_voxel::building_terrain_correction(i32::from(cell.z));
+                            let lift =
+                                vera20k_core::util::native_x87::adjust_for_z_standard(world_z)
+                                    + correction;
+                            (
+                                [
+                                    x - turret.pixel_offset[0] as f32,
+                                    y - turret.pixel_offset[1] as f32 - correction as f32,
+                                ],
+                                DepthStyle::Animation {
+                                    adjust: turret
+                                        .z_adjust
+                                        .wrapping_add(turret.y_draw_offset)
+                                        .wrapping_sub(if turret.flat { 3 } else { 2 })
+                                        .wrapping_sub(lift),
+                                    flat: turret.flat,
+                                    blend: turret.blend[usize::from(
+                                        ra2_map_voxel::vxl_raster::voxel_facing_step(facing),
+                                    )],
+                                },
+                            )
                         } else {
-                            DepthStyle::Vertical
+                            let style = if r.section == "Structures" {
+                                let foundation =
+                                    vera20k_core::rules::foundation::Foundation::Stock(
+                                        art.and_then(|a| a.foundation).unwrap_or(0),
+                                    )
+                                    .dimensions();
+                                DepthStyle::Building {
+                                    shape: shape.as_ref(),
+                                    foundation,
+                                    move_point: art.map_or((0, 0), |a| a.z_shape_point_move),
+                                    adjust: art.map_or(0, |a| a.normal_z_adjust),
+                                }
+                            } else if r.section == "Smudge" {
+                                DepthStyle::Flat
+                            } else if matches!(r.section.as_str(), "Units" | "Infantry") {
+                                let rules = scene.catalog.rules.section_or_empty(&type_id);
+                                let (adjust, split) = ra2_map_voxel::static_foot_depth(
+                                    resolved,
+                                    at,
+                                    high,
+                                    facing,
+                                    world_z,
+                                    scene.palette.tile_ids.map_or(-1, |ids| ids.water_bridge),
+                                    [
+                                        rules.read_int("ZFudgeCliff", 10),
+                                        rules.read_int("ZFudgeColumn", 5),
+                                        rules.read_int("ZFudgeTunnel", 10),
+                                        rules.read_int("ZFudgeBridge", 0),
+                                    ],
+                                    r.section == "Units"
+                                        && rules.read_bool("TooBigToFitUnderBridge", false),
+                                );
+                                DepthStyle::Foot {
+                                    adjust,
+                                    split: split
+                                        && image.info.name.to_ascii_lowercase().ends_with(".vxl"),
+                                }
+                            } else {
+                                DepthStyle::Vertical
+                            };
+                            (point, style)
                         };
-                        let tint = if r.section == "Smudge" {
+                        let tint = if turret_part
+                            && appearance.shp_turret.as_ref().unwrap().normal_light
+                        {
+                            [1.; 3]
+                        } else if r.section == "Smudge" {
                             light.terrain_tile_tint_at((at[0], at[1]))
                         } else if r.section == "Terrain" {
                             light.terrain_object_tint_for_type(
@@ -489,15 +572,76 @@ impl VisualScene {
                             2,
                             Some(id),
                             tint,
-                            ramp.as_ref(),
+                            if turret_part && !appearance.shp_turret.as_ref().unwrap().remap {
+                                None
+                            } else {
+                                ramp.as_ref()
+                            },
                             style,
                         );
+                        if !turret_part && let Some(turret) = &appearance.voxel_turret {
+                            let lift =
+                                vera20k_core::util::native_x87::adjust_for_z_standard(world_z)
+                                    + ra2_map_voxel::building_terrain_correction(i32::from(cell.z));
+                            for part in &turret.parts {
+                                let image = &part[usize::from(
+                                    ra2_map_voxel::vxl_raster::voxel_facing_step(facing),
+                                )];
+                                out.add_sprite(
+                                    &mut cache,
+                                    image,
+                                    point,
+                                    at,
+                                    level,
+                                    2,
+                                    Some(id),
+                                    tint,
+                                    ramp.as_ref(),
+                                    DepthStyle::Animation {
+                                        adjust: turret.z_adjust.wrapping_sub(lift),
+                                        flat: false,
+                                        blend: 0,
+                                    },
+                                );
+                            }
+                        }
+                        if turret_part {
+                            let turret = appearance.shp_turret.as_ref().unwrap();
+                            let step =
+                                usize::from(ra2_map_voxel::vxl_raster::voxel_facing_step(facing));
+                            if let Some(shadow) = &turret.shadows[step] {
+                                let lift =
+                                    vera20k_core::util::native_x87::adjust_for_z_standard(world_z)
+                                        + ra2_map_voxel::building_terrain_correction(i32::from(
+                                            cell.z,
+                                        ));
+                                out.add_sprite(
+                                    &mut cache,
+                                    shadow,
+                                    point,
+                                    at,
+                                    level,
+                                    2,
+                                    None,
+                                    [1.; 3],
+                                    None,
+                                    DepthStyle::Animation {
+                                        adjust: -2 - lift,
+                                        flat: true,
+                                        blend: 1,
+                                    },
+                                );
+                            }
+                        }
                     })();
                 }
                 out.records
-                    .entry(id)
-                    .or_insert_with(|| (r.clone(), std::array::from_fn(|_| 0..0)))
-                    .1[pass] = start..out.draws.len();
+                    .entry(cache_id)
+                    .or_insert_with(|| CachedRecord {
+                        record: r.clone(),
+                        passes: std::array::from_fn(|_| 0..0),
+                    })
+                    .passes[pass] = start..out.draws.len();
             }
         }
         out.surface_cache = cache;
@@ -527,6 +671,11 @@ impl VisualScene {
             DepthStyle::Bridge => (3, (0, 0), (0, 0), 0),
             DepthStyle::Vertical => (1, (0, 0), (0, 0), 0),
             DepthStyle::Foot { adjust, split } => (4, (0, 0), (i32::from(split), 0), adjust),
+            DepthStyle::Animation {
+                adjust,
+                flat,
+                blend,
+            } => (5, (0, 0), (i32::from(flat), i32::from(blend)), adjust),
             DepthStyle::Building {
                 foundation,
                 move_point,
@@ -552,12 +701,17 @@ impl VisualScene {
             }
             let height = image.info.height as i32;
             let mut depth = Vec::with_capacity((image.info.width * image.info.height) as usize);
-            let gradient = if matches!(style, DepthStyle::Flat | DepthStyle::Bridge) {
+            let gradient = if matches!(
+                style,
+                DepthStyle::Flat | DepthStyle::Bridge | DepthStyle::Animation { flat: true, .. }
+            ) {
                 ZGradient::Flat
             } else {
                 ZGradient::Vertical
             };
-            let adjust = if let DepthStyle::Foot { adjust, .. } = style {
+            let adjust = if let DepthStyle::Foot { adjust, .. }
+            | DepthStyle::Animation { adjust, .. } = style
+            {
                 adjust
             } else {
                 native_z::ground_anchored_z_adjust(
@@ -648,6 +802,11 @@ impl VisualScene {
                 original: image.rgba.clone(),
                 framework: Vec::new(),
                 depth,
+                blend: if let DepthStyle::Animation { blend, .. } = style {
+                    blend
+                } else {
+                    0
+                },
             }));
             id
         });
@@ -757,7 +916,7 @@ impl VisualScene {
                 if rgba[p * 4 + 3] == 0 || if d.layer == 0 { z > depth } else { z >= depth } {
                     continue;
                 }
-                blend(
+                blend_surface(
                     &mut color,
                     &rgba[p * 4..p * 4 + 4],
                     if options.lighting && !(options.framework && d.layer == 0) {
@@ -765,6 +924,7 @@ impl VisualScene {
                     } else {
                         [1.; 3]
                     },
+                    s.blend,
                 );
                 if d.writes {
                     depth = z
@@ -877,7 +1037,7 @@ impl VisualScene {
                     } else {
                         nearest
                     };
-                    blend(
+                    blend_surface(
                         &mut pixels[dst * 4..dst * 4 + 4],
                         color,
                         if options.lighting && !(options.framework && d.layer == 0) {
@@ -885,6 +1045,7 @@ impl VisualScene {
                         } else {
                             [1.; 3]
                         },
+                        s.blend,
                     );
                     if d.writes {
                         depth[dst] = z;
@@ -909,11 +1070,26 @@ fn blend(dst: &mut [u8], src: &[u8], tint: [f32; 3]) {
             .round() as u8;
     }
 }
+fn blend_surface(dst: &mut [u8], src: &[u8], tint: [f32; 3], selector: u8) {
+    if selector == 0 {
+        blend(dst, src, tint);
+        return;
+    }
+    let source =
+        std::array::from_fn(|i| (f32::from(src[i]) * tint[i]).clamp(0., 255.).round() as u8);
+    let rgb = ra2_map_voxel::packed_blend([dst[0], dst[1], dst[2]], source, selector);
+    dst[..3].copy_from_slice(&rgb);
+}
 #[derive(Clone, Copy)]
 enum DepthStyle<'a> {
     Flat,
     Bridge,
     Vertical,
+    Animation {
+        adjust: i32,
+        flat: bool,
+        blend: u8,
+    },
     Foot {
         adjust: i32,
         split: bool,
@@ -924,6 +1100,40 @@ enum DepthStyle<'a> {
         move_point: (i32, i32),
         adjust: i32,
     },
+}
+
+/// The engine's Ground GetYSort keys use absolute leptons, independently of
+/// ART draw offsets, height and pixel Z. Building render coordinates precede
+/// their voxel/gate adjustment; infantry keeps its authored subcell.
+fn object_sort_key(record: &ra2_map_document::document::Record, rules: &IniFile) -> i32 {
+    let Some(at) = record.cell() else { return 0 };
+    let fields = record.fields();
+    let (sub_x, sub_y) = if record.section == "Infantry" {
+        vera20k_core::util::lepton::subcell_offset(
+            fields
+                .get(5)
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0),
+        )
+    } else {
+        (128, 128)
+    };
+    let location = vera20k_core::sim::components::DriveCoord {
+        x: i32::from(at[0]) * 256 + sub_x,
+        y: i32::from(at[1]) * 256 + sub_y,
+        z: 0,
+    };
+    let (location, adjust) = if record.section == "Structures" {
+        let section = rules.section_or_empty(&record.type_id());
+        vera20k_core::sim::movement::ground_pose::building_render_order_parts(
+            location,
+            section.read_bool("TurretAnimIsVoxel", false),
+            section.read_bool("Gate", false),
+        )
+    } else {
+        (location, 0)
+    };
+    location.x.wrapping_add(location.y).wrapping_add(adjust)
 }
 pub fn resolve_house_color(
     ini: &IniFile,

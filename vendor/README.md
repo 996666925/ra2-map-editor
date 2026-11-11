@@ -4,6 +4,20 @@
 The editor pins the engine through its Git tree entry, rather than a moving branch.
 Use `git submodule status` for the revision selected by your editor checkout.
 
+The current integration targets VERA20k 0.3.0 at
+`f0a4cd7e6a5e7e55c21df50a7d05bd908d01faa8` (updated 2026-11-11).
+The engine mounts `ECACHE*.MIX` and `ELOCAL*.MIX` through the shared asset
+manager. Editor building previews use its RULES slot-9 configuration and
+32-facing frame table for healthy SHP turrets; ART `TurretAnim` is ignored.
+Scene rendering retains the turret's independent Ground sort key and animation
+pixel depth, including `TurretAnimYSort`, `TurretAnimZAdjust` and ART draw offsets.
+VXL guns retain separate turret/barrel crops and Z seeds. SHP selection adds
+ART `Start`, uses the selected animation palette, and retains directional shadow
+frames. Packed RGB565 translucency reads the existing framebuffer on both CPU
+and GPU. Placement previews use the same offset projection as the scene, and
+building art and turrets share the engine's correction for extended terrain heights.
+Mission audit loaders follow the engine's nonfatal Team AI diagnostics API.
+
 Both `vera20k-core` and `crates/voxel` use this checkout. The latter compiles
 the engine's shared CPU/GPU voxel renderer sources because those modules currently
 belong to the full game client, rather than a separate render library.

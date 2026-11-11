@@ -3669,6 +3669,7 @@ dependencies = [
  "ra2-map-assets",
  "ra2-map-document",
  "ra2-map-scene",
+ "ra2-map-voxel",
  "serde",
  "serde_json",
  "vera20k-core",
@@ -5098,7 +5099,7 @@ dependencies = [
 
 [[package]]
 name = "vera20k-core"
-version = "0.2.10"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "fixed",

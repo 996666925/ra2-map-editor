@@ -80,6 +80,11 @@ impl NewMapOptions {
             "VERA20k 要求地图宽度＋高度不超过 {MAX_MAP_SPAN}"
         );
         ensure!(self.level <= 127, "初始高度须在 0～127 之间");
+        let start_span = 2 * u32::from(self.height) - 18;
+        ensure!(
+            u32::from(self.level) + 1 < start_span,
+            "当前地图高度无法在该初始地面高度下容纳玩家起点，请降低地面高度或增大地图高度"
+        );
         ensure!(
             (2..=MAX_PLAYERS).contains(&self.players),
             "玩家起点数量须在 2～{MAX_PLAYERS} 之间"
@@ -152,7 +157,13 @@ impl NewMapOptions {
             .iter()
             .take(self.players as usize)
             .map(|&(u, v)| (2 + (width - 4) * u / 4, low + (high - low) * v / 4))
+            .filter(|&(_, r)| r > low)
             .collect();
+        // Narrow but valid high-ground intervals can quantize two of the
+        // eight preferred positions to the same cell. Fill those slots from
+        // the candidate pool instead of emitting duplicate waypoints.
+        let mut distinct = std::collections::HashSet::new();
+        starts.retain(|point| distinct.insert(*point));
         // Preserve the first eight starts. Add well-spaced points by maximizing
         // distance to the closest existing start in projected map space.
         // Sampling strictly inside the bounds also works for 20x20 at level 14.
@@ -200,10 +211,42 @@ mod tests {
     use vera20k_core::map::playfield::{PlayfieldBounds, size_diamond_contains};
 
     #[test]
+    fn elevated_small_maps_reject_empty_start_intervals_before_generation() {
+        for (height, last_valid) in [(20, 20), (30, 40), (40, 60)] {
+            for level in [last_valid + 1, last_valid + 2, 127] {
+                let options = NewMapOptions {
+                    width: 20,
+                    height,
+                    level,
+                    ..Default::default()
+                };
+                assert!(
+                    options.validate().is_err(),
+                    "height={height}, level={level}"
+                );
+                assert!(options.bytes().is_err());
+            }
+            let options = NewMapOptions {
+                width: 20,
+                height,
+                level: last_valid,
+                players: 30,
+                ..Default::default()
+            };
+            assert!(options.validate().is_ok());
+            assert!(options.bytes().is_ok());
+        }
+    }
+
+    #[test]
     fn blank_maps_cover_the_exact_diamond_and_have_distinct_playable_starts() {
         for (width, height, level, players) in [
             (20, 20, 0, 30),
             (20, 20, 14, 30),
+            (20, 20, 20, 30),
+            (20, 30, 40, 30),
+            (20, 40, 60, 30),
+            (40, 40, 36, 30),
             (20, 492, 14, 30),
             (492, 20, 14, 30),
             (81, 43, 7, 3),

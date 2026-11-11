@@ -87,11 +87,14 @@ impl TerrainGpu {
     ) -> Result<serde_json::Value> {
         use anyhow::Context;
         use ra2_map_scene::visual::ViewOptions;
+        let mut owners = std::collections::HashSet::new();
         let mut points: Vec<_> = scene
             .visual
             .draws
             .iter()
-            .filter(|d| d.owner.is_some())
+            // Body, turret and barrel share one owner. Sample eight distinct
+            // objects so extra draw layers do not reduce asset coverage.
+            .filter(|d| d.owner.is_some_and(|id| owners.insert(id)))
             .take(8)
             .map(|d| {
                 let s = &scene.visual.surfaces[d.surface];

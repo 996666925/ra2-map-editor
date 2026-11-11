@@ -768,7 +768,7 @@ impl Editor {
                 .get(if r.section == "Infantry" { 7 } else { 5 })
                 .and_then(|f| f.parse().ok())
                 .unwrap_or(0);
-            let image = appearance.image(facing);
+            let image = appearance.image_at(facing, at);
             let ground = preview
                 .ground
                 .iter()

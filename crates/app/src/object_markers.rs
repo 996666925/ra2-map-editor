@@ -59,7 +59,7 @@ impl MarkerCache {
                     .sprites
                     .objects
                     .get(&(record.section.clone(), label.clone()));
-                let image = appearance.map(|a| a.image(facing).clone());
+                let image = appearance.map(|a| a.image_at(facing, at).clone());
                 let image_rect = appearance.zip(image.as_ref()).map(|(appearance, image)| {
                     let z = terrain_tools::object_world_z(
                         scene,

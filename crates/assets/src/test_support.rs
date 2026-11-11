@@ -61,6 +61,89 @@ impl Fixture {
         Install::from_probe_root(&self.0).unwrap()
     }
 
+    /// Distinct body/turret/building/unit pixels for shared-depth regressions.
+    pub fn with_shp_turret() -> Self {
+        let fixture = Self::new();
+        let mut palette = vec![0; 768];
+        palette[3..15].copy_from_slice(&[15, 20, 25, 0, 0, 50, 50, 0, 0, 0, 50, 0]);
+        std::fs::write(fixture.0.join("unittem.pal"), palette).unwrap();
+        for (name, count, color) in [
+            ("body.shp", 2, 1),
+            ("guntur.shp", 64, 3),
+            ("block.shp", 2, 2),
+            ("tank.shp", 2, 4),
+        ] {
+            let path = fixture.0.join(name);
+            write_shp(&path, count);
+            let mut bytes = std::fs::read(&path).unwrap();
+            for (index, pixels) in bytes[8 + usize::from(count) * 24..]
+                .as_chunks_mut::<2>()
+                .0
+                .iter_mut()
+                .enumerate()
+            {
+                let values = if index < usize::from(count) / 2 {
+                    if color == 1 { [1, 1] } else { [color, 0] }
+                } else {
+                    [0, 0]
+                };
+                *pixels = values;
+            }
+            std::fs::write(path, bytes).unwrap();
+        }
+        std::fs::write(
+            fixture.0.join("rulesmd.ini"),
+            b"[BuildingTypes]\n0=GUN\n1=BLOCK\n[VehicleTypes]\n0=TANK\n\
+              [Animations]\n0=GUNTUR\n\
+              [GUN]\nImage=BODY\nStrength=100\nTurret=yes\nTurretAnim=GUNTUR\n\
+              TurretAnimYSort=512\nTurretAnimZAdjust=-30\n\
+              [BLOCK]\nStrength=100\n[TANK]\nStrength=100\n",
+        )
+        .unwrap();
+        std::fs::write(
+            fixture.0.join("artmd.ini"),
+            b"[BODY]\nFoundation=1x1\nNormalZAdjust=60\n\
+              [BLOCK]\nFoundation=1x1\n\
+              [TANK]\nFacings=1\nWalkFrames=0\nStandingFrames=1\nYDrawOffset=-15\n\
+              [GUNTUR]\nLoopEnd=32\n",
+        )
+        .unwrap();
+        fixture
+    }
+
+    /// Native span tables for an asymmetric building voxel gun.
+    pub fn with_voxel_turret() -> Self {
+        let fixture = Self::with_shp_turret();
+        let path = fixture.0.join("rulesmd.ini");
+        let rules = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("TurretAnim=GUNTUR", "TurretAnim=SAM\nTurretAnimIsVoxel=yes");
+        std::fs::write(path, rules).unwrap();
+        let mut bytes = b"Voxel Animation\0".to_vec();
+        for value in [1u32, 1, 1, 26] {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend([0; 770]);
+        bytes.extend([0; 28]);
+        for value in [0u32, 5, 4, 9] {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend([0, 1, 1, 0, 1, 0, 1, 1, 0, 1]);
+        for value in [0u32, 8, 16] {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend(1.0f32.to_le_bytes());
+        for value in [1.0f32, 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.] {
+            bytes.extend(value.to_le_bytes());
+        }
+        for value in [0.0f32, 0., 0., 12., 4., 8.] {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend([2, 1, 1, 4]);
+        std::fs::write(fixture.0.join("sam.vxl"), bytes).unwrap();
+        fixture
+    }
+
     /// Small TMP images with stock CliffSet topology for authoring regressions.
     pub fn with_cliffs() -> Self {
         let fixture = Self::new();
