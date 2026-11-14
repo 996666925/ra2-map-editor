@@ -1,5 +1,106 @@
 //! Editable IDs share authoritative picker candidates; unknown mod values stay editable.
+use crate::i18n::tr;
 use eframe::egui;
+
+/// A searchable picker opens even for an empty ID. Explicit custom entry reuses
+/// the same completion owner, so save and focus handling see its popup too.
+pub(crate) fn picker(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    value: &mut String,
+    choices: &[(String, String)],
+    name: &str,
+) {
+    let custom_id = id.with("custom");
+    let mut custom = ui.data(|d| d.get_temp::<bool>(custom_id).unwrap_or(false));
+    let selected = if value.is_empty() {
+        tr!("使用默认值").to_owned()
+    } else {
+        choices
+            .iter()
+            .find(|(token, _)| token.eq_ignore_ascii_case(value))
+            .map_or_else(
+                || value.clone(),
+                |(token, label)| format!("{token} · {label}"),
+            )
+    };
+    let button_text = tr!("自定义…");
+    let button_width = (ui
+        .painter()
+        .layout_no_wrap(
+            button_text.to_owned(),
+            egui::TextStyle::Button.resolve(ui.style()),
+            ui.visuals().text_color(),
+        )
+        .size()
+        .x
+        + ui.spacing().button_padding.x * 2.)
+        .max(80.);
+    let picker_width =
+        (ui.available_width() - button_width - ui.spacing().item_spacing.x).clamp(100., 235.);
+    ui.vertical(|ui| {
+        ui.horizontal(|ui| {
+            let picker = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(picker_width, ui.spacing().interact_size.y),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        egui::ComboBox::from_id_salt(id)
+                            .width(picker_width)
+                            .height(250.)
+                            .wrap_mode(egui::TextWrapMode::Truncate)
+                            .selected_text(&selected)
+                            .show_ui(ui, |ui| {
+                                let search_id = id.with("filter");
+                                let mut filter = ui
+                                    .data(|d| d.get_temp::<String>(search_id).unwrap_or_default());
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut filter)
+                                        .hint_text(tr!("搜索名称或编号…")),
+                                )
+                                .accessible_name(tr!("搜索{arg0}", arg0 = name));
+                                ui.selectable_value(value, String::new(), tr!("使用默认值"));
+                                let lower = filter.to_lowercase();
+                                for (token, label) in choices
+                                    .iter()
+                                    .filter(|(token, label)| {
+                                        token.to_lowercase().contains(&lower)
+                                            || label.to_lowercase().contains(&lower)
+                                    })
+                                    .take(250)
+                                {
+                                    ui.selectable_value(
+                                        value,
+                                        token.clone(),
+                                        format!("{token} · {label}"),
+                                    );
+                                }
+                                ui.data_mut(|d| d.insert_temp(search_id, filter));
+                            })
+                            .response
+                            .accessible_name(name)
+                            .on_hover_text(&selected)
+                    },
+                )
+                .inner;
+            if ui
+                .add_sized(
+                    egui::vec2(button_width, picker.rect.height()),
+                    egui::Button::new(button_text)
+                        .wrap_mode(egui::TextWrapMode::Extend)
+                        .selected(custom),
+                )
+                .clicked()
+            {
+                custom = !custom;
+            }
+        });
+        if custom {
+            reference(ui, id.with("text"), value, choices, name, picker_width);
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(custom_id, custom));
+}
 
 #[derive(Clone, Default)]
 struct OpenPopups(std::collections::HashMap<egui::Id, u64>);
@@ -85,6 +186,85 @@ fn suggestions(text: &str, choices: &[(String, String)]) -> Vec<egui::Suggestion
 mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable as _;
+
+    #[test]
+    fn picker_search_selects_from_an_empty_value_and_preserves_unknown_ids() {
+        let mut value = "MOD_CUSTOM".to_owned();
+        let choices = choices();
+        let mut harness = crate::test_support::harness()
+            .with_context_setup(|ctx| {
+                crate::ui_theme::install(ctx);
+                ctx.add_font_provider(std::sync::Arc::new(
+                    egui_system_font_provider::SystemFontProvider::new(),
+                ));
+            })
+            .with_size([420., 360.])
+            .build_ui(|ui| {
+                picker(
+                    ui,
+                    ui.make_persistent_id("picker"),
+                    &mut value,
+                    &choices,
+                    "Type",
+                );
+            });
+        harness.run();
+        #[cfg(feature = "ui-test-video")]
+        {
+            let output =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/custom-button");
+            std::fs::create_dir_all(&output).unwrap();
+            harness
+                .render()
+                .unwrap()
+                .save(output.join("closed.png"))
+                .unwrap();
+        }
+        harness.get_by_label("自定义…").click();
+        harness.run();
+        assert_eq!(
+            harness
+                .get_by_role_and_label(egui::accesskit::Role::TextInput, "Type")
+                .value()
+                .as_deref(),
+            Some("MOD_CUSTOM")
+        );
+        #[cfg(feature = "ui-test-video")]
+        {
+            let output =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/custom-button");
+            harness
+                .render()
+                .unwrap()
+                .save(output.join("open.png"))
+                .unwrap();
+        }
+        harness.get_by_label("自定义…").click();
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::ComboBox, "Type")
+            .click();
+        harness.run();
+        harness.get_by_label("使用默认值").click();
+        harness.run();
+        assert_eq!(
+            harness
+                .get_by_role_and_label(egui::accesskit::Role::ComboBox, "Type")
+                .value()
+                .as_deref(),
+            Some("使用默认值")
+        );
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::ComboBox, "Type")
+            .click();
+        harness.run();
+        harness.get_by_label("搜索Type").type_text("grizzly");
+        harness.run();
+        harness.get_by_label("TANK · Grizzly Tank").click();
+        harness.run();
+        drop(harness);
+        assert_eq!(value, "TANK");
+    }
 
     fn choices() -> Vec<(String, String)> {
         vec![

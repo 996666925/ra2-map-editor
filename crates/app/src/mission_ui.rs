@@ -14,7 +14,7 @@ mod ai_forms;
 #[path = "mission_authoring_smoke.rs"]
 mod authoring_smoke;
 #[path = "mission_choices.rs"]
-mod choices;
+pub(crate) mod choices;
 #[path = "mission_forms.rs"]
 mod forms;
 

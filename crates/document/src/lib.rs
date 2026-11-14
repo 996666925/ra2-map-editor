@@ -8,6 +8,7 @@ pub mod document;
 mod document_tests;
 pub mod ini_edit;
 pub mod lighting;
+pub mod map_information;
 pub mod map_settings;
 pub mod mission;
 pub mod new_map;

@@ -38,9 +38,10 @@ pub(crate) fn load(manager: &AssetManager) -> MissionResources {
             Err(e) => out.errors.push(e),
         }
     }
+    let themes = vera20k_core::rules::theme_ini::ThemeCatalog::select(manager);
     out.choices.insert(
         "Theme".into(),
-        vera20k_core::rules::theme_ini::ThemeCatalog::select(manager)
+        themes
             .entries()
             .iter()
             .map(|t| (t.key.clone(), t.key.clone()))
@@ -48,16 +49,46 @@ pub(crate) fn load(manager: &AssetManager) -> MissionResources {
     );
     match CsfFile::load_active(|name| manager.get_ref(name)) {
         Ok((table, _)) => {
+            if let Some(choices) = out.choices.get_mut("Theme") {
+                for ((_, label), theme) in choices.iter_mut().zip(themes.entries()) {
+                    if let Some(name) = table.get(&theme.name_key) {
+                        *label = name.to_owned();
+                    }
+                }
+            }
             let mut entries: Vec<_> = table
                 .entries()
                 .map(|(label, text)| (label.to_owned(), format!("{label} · {text}")))
                 .collect();
             entries.sort();
             out.choices.insert("Csf".into(), entries);
+            out.choices
+                .insert("GameMode".into(), mode_choices(manager, Some(&table)));
         }
-        Err(e) => out.errors.push(e.to_string()),
+        Err(e) => {
+            out.errors.push(e.to_string());
+            out.choices
+                .insert("GameMode".into(), mode_choices(manager, None));
+        }
     }
     out
+}
+
+fn mode_choices(manager: &AssetManager, strings: Option<&CsfFile>) -> Vec<(String, String)> {
+    let mut choices = BTreeMap::new();
+    if let Ok(modes) = vera20k_core::skirmish_modes::skirmish_modes_from_assets(manager) {
+        for mode in modes {
+            if mode.map_filter.is_empty() {
+                continue;
+            }
+            let label = strings
+                .and_then(|table| table.get(&mode.ui_name_key))
+                .unwrap_or(&mode.map_filter)
+                .to_owned();
+            choices.entry(mode.map_filter).or_insert(label);
+        }
+    }
+    choices.into_iter().collect()
 }
 
 /// Immutable presentation projection of one concrete InfantryType.
@@ -263,6 +294,22 @@ fn movie_names(art: &IniFile) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_information_modes_use_installed_filter_ids_instead_of_numeric_mode_ids() {
+        let fixture = crate::test_support::Fixture::new();
+        std::fs::write(fixture.0.join("mpmodesmd.ini"), b"[Battle]\n7=GUI:Custom,STT:Custom,my-mode.ini,my-filter,true\n8=GUI:Other,STT:Other,other.ini,other-filter,true\n").unwrap();
+        let install = fixture.install();
+        let resources = load(&install.manager);
+        let choices = &resources.choices["GameMode"];
+        assert_eq!(
+            choices,
+            &[
+                ("my-filter".into(), "my-filter".into()),
+                ("other-filter".into(), "other-filter".into())
+            ]
+        );
+    }
 
     #[test]
     fn fixed_country_indices_follow_native_sources_and_do_not_use_display_order() {

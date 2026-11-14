@@ -1559,24 +1559,133 @@ fn map_settings_tabs_stay_inside_the_viewport_without_document_writes() {
     let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
     let mut settings = crate::map_settings_ui::MapSettingsUi::default();
     settings.open = true;
-    for tab in 0..4 {
-        settings.tab = tab;
-        let mut harness = crate::test_support::harness()
-            .with_context_setup(setup)
-            .with_accessibility_check(false)
-            .with_size([1280., 800.])
-            .build_ui(|ui| settings.show(ui.ctx(), &mut editor, &scene));
-        for size in [[1280., 800.], [900., 600.]] {
-            harness.set_size(size.into());
-            harness.run();
-            let rect = harness
-                .ctx
-                .memory(|m| m.area_rect(egui::Id::unique("map-properties")))
-                .unwrap();
-            assert!(
-                egui::Rect::from_min_size(egui::Pos2::ZERO, size.into()).contains_rect(rect),
-                "tab {tab}: {rect:?}"
-            );
+    for language in [
+        crate::i18n::Language::Chinese,
+        crate::i18n::Language::English,
+    ] {
+        let _language = crate::i18n::enter(language);
+        for tab in 0..4 {
+            settings.tab = tab;
+            let mut harness = crate::test_support::harness()
+                .with_context_setup(setup)
+                .with_accessibility_check(false)
+                .with_size([1280., 800.])
+                .build_ui(|ui| settings.show(ui.ctx(), &mut editor, &scene));
+            for size in [[1280., 800.], [900., 600.]] {
+                harness.set_size(size.into());
+                harness.run();
+                let initial_width = harness
+                    .ctx
+                    .memory(|m| m.area_rect(egui::Id::unique("map-properties")))
+                    .unwrap()
+                    .width();
+                if tab == 3 {
+                    harness.run_steps(120);
+                }
+                let rect = harness
+                    .ctx
+                    .memory(|m| m.area_rect(egui::Id::unique("map-properties")))
+                    .unwrap();
+                assert!(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, size.into()).contains_rect(rect),
+                    "tab {tab}: {rect:?}"
+                );
+                if tab == 3 {
+                    assert!(
+                        (rect.width() - initial_width).abs() <= 1.,
+                        "map information kept expanding over idle frames: {rect:?}"
+                    );
+                    #[cfg(feature = "ui-test-video")]
+                    {
+                        let output = Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("../../target/map-settings-width");
+                        std::fs::create_dir_all(&output).unwrap();
+                        harness
+                            .render()
+                            .unwrap()
+                            .save(output.join(format!("{language:?}-{}.png", size[0])))
+                            .unwrap();
+                    }
+                }
+            }
+            if tab == 3 {
+                harness.set_size([1280., 800.].into());
+                harness.run();
+                let initial = harness
+                    .ctx
+                    .memory(|m| m.area_rect(egui::Id::unique("map-properties")))
+                    .unwrap();
+                let corner = harness
+                    .get_by_label("Resize window bottom-right corner")
+                    .rect()
+                    .center();
+                let target = corner + egui::vec2(160., 0.);
+                harness.hover_at(corner);
+                harness.run();
+                harness.drag_at(corner);
+                harness.run();
+                harness.hover_at(target);
+                harness.run();
+                harness.drop_at(target);
+                harness.run();
+                let resized = harness
+                    .ctx
+                    .memory(|m| m.area_rect(egui::Id::unique("map-properties")))
+                    .unwrap();
+                assert!(
+                    resized.width() > initial.width() + 100.,
+                    "the user must be able to widen settings: {initial:?} -> {resized:?}"
+                );
+                harness.run_steps(120);
+                let settled = harness
+                    .ctx
+                    .memory(|m| m.area_rect(egui::Id::unique("map-properties")))
+                    .unwrap();
+                assert!(
+                    (settled.width() - resized.width()).abs() <= 1.,
+                    "resized settings keep growing: {resized:?} -> {settled:?}"
+                );
+                harness.get_by_label(crate::i18n::text("基本信息")).click();
+                harness.run();
+                for group in ra2_map_document::map_information::Group::ALL
+                    .into_iter()
+                    .skip(1)
+                {
+                    let name = crate::i18n::text(group.label());
+                    harness.get_by_label(name).scroll_to_me();
+                    harness.run();
+                    harness.get_by_label(name).click();
+                    harness.run();
+                    let initial_width = harness
+                        .ctx
+                        .memory(|m| m.area_rect(egui::Id::unique("map-properties")))
+                        .unwrap()
+                        .width();
+                    harness.run_steps(120);
+                    let rect = harness
+                        .ctx
+                        .memory(|m| m.area_rect(egui::Id::unique("map-properties")))
+                        .unwrap();
+                    assert!(
+                        (rect.width() - initial_width).abs() <= 1.,
+                        "expanded {name} keeps growing: {rect:?}"
+                    );
+                    #[cfg(feature = "ui-test-video")]
+                    {
+                        let output = Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("../../target/map-settings-width");
+                        harness
+                            .render()
+                            .unwrap()
+                            .save(output.join(format!("{language:?}-{group:?}.png")))
+                            .unwrap();
+                    }
+                    harness.get_by_label(name).scroll_to_me();
+                    harness.run();
+                    harness.get_by_label(name).click();
+                    harness.run();
+                }
+            }
         }
     }
     assert_eq!(

@@ -11,7 +11,7 @@ use ra2_map_document::{
 };
 use std::{collections::BTreeMap, sync::Arc};
 
-pub(super) type Choices = Arc<Vec<(String, String)>>;
+pub(crate) type Choices = Arc<Vec<(String, String)>>;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Family {
     Reference(Kind),
@@ -136,7 +136,7 @@ impl Cache {
     }
 }
 
-pub(super) fn get(
+pub(crate) fn get(
     ctx: &egui::Context,
     kind: ParameterKind,
     doc: &MapDocument,

@@ -21,12 +21,12 @@ pub(crate) struct MapSettingsUi {
     original_light: Option<Draft>,
     crates: Option<ra2_map_document::crate_settings::Draft>,
     original_crates: Option<ra2_map_document::crate_settings::Draft>,
+    info: Option<ra2_map_document::map_information::Draft>,
+    original_info: Option<ra2_map_document::map_information::Draft>,
     name: Option<String>,
     original_name: Option<String>,
     author: String,
     original_author: String,
-    bases: bool,
-    original_bases: bool,
     players: u8,
     original_players: u8,
     pub profile: Profile,
@@ -62,16 +62,16 @@ impl MapSettingsUi {
         self.options != self.original
             || self.light != self.original_light
             || self.crates != self.original_crates
+            || self.info != self.original_info
             || self.name != self.original_name
             || self.author != self.original_author
-            || self.bases != self.original_bases
             || self.players != self.original_players
     }
     pub fn allow_leave(&mut self) -> bool {
         if self.dirty() {
             self.open = true;
             self.message =
-                tr!("请完成或取消地图名称、署名、基地车、出生点、光照、箱子设置输入；尺寸修改需检查预览并应用，或放弃尺寸修改。").into();
+                tr!("请完成或取消地图信息、光照和箱子设置输入；尺寸修改需检查预览并应用，或放弃尺寸修改。").into();
             false
         } else {
             true
@@ -85,12 +85,12 @@ impl MapSettingsUi {
         self.original_light = self.light.clone();
         self.crates = Some(ra2_map_document::crate_settings::Draft::read(doc));
         self.original_crates = self.crates.clone();
+        self.info = Some(ra2_map_document::map_information::Draft::read(doc));
+        self.original_info = self.info.clone();
         self.name = Some(doc.ini_text("Basic", "Name"));
         self.original_name = self.name.clone();
         self.author = doc.ini_text("Basic", "Author");
         self.original_author = self.author.clone();
-        self.bases = map_settings::starting_bases(doc);
-        self.original_bases = self.bases;
         self.players = ra2_map_document::player_starts::from_document(doc)
             .len()
             .clamp(2, 30) as u8;
@@ -130,8 +130,8 @@ impl MapSettingsUi {
             && self.light != self.original_light
             && self.options == self.original
             && self.crates == self.original_crates
+            && self.info == self.original_info
             && self.author == self.original_author
-            && self.bases == self.original_bases
             && self.name == self.original_name
             && self.players == self.original_players
             && !editor.stroking
@@ -166,8 +166,8 @@ impl MapSettingsUi {
             && self.crates != self.original_crates
             && self.options == self.original
             && self.light == self.original_light
+            && self.info == self.original_info
             && self.author == self.original_author
-            && self.bases == self.original_bases
             && self.name == self.original_name
             && self.players == self.original_players
             && !editor.stroking
@@ -207,7 +207,7 @@ impl MapSettingsUi {
             && (self.name != self.original_name
                 || self.players != self.original_players
                 || self.author != self.original_author
-                || self.bases != self.original_bases)
+                || self.info != self.original_info)
             && self.options == self.original
             && self.light == self.original_light
             && self.crates == self.original_crates
@@ -230,12 +230,10 @@ impl MapSettingsUi {
                     if self.author != self.original_author {
                         map_settings::set_author(doc, &self.author)?;
                     }
-                    if self.bases != self.original_bases {
-                        map_settings::set_starting_bases(doc, self.bases)?;
-                    }
                     if self.players != self.original_players {
                         ra2_map_document::player_starts::set_count(doc, self.players)?;
                     }
+                    self.info.as_ref().unwrap().apply(doc)?;
                     Ok(())
                 })
             })();
@@ -248,8 +246,9 @@ impl MapSettingsUi {
                     self.original_name = self.name.clone();
                     self.author = doc.ini_text("Basic", "Author");
                     self.original_author = self.author.clone();
-                    self.original_bases = self.bases;
                     self.original_players = self.players;
+                    self.info = Some(ra2_map_document::map_information::Draft::read(doc));
+                    self.original_info = self.info.clone();
                     self.info_editing = false;
                     self.message = tr!("地图信息已自动生效，可撤销。").into();
                 }
@@ -289,8 +288,8 @@ impl MapSettingsUi {
         let crates_before = self.crates.clone();
         let name_before = self.name.clone();
         let author_before = self.author.clone();
-        let bases_before = self.bases;
         let players_before = self.players;
+        let info_before = self.info.clone();
         if let Some(rx) = &self.worker {
             match rx.try_recv() {
                 Ok(result) => {
@@ -373,21 +372,8 @@ impl MapSettingsUi {
                         if ui.button(tr!("所选配置使用引擎默认")).clicked(){for c in COMPONENTS{light.values.insert(format!("{}{c}",self.profile.prefix()),String::new());}changed=true;}
                     });
                 }else if self.tab==3{
-                    ui.label(tr!("地图名称"));
-                    let name=self.name.as_mut().unwrap();
-                    changed|=ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY)).accessible_name(tr!("地图名称")).changed();
-                    ui.small(tr!("修改地图显示名称，支持中文；按回车或移开焦点后自动生效，可撤销。Ctrl+S 保存地图。"));
-                    if let Err(error)=ra2_map_document::new_map::validate_title(name){ui.colored_label(egui::Color32::LIGHT_RED,error.to_string());}
-                    ui.separator();
-                    ui.label(tr!("作者署名（可留空）"));
-                    changed|=ui.add(egui::TextEdit::singleline(&mut self.author).desired_width(f32::INFINITY)).accessible_name(tr!("作者署名")).changed();
-                    if let Err(error)=ra2_map_document::new_map::validate_author(&self.author){ui.colored_label(egui::Color32::LIGHT_RED,error.to_string());}
-                    changed|=ui.checkbox(&mut self.bases,tr!("开局有基地车")).changed();
-                    ui.small(tr!("遭遇战开局基地设置；启动器或房间设置可能覆盖此选项，不影响地图中手动放置的单位。"));
-                    ui.label(tr!("出生点数量"));
-                    changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut self.players).range(2..=ra2_map_document::new_map::MAX_PLAYERS),tr!("出生点数量")).changed();
-                    ui.small(tr!("支持 2～30 个出生点，对应从 0 开始的连续航点。增加时补齐缺少的航点，保留已有位置；减少时删除多余出生点，其他任务航点保留。"));
-                    ui.small(tr!("结束输入后自动生效，可撤销。可用航点工具调整位置；Ctrl+S 会先提交修改再保存。"));
+                    crate::map_information_ui::show(ui,self.info.as_mut().unwrap(),self.original_info.as_ref().unwrap(),doc,scene,
+                        crate::map_information_ui::IdentityFields { name:self.name.as_mut().unwrap(),author:&mut self.author,players:&mut self.players });
                 }else{
                     crate_fields(ui,self.crates.as_mut().unwrap());
                 }
@@ -447,7 +433,7 @@ impl MapSettingsUi {
         if self.name != name_before
             || self.players != players_before
             || self.author != author_before
-            || self.bases != bases_before
+            || self.info != info_before
         {
             self.info_editing = true;
         }
@@ -606,6 +592,146 @@ fn draw_preview(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_information_mode_input_applies_on_enter_through_the_form() {
+        use egui_kittest::kittest::Queryable as _;
+        let (mut editor, _, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        let form = MapSettingsUi {
+            open: true,
+            tab: 3,
+            ..Default::default()
+        };
+        let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        let mut harness = egui_kittest::Harness::<(MapSettingsUi, Editor)>::builder()
+            .with_context_setup(|ctx| {
+                crate::ui_theme::install(ctx);
+                ctx.add_font_provider(std::sync::Arc::new(
+                    egui_system_font_provider::SystemFontProvider::new(),
+                ));
+            })
+            .with_size([1000., 1000.])
+            .build_ui_state(
+                |ui, (form, editor)| form.show(ui.ctx(), editor, &scene),
+                (form, editor),
+            );
+        harness.get_by_label("自定义模式…").scroll_to_me();
+        harness.run();
+        harness.get_by_label("自定义模式…").click();
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::TextInput, "适用游戏模式")
+            .focus();
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::TextInput, "适用游戏模式")
+            .type_text("standard,teamgame");
+        harness.run();
+        assert!(harness.state().0.dirty());
+        assert_eq!(
+            harness
+                .state()
+                .1
+                .doc
+                .as_ref()
+                .unwrap()
+                .snapshot()
+                .bytes()
+                .unwrap(),
+            before
+        );
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert!(!harness.state().0.dirty());
+        assert_eq!(
+            harness
+                .state()
+                .1
+                .doc
+                .as_ref()
+                .unwrap()
+                .ini_text("Basic", "GameMode"),
+            "standard,teamgame"
+        );
+        drop(harness);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn map_information_save_is_atomic_and_reloads_normalized_values_after_history() {
+        let (mut editor, ctx, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        let mut form = MapSettingsUi {
+            open: true,
+            tab: 3,
+            ..Default::default()
+        };
+        form.load(editor.doc.as_ref().unwrap());
+        let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        form.name = Some("新的地图".into());
+        let info = form.info.as_mut().unwrap();
+        info.values
+            .insert(("Basic", "CarryOverMoney"), "NaN".into());
+        info.values.insert(("Basic", "FreeRadar"), "yes".into());
+        info.values
+            .insert(("MultiplayerDialogSettings", "Bases"), "no".into());
+        form.info_editing = true;
+        form.finish_for_save(&ctx, &mut editor, &scene);
+        assert!(form.dirty());
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            before
+        );
+        form.info
+            .as_mut()
+            .unwrap()
+            .values
+            .insert(("Basic", "CarryOverMoney"), " 50% ".into());
+        form.finish_for_save(&ctx, &mut editor, &scene);
+        assert!(!form.dirty());
+        assert_eq!(
+            form.info.as_ref().unwrap().values[&("Basic", "CarryOverMoney")],
+            "50%"
+        );
+        assert_eq!(
+            editor
+                .doc
+                .as_ref()
+                .unwrap()
+                .ini_text("MultiplayerDialogSettings", "Bases"),
+            "no"
+        );
+        assert_eq!(
+            editor.doc.as_ref().unwrap().ini_text("Basic", "FreeRadar"),
+            "yes"
+        );
+        let after = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        editor.history(false, &scene);
+        crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+            form.show(ui.ctx(), &mut editor, &scene)
+        });
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            before
+        );
+        assert_eq!(
+            form.info.as_ref().unwrap().values[&("Basic", "FreeRadar")],
+            ""
+        );
+        editor.history(true, &scene);
+        crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+            form.show(ui.ctx(), &mut editor, &scene)
+        });
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            after
+        );
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn start_count_input_commits_on_enter_and_save_and_supports_history() {

@@ -311,6 +311,12 @@ mod tests {
                 require(field.label);
                 require(field.hint);
             }
+            for field in ra2_map_document::map_information::FIELDS {
+                require(field.label);
+            }
+            for group in ra2_map_document::map_information::Group::ALL {
+                require(group.label());
+            }
             for (_, label) in ra2_map_document::new_map::THEATERS {
                 require(label);
             }

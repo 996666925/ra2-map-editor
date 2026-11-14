@@ -40,7 +40,7 @@ const COUNTRIES: [&str; 10] = [
     "尤里",
 ];
 // Display order differs from the persisted engine values: 8 is 90 TPS, 0 is unlimited.
-const SPEEDS: [(&str, u8); 8] = [
+pub(crate) const SPEEDS: [(&str, u8); 8] = [
     ("最慢", 6),
     ("更慢", 5),
     ("慢", 4),

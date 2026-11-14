@@ -87,6 +87,7 @@ struct BrushSegment {
 pub(crate) mod interaction;
 #[path = "playtest_ui.rs"]
 mod playtest_ui;
+pub(crate) use playtest_ui::SPEEDS;
 
 pub struct Editor {
     pub play_options: ra2_map_io::playtest::PlayOptions,
