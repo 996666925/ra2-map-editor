@@ -26,7 +26,7 @@ pub fn read_ini(
         .get_ref(name)
         .with_context(|| format!("缺少 {name}"))?;
     let ini = IniFile::from_bytes(bytes)?;
-    if vera20k_core::rules::ARES_ENABLED {
+    if vera20k_core::rules::ARES_BUILD {
         let expanded = process_directives(
             ini,
             name,

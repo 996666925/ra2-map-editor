@@ -16,7 +16,7 @@ pub fn fixture() -> Vec<u8> {
     let mut bytes=b"; old encoding \xD6\xD0\xCE\xC4\r\n[Map]\r\nTheater=TEMPERATE\r\nSize=0,0,3,3\r\nLocalSize=0,0,3,3\r\nLevel=0\r\n[IsoMapPack5]\r\n; packed comment\r\n".to_vec();
     bytes.extend(pack_lines(&lzo::compress_chunks(&pack, 8192), b"\r\n"));
     bytes.extend_from_slice(b"[Infantry]\r\n  0 = Neutral,E1,256,2,2,0,Guard,0,None,0,-1,0,1,1,\xD6\xD0 ; keep\r\n0=Neutral,SHADOW,256,3,3,0,Guard,0,None\r\n[Waypoints]\r\n0=2002\r\n[Unknown]\r\nA=first\r\nA=second\r\n[Digest]\r\n1=stale\r\n[Preview]\r\nSize=0,0,1,1\r\n[PreviewPack]\r\n1=stale\r\n; end");
-    if vera20k_core::rules::ARES_ENABLED {
+    if vera20k_core::rules::ARES_BUILD {
         // Keep this general authoring fixture semantically identical under
         // first-wins YR and last-wins Ares. Dedicated tests cover the dialect.
         for (before, after) in [

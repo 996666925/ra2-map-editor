@@ -26,16 +26,17 @@ pub fn generate(
     let art =
         ra2_map_assets::assets::read_ini(&install.manager, install.manager.ini_roots().art())?;
     rules.install_art_data(vera20k_core::rules::art_data::ArtRegistry::from_ini(&art));
+    let mut settings = rmg::RmgSettings::load(&install.manager);
     let resolved = ResolvedTheaterInputs::from_theater(
         &install.theater,
         &rules.terrain_rules,
         rules.overlay_registry(),
         rules.general.cliff_back_impassability,
+        &settings.extras,
     );
     let blocks = TheaterTileBlocks::build(&install.theater.lookup, |name| {
         install.manager.get_ref(name).map(<[u8]>::to_vec)
     });
-    let mut settings = rmg::RmgSettings::load(&install.manager);
     let tech_types = rmg::tech_catalog::resolve(processed.neutral_tech_buildings(), &art);
     let tech = if options.tech_buildings {
         tech_types.as_slice()
@@ -59,6 +60,7 @@ pub fn generate(
                 &rules,
                 &art,
                 &tech_types,
+                &settings.extras,
                 install.theater.extension,
                 rmg::emit::theater_name(recipe.terrain.theater),
                 recipe.terrain.seed_u16(),
@@ -206,7 +208,7 @@ fn generate_candidate(
     recipe: &RandomMapOptions,
     settings: &rmg::RmgSettings,
     resolved: &ResolvedTheaterInputs,
-    blocks: &dyn TileBlocks,
+    blocks: &(dyn TileBlocks + Sync),
     tech: &[rmg::phases::tech_buildings::TechType],
     observe: &mut dyn FnMut(GenerationPoint),
 ) -> Candidate {

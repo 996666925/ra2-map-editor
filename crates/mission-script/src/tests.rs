@@ -58,7 +58,7 @@ export default defineMission(map,{id:'ares',player:House.Neutral},m=>{
             ("/map.generated.ts".into(), catalog.typescript().unwrap()),
         ]))
         .unwrap();
-    if !vera20k_core::rules::ARES_ENABLED {
+    if !vera20k_core::rules::ARES_BUILD {
         assert!(
             prepare(&doc, &plan, &catalog)
                 .err()

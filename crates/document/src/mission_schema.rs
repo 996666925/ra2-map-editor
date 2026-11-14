@@ -1323,7 +1323,7 @@ pub fn opcodes(event: bool) -> impl Iterator<Item = &'static Opcode> {
     (if event { EVENTS } else { ACTIONS }).iter().chain(
         (if event { ares::EVENTS } else { ares::ACTIONS })
             .iter()
-            .filter(|_| vera20k_core::rules::ARES_ENABLED),
+            .filter(|_| vera20k_core::rules::ARES_BUILD),
     )
 }
 

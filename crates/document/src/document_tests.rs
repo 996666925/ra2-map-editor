@@ -25,7 +25,7 @@ fn ares_source_keeps_effective_names_and_preserves_uneditable_syntax_for_export(
     let (source, map) =
         crate::source::SourceMap::parse("names.map".into(), "test".into(), bytes).unwrap();
     assert_eq!(source.title, map.basic.name.unwrap());
-    if vera20k_core::rules::ARES_ENABLED {
+    if vera20k_core::rules::ARES_BUILD {
         for syntax in [
             b"[Custom]\n+=item\n".as_slice(),
             b"[Base]\nX=1\n[Child]:[Base]\n".as_slice(),
@@ -573,7 +573,7 @@ fn sparse_terrain_edit_keeps_all_eleven_bytes_duplicate_and_sentinel_tail() {
             .iter()
             .any(|line| matches!(line.section.as_str(), "Digest" | "Preview" | "PreviewPack"))
     );
-    let untouched = if vera20k_core::rules::ARES_ENABLED {
+    let untouched = if vera20k_core::rules::ARES_BUILD {
         b"A=second\r\nA=first".as_slice()
     } else {
         b"A=first\r\nA=second".as_slice()

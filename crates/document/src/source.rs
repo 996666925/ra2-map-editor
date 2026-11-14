@@ -29,7 +29,7 @@ impl SourceMap {
                 let mut names = base.raw.lines.iter().enumerate().filter(|(_, line)| {
                     line.section == "Basic" && line.key.as_deref() == Some("Name")
                 });
-                let selected = if vera20k_core::rules::ARES_ENABLED {
+                let selected = if vera20k_core::rules::ARES_BUILD {
                     names.next_back()
                 } else {
                     names.next()

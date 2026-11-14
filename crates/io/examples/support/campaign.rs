@@ -260,6 +260,6 @@ fn load_stage_with_options(
     }
     Ok(SimRuntime {
         simulation: sim,
-        resources: SimResources::new(rules),
+        resources: Arc::new(SimResources::new(rules)),
     })
 }

@@ -169,7 +169,7 @@ pub struct Baseline {
 impl Baseline {
     pub fn parse(bytes: Arc<[u8]>, map: &MapFile) -> Result<Arc<Self>> {
         let raw = RawIni::parse(bytes)?;
-        if vera20k_core::rules::ARES_ENABLED {
+        if vera20k_core::rules::ARES_BUILD {
             // These records have no unambiguous physical edit identity: Ares
             // can synthesize inherited entries or rename iterator keys. The
             // engine may preview them; retain their source for exact export.
@@ -227,7 +227,7 @@ impl Baseline {
         let mut records = BTreeMap::new();
         let mut seen = HashSet::new();
         let mut physical: Vec<_> = raw.lines.iter().enumerate().collect();
-        if vera20k_core::rules::ARES_ENABLED {
+        if vera20k_core::rules::ARES_BUILD {
             physical.reverse();
         }
         for (id, line) in physical {

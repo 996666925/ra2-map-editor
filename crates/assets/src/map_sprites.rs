@@ -12,7 +12,6 @@ use vera20k_core::{
     rules::{
         art_data::{self, BuildingAnimKind},
         ruleset::RuleSet,
-        voxel_frame_catalog::building_voxel_names,
     },
 };
 
@@ -98,10 +97,22 @@ pub(crate) fn load(
         ids.iter()
             .any(|id| {
                 let section = catalog.rules.section_or_empty(id);
-                section.read_bool("Turret", false) || section.read_bool("TurretAnimIsVoxel", false)
+                section.read_bool("Turret", false)
+                    || section.read_bool("TurretAnimIsVoxel", false)
+                    || section.read_bool("BarrelAnimIsVoxel", false)
             })
             .then(|| RuleSet::from_ini(&catalog.rules).ok())
             .flatten()
+            .map(|mut rules| {
+                // Bind the retained physical model slots once for all buildings,
+                // including VoxelBarrelFile and the engine's loading fallbacks.
+                rules.bind_effect_assets(
+                    &install.manager,
+                    install.theater.extension,
+                    &install.theater_name,
+                );
+                rules
+            })
     });
     for (section, types) in &catalog.object_types {
         if section == "Animations" {
@@ -476,7 +487,7 @@ fn building_gun_frames(
     id: &str,
     image: &str,
 ) -> Option<GunFrames> {
-    let (turret, barrel) = building_voxel_names(id, Some(rules))?;
+    let model = rules.loaded_voxel_model(id)?;
     let object = rules.object(id)?;
     let vpl = install
         .manager
@@ -492,26 +503,18 @@ fn building_gun_frames(
         .collect();
     let turret_offset = catalog.art.get(image).map_or(0, |art| art.turret_offset);
     let mut layers = vec![Vec::new(); 32];
-    let mut has_turret = false;
+    let has_turret = model.auxiliary().is_some();
     let mut info = None;
     let mut parts = Vec::new();
-    for (part, name) in [turret.as_deref(), Some(barrel.as_str())]
-        .into_iter()
-        .enumerate()
-    {
-        let Some(name) = name else { continue };
+    for (part, model_part) in [model.auxiliary(), model.barrel()].into_iter().enumerate() {
+        let Some(model_part) = model_part else {
+            continue;
+        };
+        let (name, _) = model_part.identity();
         let filename = format!("{name}.vxl");
         let Some(source) = install.manager.resolve_ref(&filename) else {
             continue;
         };
-        let Ok(model) = VxlFile::from_bytes(source.bytes) else {
-            continue;
-        };
-        let hva = install
-            .manager
-            .get_ref(&format!("{name}.hva"))
-            .and_then(|b| HvaFile::from_bytes(b).ok());
-        has_turret |= part == 0;
         info.get_or_insert_with(|| AssetInfo {
             name: filename,
             source: source.source_archive.into(),
@@ -525,7 +528,7 @@ fn building_gun_frames(
         });
         let mut frames = Vec::new();
         for ((mut sprite, params), layers) in renderer
-            .render_batch(&model, hva.as_ref(), &params, true)
+            .render_batch(model_part.vxl(), model_part.hva(), &params, true)
             .into_iter()
             .zip(&params)
             .zip(&mut layers)

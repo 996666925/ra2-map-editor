@@ -98,6 +98,28 @@ fn building_voxel_guns_combine_with_shp_bodies_and_preserve_facings_and_shadows(
 }
 
 #[test]
+fn building_voxel_barrel_uses_the_engines_explicit_model_slot() {
+    let fixture = Fixture::new();
+    write_gun_voxel(&fixture, "explicit.vxl");
+    std::fs::write(
+        fixture.0.join("rulesmd.ini"),
+        b"[BuildingTypes]\n0=TEST\n[TEST]\nImage=GI\nTurret=yes\n\
+          TurretAnim=ABSENT\nBarrelAnimIsVoxel=yes\nVoxelBarrelFile=EXPLICIT\n\
+          TurretAnimY=-40\n",
+    )
+    .unwrap();
+    let install = fixture.install();
+    let catalog = crate::catalog::Catalog::load(&install.manager, &install.theater);
+    let sprites = crate::sprites::SpritePalette::load(&install, &catalog);
+    let object = &sprites.objects[&("Structures".into(), "TEST".into())];
+    let gun = object.voxel_turret.as_ref().expect("explicit barrel");
+    assert_eq!(gun.parts.len(), 1);
+    assert_eq!(gun.parts[0].len(), 32);
+    assert_eq!(gun.parts[0][0].info.name, "EXPLICIT.vxl");
+    assert!(object.image(0).info.offset[1] < -30);
+}
+
+#[test]
 fn building_shp_turrets_use_rules_names_parent_palette_offsets_and_facing_frames() {
     let fixture = Fixture::new();
     write_shp_frames(&fixture, "gi.shp", &[([1, 2], [1, 0]), ([2, 2], [1, 0])]);

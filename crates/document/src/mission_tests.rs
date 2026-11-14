@@ -55,7 +55,7 @@ fn physical_ini_edits_preserve_duplicates_legacy_bytes_and_share_spatial_history
     let mut bytes = crate::test_support::fixture();
     bytes.extend_from_slice(b"\r\n[Triggers]\r\nT=Neutral,<none>,\xD6\xD0,0,1,1,1,0 ; untouched\r\nT=shadow\r\n[Custom]\r\n  X = old ; keep\r\nX=shadow\r\n");
     let mut doc = parse(bytes.clone());
-    if !vera20k_core::rules::ARES_ENABLED {
+    if !vera20k_core::rules::ARES_BUILD {
         assert!(
             doc.set_ini("Custom", "X", Some(b"ambiguous".to_vec()))
                 .is_err()
@@ -108,13 +108,13 @@ fn selected_dialect_keeps_the_same_effective_ini_value_after_save_reopen_and_und
     let mut bytes = crate::new_map::NewMapOptions::default().bytes().unwrap();
     bytes.extend_from_slice(b"[Custom]\nX=first\nX=last\n");
     let mut doc = parse(bytes.clone());
-    let expected = if vera20k_core::rules::ARES_ENABLED {
+    let expected = if vera20k_core::rules::ARES_BUILD {
         "last"
     } else {
         "first"
     };
     assert_eq!(doc.ini_text("Custom", "X"), expected);
-    if vera20k_core::rules::ARES_ENABLED {
+    if vera20k_core::rules::ARES_BUILD {
         doc.set_ini("Custom", "X", Some(b"edited".to_vec()))
             .unwrap();
         doc.commit("edit last key");

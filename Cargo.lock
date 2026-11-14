@@ -5099,7 +5099,7 @@ dependencies = [
 
 [[package]]
 name = "vera20k-core"
-version = "0.3.0"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "fixed",

@@ -4,8 +4,8 @@
 The editor pins the engine through its Git tree entry, rather than a moving branch.
 Use `git submodule status` for the revision selected by your editor checkout.
 
-The current integration targets VERA20k 0.3.0 at
-`f0a4cd7e6a5e7e55c21df50a7d05bd908d01faa8` (updated 2026-11-11).
+The current integration targets VERA20k 0.3.3 at
+`c3534d772a64f5922624b29a4fed63ad3342429c` (updated 2026-11-14).
 The engine mounts `ECACHE*.MIX` and `ELOCAL*.MIX` through the shared asset
 manager. Editor building previews use its RULES slot-9 configuration and
 32-facing frame table for healthy SHP turrets; ART `TurretAnim` is ignored.
@@ -17,6 +17,18 @@ frames. Packed RGB565 translucency reads the existing framebuffer on both CPU
 and GPU. Placement previews use the same offset projection as the scene, and
 building art and turrets share the engine's correction for extended terrain heights.
 Mission audit loaders follow the engine's nonfatal Team AI diagnostics API.
+Random-map inputs share the engine's loaded Extras settings for theater fences
+and town catalogs, and allow its parallel generation to borrow tile blocks.
+Headless mission audits retain simulation resources in the engine's shared `Arc`.
+Building voxel guns use the engine's bound physical model slots, including an
+explicit `VoxelBarrelFile`, instead of reconstructing filenames in the editor.
+
+The editor reads the engine's `ARES_BUILD` flag for document parsing, assets
+and mission authoring. It selects the editor's INI dialect and schema in step
+with the engine's `ares` build feature. The engine also detects some Ares behavior
+from game data in either build, so the default
+editor does not imply that Ares keys in a mod are ignored at runtime. Full Ares
+authoring still requires the editor and client to be built with `ares`.
 
 Both `vera20k-core` and `crates/voxel` use this checkout. The latter compiles
 the engine's shared CPU/GPU voxel renderer sources because those modules currently

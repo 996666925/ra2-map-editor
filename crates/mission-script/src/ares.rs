@@ -4,7 +4,7 @@ use super::*;
 use crate::catalog::ResourceKind;
 
 pub fn enabled() -> bool {
-    vera20k_core::rules::ARES_ENABLED
+    vera20k_core::rules::ARES_BUILD
 }
 fn require() -> Result<()> {
     ensure!(

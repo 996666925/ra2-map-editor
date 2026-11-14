@@ -273,7 +273,7 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
         .unwrap();
     let mut runtime = SimRuntime {
         simulation: sim,
-        resources: SimResources::new(rules),
+        resources: SimResources::new(rules).into(),
     };
     let mut cursors = BTreeSet::new();
     let mut members = BTreeSet::new();

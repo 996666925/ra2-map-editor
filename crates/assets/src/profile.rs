@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const SCHEMA: &str = if vera20k_core::rules::ARES_ENABLED {
+pub const SCHEMA: &str = if vera20k_core::rules::ARES_BUILD {
     "vera20k-pinned-ares-v1"
 } else {
     "vera20k-pinned-yr-v1"

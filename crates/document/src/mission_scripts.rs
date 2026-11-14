@@ -299,7 +299,7 @@ pub fn opcodes() -> impl Iterator<Item = &'static Opcode> {
     OPCODES.iter().chain(
         super::ares::ORDERS
             .iter()
-            .filter(|_| vera20k_core::rules::ARES_ENABLED),
+            .filter(|_| vera20k_core::rules::ARES_BUILD),
     )
 }
 

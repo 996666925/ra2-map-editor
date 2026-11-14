@@ -11,7 +11,7 @@ fn selected_ini_dialect_expands_ares_includes_and_preserves_input_files() {
     std::fs::write(fixture.0.join("child.ini"), child).unwrap();
     let install = fixture.install();
     let ini = crate::assets::read_ini(&install.manager, "custom.ini").unwrap();
-    if vera20k_core::rules::ARES_ENABLED {
+    if vera20k_core::rules::ARES_BUILD {
         let section = ini.section_or_empty("Child");
         assert_eq!(section.read_int("Health", 0), 2);
         assert_eq!(section.read_int("Other", 0), 7);

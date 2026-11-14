@@ -18,7 +18,7 @@ pub enum RuntimeSupport {
     /// The engine explicitly ignores the opcode. Never offered as a feature.
     NoOp,
     Unsupported,
-    /// Compiled only with the engine's ares feature; absent from the baseline.
+    /// Ares extension handler; the editor requires its Ares authoring build.
     Ares,
     /// The known handler explicitly refuses network games (Script22).
     SinglePlayer,
@@ -285,7 +285,7 @@ pub fn capability(family: Family, id: i32) -> Capability {
         name: schema.map(|s| s.name),
         runtime,
         enabled: runtime != RuntimeSupport::Unsupported
-            && (runtime != RuntimeSupport::Ares || vera20k_core::rules::ARES_ENABLED),
+            && (runtime != RuntimeSupport::Ares || vera20k_core::rules::ARES_BUILD),
         sdk,
         schema_audited: schema.is_some(),
         binding,
@@ -535,7 +535,7 @@ mod tests {
         for id in [62, 77, 88] {
             assert_eq!(
                 capability(Family::Event, id).enabled,
-                vera20k_core::rules::ARES_ENABLED
+                vera20k_core::rules::ARES_BUILD
             );
         }
     }
@@ -644,12 +644,12 @@ mod tests {
     }
 
     #[test]
-    fn order_inventory_tracks_the_pinned_dispatcher_and_feature_gate() {
+    fn order_inventory_tracks_the_pinned_dispatcher_and_ares_switch() {
         // The engine's admission list is the integration contract. Do not
         // copy its numbers here: an engine upgrade must expose omissions.
         let source = include_str!("../../../vendor/vera20k/src/sim/team_script_vm/actions.rs");
         let body = source
-            .split("const fn action_is_ported(action_id: i32) -> bool {")
+            .split("const fn action_is_ported(action_id: i32, ares: bool) -> bool {")
             .nth(1)
             .expect("pinned script admission function")
             .split("\n}")
@@ -658,7 +658,7 @@ mod tests {
         let compact: String = body.chars().filter(|ch| !ch.is_whitespace()).collect();
         let (baseline, gated) = compact
             .split_once("||")
-            .expect("baseline and feature-gated script admission");
+            .expect("baseline and Ares script admission");
         let parse = |pattern: &str| -> BTreeSet<i32> {
             pattern
                 .split('|')
@@ -673,7 +673,7 @@ mod tests {
         );
         let gated = parse(
             gated
-                .strip_prefix("(cfg!(feature=\"ares\")&&matches!(action_id,")
+                .strip_prefix("(ares&&matches!(action_id,")
                 .and_then(|pattern| pattern.strip_suffix("))"))
                 .expect("Ares script admission pattern"),
         );

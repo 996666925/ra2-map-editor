@@ -48,7 +48,7 @@ impl MapDocument {
     /// Physical order and duplicate identities survive; pending additions follow.
     pub fn ini_entries(&self, section: &str) -> Vec<(Target, String, Vec<u8>)> {
         let mut entries = self.physical_ini_entries(section);
-        if vera20k_core::rules::ARES_ENABLED {
+        if vera20k_core::rules::ARES_BUILD {
             let mut seen = std::collections::HashSet::new();
             entries.reverse();
             // Empty rows carry explicit authoring clears (e.g. reward type
@@ -81,7 +81,7 @@ impl MapDocument {
             .physical_ini_entries(section)
             .into_iter()
             .filter(|(_, k, v)| k == key && !v.is_empty());
-        let selected = if vera20k_core::rules::ARES_ENABLED {
+        let selected = if vera20k_core::rules::ARES_BUILD {
             values.next_back()
         } else {
             values.next()
@@ -123,18 +123,18 @@ impl MapDocument {
                 })
                 .count();
             ensure!(
-                bodies <= 1 && (entries.len() <= 1 || vera20k_core::rules::ARES_ENABLED),
+                bodies <= 1 && (entries.len() <= 1 || vera20k_core::rules::ARES_BUILD),
                 "存在重复 section/key，表单无法确定原生 CRC 查找命中的物理行；请先用文本工具消歧（其他原文保持不变）"
             );
         }
-        let effective = if vera20k_core::rules::ARES_ENABLED {
+        let effective = if vera20k_core::rules::ARES_BUILD {
             entries.last()
         } else {
             entries.first()
         };
         if let Some((target, _, _)) = effective {
             if let Some(value) = value {
-                if vera20k_core::rules::ARES_ENABLED && value.is_empty() {
+                if vera20k_core::rules::ARES_BUILD && value.is_empty() {
                     for (shadow, _, _) in &entries {
                         if shadow != target {
                             self.set(shadow.clone(), None)?;

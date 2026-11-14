@@ -1549,7 +1549,7 @@ export default defineMission({houses:['Neutral']},{id:'localized',player:'Neutra
         let map = map_file::load_from_bytes(doc.snapshot().bytes().unwrap()).unwrap();
         let mut runtime = SimRuntime {
             simulation: Simulation::with_seed(0),
-            resources: SimResources::empty(),
+            resources: SimResources::empty().into(),
         };
         runtime.simulation.initialize_trigger_definitions(
             &map,

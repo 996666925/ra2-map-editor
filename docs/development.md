@@ -769,6 +769,8 @@ cargo run --locked --offline -p ra2-map-io --example mission_sdk_crate_lottery_a
 
 ## 引擎版本管理
 
+当前固定 VERA20k 0.3.3；提交与接入说明见 [vendor/README](../vendor/README.md)。编辑器通过引擎的 `ARES_BUILD` 标志选择解析方言、资源 schema 和创作能力，与 `ares` 构建选项保持一致。引擎另有按游戏数据启用的 Ares 运行时开关，两者作用不同。
+
 默认 YR 和可选 Ares 两种构建都由 CI 验证。Ares 专项检查使用：
 
 ```powershell
