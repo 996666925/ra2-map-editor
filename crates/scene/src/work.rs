@@ -26,6 +26,7 @@ pub fn update_records(
     profile: Profile,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<MapScene>> {
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(after.base.reads_ares);
     if !Arc::ptr_eq(&before.base, &after.base)
         || old.revision != install.revision
         || old.resolved.is_none()
@@ -71,7 +72,12 @@ pub fn update_records(
             return Ok(None);
         }
     }
-    let (source, map) = SourceMap::parse(old.source.name.clone(), "编辑快照".into(), bytes)?;
+    let (source, map) = SourceMap::parse_with_ares(
+        old.source.name.clone(),
+        "编辑快照".into(),
+        bytes,
+        after.base.reads_ares,
+    )?;
     checkpoint(cancelled)?;
     let mut scene = old.clone();
     scene.source = source;

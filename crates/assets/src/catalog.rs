@@ -48,6 +48,8 @@ pub struct Catalog {
     pub radar: Arc<crate::radar::Palette>,
     /// Per-InfantryType retained banks projected by the production Rules owner.
     pub infantry_appearances: BTreeMap<String, crate::mission_resources::InfantryAppearance>,
+    pub shp_vehicle_turrets:
+        BTreeMap<String, vera20k_core::rules::animation_sequence::ShpVehicleTurret>,
     pub rules: IniFile,
     /// Active installation language table; shared by map-local catalog clones.
     strings: Option<Arc<CsfFile>>,
@@ -75,6 +77,7 @@ impl Default for Catalog {
         Self {
             radar: Default::default(),
             infantry_appearances: BTreeMap::new(),
+            shp_vehicle_turrets: BTreeMap::new(),
             rules: IniFile::empty(),
             strings: None,
             object_names: BTreeMap::new(),
@@ -322,7 +325,7 @@ impl Catalog {
             .unwrap_or_else(IniFile::empty);
         let mut catalog = Self {
             rules,
-            strings: CsfFile::load_active(|name| manager.get_ref(name))
+            strings: CsfFile::load_active(manager.ares_form(), |name| manager.get_ref(name))
                 .ok()
                 .map(|(table, _)| Arc::new(table)),
             art: Arc::new(vera20k_core::rules::art_data::ArtRegistry::from_ini(&art)),
@@ -337,6 +340,7 @@ impl Catalog {
             crate::mission_resources::scenario_registries(manager, &map, false, None)
         {
             catalog.infantry_appearances = registries.infantry_appearances;
+            catalog.shp_vehicle_turrets = registries.shp_vehicle_turrets;
             catalog.mission_country_indices = registries.countries;
             catalog.mission_country_names = registries.country_names;
             catalog.mission_type_orders = registries.type_orders;

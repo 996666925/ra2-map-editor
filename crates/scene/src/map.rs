@@ -259,7 +259,9 @@ pub fn load_scene_bytes_controlled(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<MapScene> {
     crate::work::checkpoint(cancelled)?;
-    let (source, map) = SourceMap::parse(name.into(), origin, bytes)?;
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(install.manager.ares_form());
+    let (source, map) =
+        SourceMap::parse_with_ares(name.into(), origin, bytes, install.manager.ares_form())?;
     let mut diagnostics = vec![Diagnostic { code:"EDITOR_PREVIEW", message:"静态编辑预览：SHP/VXL 与地形共享像素深度，支持 House 换色、基础地图光照和建筑阴影；尚未覆盖损伤动画、局部光源、全部桥梁及对象阴影。地形工具支持局部 LAT、连续坡面、标准陆地悬崖、高台改形、坡道及高低桥梁联动；自动道路布线、水岸与水悬崖生成尚未实现。".into(),cell:None }];
     let playfield = PlayfieldBounds::from_map_header(&map.header);
     if let Err(error) = install.activate_theater(&map.header.theater) {
@@ -305,6 +307,7 @@ pub fn load_scene_bytes_controlled(
             let catalog = Arc::make_mut(&mut catalog);
             catalog.radar = registries.radar;
             catalog.infantry_appearances = registries.infantry_appearances;
+            catalog.shp_vehicle_turrets = registries.shp_vehicle_turrets;
             catalog.mission_country_indices = registries.countries;
             catalog.mission_country_names = registries.country_names;
             catalog.mission_type_orders = registries.type_orders;
@@ -313,6 +316,7 @@ pub fn load_scene_bytes_controlled(
         Err(error) => {
             let catalog = Arc::make_mut(&mut catalog);
             catalog.infantry_appearances.clear();
+            catalog.shp_vehicle_turrets.clear();
             catalog.mission_country_indices.clear();
             catalog.mission_country_names.clear();
             catalog.mission_type_orders.clear();

@@ -49,6 +49,8 @@ pub struct RecoveryMeta {
     pub expected: Option<Stamp>,
     #[serde(default)]
     pub resource_profile: Option<String>,
+    #[serde(default)]
+    pub reads_ares: Option<bool>,
 }
 pub struct RecoveryEntry {
     pub path: PathBuf,
@@ -153,6 +155,9 @@ impl EditorIo {
                             document: snapshot.document_id,
                             state: snapshot.state_id,
                             result: (|| {
+                                let _dialect = vera20k_core::rules::ares_switch::read_ares_way(
+                                    snapshot.base.reads_ares,
+                                );
                                 let expected = match expected {
                                     Expected::Exact(v) => v,
                                     Expected::Capture => Stamp::file(&path)?,
@@ -191,9 +196,10 @@ impl EditorIo {
                         Job::Recover {
                             snapshot,
                             path,
-                            meta,
+                            mut meta,
                         } => {
                             let result = (|| {
+                                meta.reads_ares = Some(snapshot.base.reads_ares);
                                 let bytes = snapshot.bytes()?;
                                 write_recovery(&path, &meta, &bytes)
                             })();
@@ -207,8 +213,16 @@ impl EditorIo {
                         Job::Restore(path) => Done::Restore {
                             result: (|| {
                                 let (meta, bytes) = read_recovery(&path)?;
+                                let ares = meta
+                                    .reads_ares
+                                    .unwrap_or_else(ra2_map_document::source::game_reads_ares);
+                                let _dialect =
+                                    vera20k_core::rules::ares_switch::read_ares_way(ares);
                                 let map = validate(&bytes)?;
-                                Ok((Baseline::parse(Arc::from(bytes), &map)?, meta))
+                                Ok((
+                                    Baseline::parse_with_ares(Arc::from(bytes), &map, ares)?,
+                                    meta,
+                                ))
                             })(),
                             path,
                         },
@@ -409,6 +423,10 @@ fn prune_backups(path: &Path) {
     }
 }
 pub fn write_recovery(path: &Path, meta: &RecoveryMeta, bytes: &[u8]) -> Result<()> {
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(
+        meta.reads_ares
+            .unwrap_or_else(ra2_map_document::source::game_reads_ares),
+    );
     validate(bytes)?;
     let header = serde_json::to_vec(meta)?;
     ensure!(header.len() <= 65536, "恢复元数据过大");

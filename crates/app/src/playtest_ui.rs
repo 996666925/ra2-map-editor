@@ -640,9 +640,9 @@ mod tests {
             ra2_map_io::playtest::map_player_starts(&map),
             map_starts(&doc)
         );
-        // Maps from the previous editor lacked the explicit declaration.
+        // Without the declaration, higher waypoints are ordinary mission points.
         doc.set_ini("Basic", "MaxPlayers", None).unwrap();
-        assert_eq!(map_starts(&doc).len(), 30);
+        assert_eq!(map_starts(&doc).len(), 8);
         let id = *doc
             .records()
             .iter()

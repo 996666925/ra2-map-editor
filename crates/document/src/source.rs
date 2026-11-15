@@ -5,6 +5,12 @@ use vera20k_core::map::map_file::{self, MapFile, MapHeader};
 
 pub const MAX_SOURCE_BYTES: usize = 32 * 1024 * 1024;
 
+/// Same launch default as the engine's INI reader; explicit resource loads
+/// pass their manager's mode instead of depending on another worker's launch.
+pub fn game_reads_ares() -> bool {
+    vera20k_core::rules::ARES_BUILD || vera20k_core::util::ares_launch::game_ships_ares()
+}
+
 #[derive(Clone)]
 pub struct SourceMap {
     bytes: Vec<u8>,
@@ -16,10 +22,20 @@ pub struct SourceMap {
 }
 impl SourceMap {
     pub fn parse(name: String, origin: String, bytes: Vec<u8>) -> Result<(Self, MapFile)> {
+        Self::parse_with_ares(name, origin, bytes, game_reads_ares())
+    }
+    pub fn parse_with_ares(
+        name: String,
+        origin: String,
+        bytes: Vec<u8>,
+        ares: bool,
+    ) -> Result<(Self, MapFile)> {
+        let _dialect = vera20k_core::rules::ares_switch::read_ares_way(ares);
         ensure!(bytes.len() <= MAX_SOURCE_BYTES, "地图原文超过 32 MiB 上限");
         let map = map_file::load_from_bytes(bytes.clone()).context("地图解析失败")?;
-        let edit_base = crate::document::Baseline::parse(Arc::from(bytes.clone()), &map)
-            .map_err(|error| format!("{error:#}"));
+        let edit_base =
+            crate::document::Baseline::parse_with_ares(Arc::from(bytes.clone()), &map, ares)
+                .map_err(|error| format!("{error:#}"));
         // New editor-authored names are UTF-8; keep legacy byte names on the
         // core's existing path when the original value is not valid UTF-8.
         let title = edit_base
@@ -29,7 +45,7 @@ impl SourceMap {
                 let mut names = base.raw.lines.iter().enumerate().filter(|(_, line)| {
                     line.section == "Basic" && line.key.as_deref() == Some("Name")
                 });
-                let selected = if vera20k_core::rules::ARES_BUILD {
+                let selected = if base.reads_ares {
                     names.next_back()
                 } else {
                     names.next()

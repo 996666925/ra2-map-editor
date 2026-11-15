@@ -494,7 +494,7 @@ fn write_surface(path: &std::path::Path, width: u32, terrain: &[u8]) {
     }
     std::fs::write(path, b).unwrap();
 }
-fn write_shp(path: &std::path::Path, count: u16) {
+pub(crate) fn write_shp(path: &std::path::Path, count: u16) {
     let mut bytes = Vec::new();
     for n in [0u16, 4, 4, count] {
         bytes.extend(n.to_le_bytes());

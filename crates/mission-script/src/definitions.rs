@@ -162,6 +162,19 @@ pub(super) fn script(
         let (opcode, operand) = match order {
             Order::Ares { order } => ares::order(order)?,
             Order::FollowFriendlies => (10, "0".into()),
+            Order::ChangeTeamIndex { index } => {
+                ensure!(
+                    *index <= i32::MAX as u32,
+                    "TeamType 注册序号超出有符号整数范围"
+                );
+                (18, index.to_string())
+            }
+            Order::ReduceTiberium => (28, "0".into()),
+            Order::BeginProduction => (29, "0".into()),
+            Order::ReshroudMap => (35, "0".into()),
+            Order::RevealMap => (36, "0".into()),
+            Order::TruckUnload => (44, "0".into()),
+            Order::TruckLoad => (45, "0".into()),
             Order::IdleAnimation { animation } => {
                 ensure!(*animation <= 1, "步兵 idle 变体须为 0 或 1");
                 (13, animation.to_string())

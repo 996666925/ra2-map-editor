@@ -729,6 +729,7 @@ fn late_recovery_is_removed_after_undo_to_clean_document() {
         target: None,
         expected: None,
         resource_profile: None,
+        reads_ares: Some(doc.base.reads_ares),
     };
     editor
         .io

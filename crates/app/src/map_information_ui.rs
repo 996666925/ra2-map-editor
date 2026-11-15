@@ -113,6 +113,33 @@ pub(crate) fn show(
             });
         ui.add_space(4.);
     }
+    let starts = ra2_map_document::player_starts::from_document(doc);
+    let mut reused: Vec<_> = doc
+        .record_iter()
+        .filter_map(|(_, record)| {
+            let slot = record.key.parse::<u8>().ok()?;
+            (record.section == "Waypoints"
+                && slot >= 8
+                && slot < *identity.players
+                && !starts.contains(&slot))
+            .then_some(slot)
+        })
+        .collect();
+    reused.sort_unstable();
+    reused.dedup();
+    if !reused.is_empty() {
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            tr!(
+                "航点 {ids} 将成为玩家出生点，仍可用于任务；若需保留为普通任务航点，请先重新编号。",
+                ids = reused
+                    .iter()
+                    .map(u8::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        );
+    }
     ui.small(tr!(
         "结束输入后自动生效，可撤销；Ctrl+S 保存。选择“使用默认值”会删除对应覆盖。"
     ));

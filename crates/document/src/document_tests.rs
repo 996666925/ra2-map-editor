@@ -11,6 +11,88 @@ use vera20k_core::{
 use crate::test_support::{document, fixture};
 
 #[test]
+fn resource_selected_ares_dialect_survives_edits_history_and_structural_replacement() {
+    let mut bytes = crate::new_map::NewMapOptions {
+        title: "First".into(),
+        ..Default::default()
+    }
+    .bytes()
+    .unwrap();
+    bytes.extend_from_slice(b"\n[Custom]\nX=first\nX=last\n[Units]\n0=Neutral,FIRST,256,20,20,0,Guard\n0=Neutral,LAST,256,20,20,0,Guard\n");
+    let text = String::from_utf8(bytes).unwrap();
+    let text = text.replace("Name=First", "Name=First\nName=Last");
+    let bytes = text.into_bytes();
+    let (source, map) = crate::source::SourceMap::parse_with_ares(
+        "ares.map".into(),
+        "test".into(),
+        bytes.clone(),
+        true,
+    )
+    .unwrap();
+    assert_eq!(source.title, "Last");
+    assert_eq!(map.basic.name.as_deref(), Some("Last"));
+    let mut doc = crate::document::MapDocument::new(source.edit_base.unwrap());
+    assert!(doc.base.reads_ares);
+    assert_eq!(
+        doc.records()
+            .values()
+            .find(|r| r.section == "Units")
+            .unwrap()
+            .fields()[1],
+        "LAST"
+    );
+    assert_eq!(doc.ini_text("Custom", "X"), "last");
+    doc.set_ini("Custom", "X", Some(b"edited".to_vec()))
+        .unwrap();
+    doc.commit("edit effective duplicate");
+    let saved = doc.snapshot().bytes().unwrap();
+    let (_, read) = crate::source::SourceMap::parse_with_ares(
+        "saved.map".into(),
+        "test".into(),
+        saved.clone(),
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        read.ini.section_or_empty("Custom").read_string("X", "", 64),
+        "edited"
+    );
+    assert!(doc.undo());
+    assert_eq!(doc.snapshot().bytes().unwrap(), bytes);
+    assert!(doc.redo());
+    assert_eq!(doc.snapshot().bytes().unwrap(), saved);
+    doc.replace_bytes(bytes, "structural replacement").unwrap();
+    assert!(doc.base.reads_ares);
+    assert_eq!(doc.ini_text("Custom", "X"), "last");
+    doc.set_ini("Custom", "X", Some(Vec::new())).unwrap();
+    assert!(doc.ini_value("Custom", "X").is_none());
+    assert!(
+        doc.snapshot()
+            .bytes()
+            .unwrap()
+            .windows(b"X=first".len())
+            .all(|w| w != b"X=first")
+    );
+
+    for syntax in [
+        b"[Custom]\n+=item\n".as_slice(),
+        b"[Base]\nX=1\n[Child]:[Base]\n",
+    ] {
+        let mut bytes = crate::new_map::NewMapOptions::default().bytes().unwrap();
+        bytes.extend_from_slice(syntax);
+        let (source, _) = crate::source::SourceMap::parse_with_ares(
+            "inherited.map".into(),
+            "test".into(),
+            bytes.clone(),
+            true,
+        )
+        .unwrap();
+        assert!(source.edit_base.is_err());
+        assert_eq!(source.bytes(), bytes);
+    }
+}
+
+#[test]
 fn ares_source_keeps_effective_names_and_preserves_uneditable_syntax_for_export() {
     let bytes = crate::new_map::NewMapOptions {
         title: "First".into(),

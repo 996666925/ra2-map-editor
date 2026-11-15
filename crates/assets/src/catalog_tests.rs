@@ -2,6 +2,101 @@ use super::*;
 use crate::test_support::Fixture;
 
 #[test]
+fn shp_vehicle_turret_ring_uses_the_engine_start_and_each_authored_heading() {
+    for has_turret in [false, true] {
+        let fixture = Fixture::with_shp_turret();
+        let rules_path = fixture.0.join("rulesmd.ini");
+        let rules = std::fs::read_to_string(&rules_path).unwrap().replace(
+            "[TANK]\nStrength=100",
+            &format!("[TANK]\nStrength=100\nTurret={has_turret}"),
+        );
+        std::fs::write(rules_path, rules).unwrap();
+        let art_path = fixture.0.join("artmd.ini");
+        let art = std::fs::read_to_string(&art_path).unwrap().replace(
+            "Facings=1\nWalkFrames=0\nStandingFrames=1",
+            "Facings=8\nWalkFrames=1\nStandingFrames=0\nTurretOffset=100",
+        );
+        std::fs::write(art_path, art).unwrap();
+        let path = fixture.0.join("tank.shp");
+        crate::test_support::write_shp(&path, 80);
+        let mut shp = std::fs::read(&path).unwrap();
+        for frame in 8..40 {
+            let color = match frame {
+                12 => 3,
+                13 => 4,
+                _ => 2,
+            };
+            shp[8 + 80 * 24 + frame * 2..8 + 80 * 24 + frame * 2 + 2].copy_from_slice(&[0, color]);
+        }
+        std::fs::write(path, shp).unwrap();
+        let mut install = fixture.install();
+        install.catalog = Catalog::load(&install.manager, &install.theater);
+        assert_eq!(
+            install.catalog.shp_vehicle_turrets.contains_key("TANK"),
+            has_turret
+        );
+        let sprites = install.sprite_palette(&install.catalog);
+        let object = &sprites.objects[&("Units".into(), "TANK".into())];
+        for (facing, color) in [(0, 3), (8, 4), (248, 2)] {
+            let image = object.image(facing);
+            assert_eq!(
+                image.indices,
+                if has_turret {
+                    vec![1, color]
+                } else {
+                    vec![1, 1]
+                }
+            );
+            let expected = install
+                .theater
+                .unit_palette
+                .color(if has_turret { color } else { 1 });
+            assert_eq!(
+                &image.rgba[4..8],
+                &[expected.r, expected.g, expected.b, 255]
+            );
+            assert_eq!(
+                [image.info.width, image.info.height],
+                [2, 1],
+                "TurretOffset does not move an SHP ring"
+            );
+        }
+    }
+}
+
+#[test]
+fn mounted_ares_selects_ini_syntax_and_includes_without_the_build_feature() {
+    let fixture = Fixture::new();
+    let mut mix = Vec::new();
+    mix.extend(1u16.to_le_bytes());
+    mix.extend(1u32.to_le_bytes());
+    mix.extend(0i32.to_le_bytes());
+    mix.extend(0u32.to_le_bytes());
+    mix.extend(1u32.to_le_bytes());
+    mix.push(0);
+    std::fs::write(fixture.0.join("ares.mix"), mix).unwrap();
+    std::fs::write(
+        fixture.0.join("custom.ini"),
+        b"[Base]\nX=first\nX=last\n[#include]\n0=child.ini\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.0.join("child.ini"),
+        b"[Preamble]\nX=1\n[Child]:[Base]\nY=2\n",
+    )
+    .unwrap();
+    let mut install = fixture.install();
+    install.manager.load_nested("ares.mix").unwrap();
+    assert!(install.manager.ares_form());
+    let ini = crate::assets::read_ini(&install.manager, "custom.ini").unwrap();
+    assert_eq!(
+        ini.section_or_empty("Child").read_string("X", "", 64),
+        "last"
+    );
+    assert_eq!(ini.section_or_empty("Child").read_int("Y", 0), 2);
+}
+
+#[test]
 fn selected_ini_dialect_expands_ares_includes_and_preserves_input_files() {
     let fixture = Fixture::new();
     let root = b"[Base]\nHealth=1\nHealth=9\nOther=7\n[#include]\n0=child.ini\n";

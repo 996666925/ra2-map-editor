@@ -532,6 +532,7 @@ impl Editor {
                 target: self.target.clone(),
                 expected: self.expected,
                 resource_profile: doc.resource_profile.clone(),
+                reads_ares: Some(doc.base.reads_ares),
             };
             match self.io.send(Job::Recover {
                 snapshot: doc.snapshot(),

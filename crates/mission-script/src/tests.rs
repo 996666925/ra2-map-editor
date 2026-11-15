@@ -11,6 +11,40 @@ fn fixture() -> (MapDocument, Catalog) {
     let catalog = Catalog::from_document(&doc, vec!["E1".into()], vec!["MISSION:TEXT".into()]);
     (doc, catalog)
 }
+
+#[test]
+fn engine_034_orders_compile_to_native_rows_and_validate_team_ordinals() {
+    let (mut doc, catalog) = fixture();
+    let source = format!(
+        r#"import {{defineMission,order}} from './sdk';
+export default defineMission({},{{id:'new_orders',player:'Neutral'}},m=>{{
+ m.script('new',[order.changeTeamIndex(7),order.reduceTiberium(),order.beginProduction(),
+ order.reshroudMap(),order.revealMap(),order.truckUnload(),order.truckLoad()]);
+}});"#,
+        serde_json::to_string(&catalog).unwrap()
+    );
+    let mut plan = Compiler::new()
+        .unwrap()
+        .build(BTreeMap::from([("/mission.ts".into(), source)]))
+        .unwrap();
+    prepare(&doc, &plan, &catalog)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    let script = &mission::ids(&doc, Kind::Script)[0];
+    for (line, id) in [18, 28, 29, 35, 36, 44, 45].into_iter().enumerate() {
+        assert_eq!(
+            doc.ini_text(script, &line.to_string()),
+            format!("{id},{}", if line == 0 { 7 } else { 0 })
+        );
+        let capability = crate::capabilities::capability(crate::capabilities::Family::Order, id);
+        assert!(capability.enabled && capability.schema_audited);
+        assert_eq!(capability.sdk, crate::capabilities::SdkCoverage::Complete);
+    }
+    plan.id = "bad_orders".into();
+    plan.scripts[0].orders[0] = Order::ChangeTeamIndex { index: u32::MAX };
+    assert!(prepare(&doc, &plan, &catalog).is_err());
+}
 fn plan() -> Mission {
     serde_json::from_value(serde_json::json!({
         "version":1, "id":"test", "player":"Neutral", "teams":[], "flags":[],

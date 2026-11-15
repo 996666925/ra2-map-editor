@@ -123,9 +123,9 @@ const ACTION_HANDLERS: &[i32] = &[
     142, 143, 144, 145,
 ];
 const ORDER_HANDLERS: &[i32] = &[
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 25, 26,
-    27, 30, 31, 32, 33, 34, 37, 38, 39, 40, 41, 42, 43, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56,
-    57, 58, 59, 60, 61, 62, 63, 64,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
 ];
 
 fn named(family: Family, id: i32) -> Option<&'static Opcode> {
@@ -251,10 +251,9 @@ pub fn capability(family: Family, id: i32) -> Capability {
             | 141,
         )
         | (Family::Action, 17 | 18 | 31 | 40 | 48 | 51 | 55 | 101 | 112 | 114 | 115 | 139 | 145)
-        | (
-            Family::Order,
-            0..=9 | 11 | 12 | 14..=17 | 19..=21 | 23..=27 | 31..=33 | 37..=43 | 48..=50,
-        ) => SdkCoverage::Complete,
+        | (Family::Order, 0..=9 | 11 | 12 | 14..=21 | 23..=33 | 35..=45 | 48..=50) => {
+            SdkCoverage::Complete
+        }
         _ => SdkCoverage::Missing,
     };
     let binding = match (family, id) {
@@ -662,7 +661,15 @@ mod tests {
         let parse = |pattern: &str| -> BTreeSet<i32> {
             pattern
                 .split('|')
-                .map(|opcode| opcode.parse().expect("numeric script admission arm"))
+                .flat_map(|opcode| {
+                    if let Some((first, last)) = opcode.split_once("..=") {
+                        let first = first.parse::<i32>().expect("numeric admission range start");
+                        let last = last.parse::<i32>().expect("numeric admission range end");
+                        (first..=last).collect::<Vec<_>>()
+                    } else {
+                        vec![opcode.parse().expect("numeric script admission arm")]
+                    }
+                })
                 .collect()
         };
         let baseline = parse(

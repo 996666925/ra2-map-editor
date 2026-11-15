@@ -15,6 +15,59 @@ fn root() -> PathBuf {
 }
 
 #[test]
+fn recovery_worker_retains_the_document_ini_dialect() {
+    let root = root();
+    let mut bytes = ra2_map_document::new_map::NewMapOptions::default()
+        .bytes()
+        .unwrap();
+    bytes.extend_from_slice(b"\n[Custom]\nX=first\nX=last\n");
+    let (source, _) = ra2_map_document::source::SourceMap::parse_with_ares(
+        "ares.map".into(),
+        "test".into(),
+        bytes,
+        true,
+    )
+    .unwrap();
+    let doc = ra2_map_document::document::MapDocument::new(source.edit_base.unwrap());
+    let io = EditorIo::new(egui::Context::default(), root.clone()).unwrap();
+    let receive = || {
+        io.results
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+    };
+    assert!(matches!(receive(), Done::Scan(Ok(_))));
+    let path = root.join("ares.yrrec");
+    io.send(Job::Recover {
+        snapshot: doc.snapshot(),
+        path: path.clone(),
+        meta: RecoveryMeta {
+            version: 1,
+            name: "ares.map".into(),
+            directory: root.clone(),
+            target: None,
+            expected: None,
+            resource_profile: None,
+            reads_ares: None,
+        },
+    })
+    .unwrap();
+    assert!(matches!(receive(), Done::Recover { result: Ok(()), .. }));
+    io.send(Job::Restore(path)).unwrap();
+    let Done::Restore { result, .. } = receive() else {
+        panic!("restore response")
+    };
+    let (base, meta) = result.unwrap();
+    assert_eq!(meta.reads_ares, Some(true));
+    assert!(base.reads_ares);
+    assert_eq!(
+        ra2_map_document::document::MapDocument::new(base).ini_text("Custom", "X"),
+        "last"
+    );
+    drop(io);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn playtest_config_loads_mission_overrides_and_base_assets_without_changing_install() {
     use std::collections::BTreeMap;
     use vera20k_core::{
@@ -57,7 +110,8 @@ fn playtest_config_loads_mission_overrides_and_base_assets_without_changing_inst
     let config = GameConfig::load_from(&root, &root.join("vera20k.exe")).unwrap();
     assert_eq!(config.paths.ra2_dir, game_dir);
     let manager = AssetManager::from_ini_probe_root(&config.paths.ra2_dir).unwrap();
-    let (loaded, _) = CsfFile::load_active(|name| manager.get_ref(name)).unwrap();
+    let (loaded, _) =
+        CsfFile::load_active(manager.ares_form(), |name| manager.get_ref(name)).unwrap();
     assert_eq!(loaded.get("TSTX12345678"), Some("苏军正在逼近！"));
     assert_eq!(loaded.get("BASE:TEXT"), Some("原版文本"));
     assert_eq!(
@@ -296,11 +350,21 @@ fn recovery_roundtrip_is_independent_and_truncation_is_rejected() {
         target: Some(original.clone()),
         expected: Some(Stamp::bytes(&bytes)),
         resource_profile: Some("schema:resources".into()),
+        reads_ares: Some(true),
     };
     write_recovery(&path, &meta, &bytes).unwrap();
     let (restored, again) = read_recovery(&path).unwrap();
     assert_eq!(restored.target, meta.target);
     assert_eq!(restored.resource_profile, meta.resource_profile);
+    assert_eq!(restored.reads_ares, Some(true));
+    let mut legacy = serde_json::to_value(&meta).unwrap();
+    legacy.as_object_mut().unwrap().remove("reads_ares");
+    assert!(
+        serde_json::from_value::<RecoveryMeta>(legacy)
+            .unwrap()
+            .reads_ares
+            .is_none()
+    );
     assert_eq!(again, bytes);
     assert_eq!(fs::read(&original).unwrap(), bytes);
     let mut bad = fs::read(&path).unwrap();

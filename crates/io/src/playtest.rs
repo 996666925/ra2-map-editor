@@ -17,8 +17,9 @@ pub fn map_player_starts(map: &MapFile) -> Vec<u8> {
     player_start_indices(
         map.ini
             .section_or_empty("Basic")
-            .read_name("MaxPlayers", 16)
-            .and_then(|n| n.parse().ok()),
+            .read_int("MaxPlayers", 0)
+            .try_into()
+            .ok(),
         map.waypoints
             .values()
             .filter(|w| {
@@ -308,7 +309,7 @@ mod tests {
             .is_ok()
         );
         map.waypoints.get_mut(&29).unwrap().rx = 1024;
-        assert_eq!(map_player_starts(&map), (0..29).collect::<Vec<_>>());
+        assert_eq!(map_player_starts(&map), (0..8).collect::<Vec<_>>());
     }
 
     #[test]
@@ -324,13 +325,13 @@ mod tests {
         let mut mission = map.waypoints[&0];
         mission.index = 30;
         map.waypoints.insert(30, mission);
-        assert_eq!(map_player_starts(&map), vec![0, 29]);
+        assert_eq!(map_player_starts(&map), vec![0]);
         let options = PlayOptions {
             start: 29,
             ai: 1,
             ..Default::default()
         };
-        assert!(options.spawn_ini(&map).is_ok());
+        assert!(options.spawn_ini(&map).is_err());
         assert!(
             PlayOptions {
                 ai: 2,
@@ -354,17 +355,21 @@ mod tests {
     }
 
     #[test]
-    fn legacy_maps_require_contiguous_extended_starts() {
+    fn extended_starts_require_a_complete_explicit_declaration() {
         assert_eq!(
             player_start_indices(None, [0, 2, 7, 8, 29, 30]),
             vec![0, 2, 7]
         );
         assert_eq!(
             player_start_indices(None, 0..=30),
-            (0..30).collect::<Vec<_>>()
+            (0..8).collect::<Vec<_>>()
         );
-        assert_eq!(player_start_indices(Some(30), [29, 0, 29, 30]), vec![0, 29]);
-        assert_eq!(player_start_indices(Some(12), [0, 11, 12, 29]), vec![0, 11]);
+        assert_eq!(player_start_indices(Some(30), [29, 0, 29, 30]), vec![0]);
+        assert_eq!(player_start_indices(Some(12), [0, 11, 12, 29]), vec![0]);
+        assert_eq!(
+            player_start_indices(Some(12), 0..30),
+            (0..12).collect::<Vec<_>>()
+        );
     }
 
     #[test]

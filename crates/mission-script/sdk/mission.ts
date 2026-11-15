@@ -221,6 +221,8 @@ export type Order =
   | { readonly kind: "flash"; readonly frames: number }
   | { readonly kind: "changeCountry"; readonly country: Country }
   | { readonly kind: "changeScript"; readonly script: Script }
+  | { readonly kind: "changeTeamIndex"; readonly index: number }
+  | { readonly kind: "reduceTiberium" | "beginProduction" | "reshroudMap" | "revealMap" | "truckUnload" | "truckLoad" }
   | { readonly kind: "moveTo" | "attackWaypoint" | "patrol"; readonly waypoint: Waypoint }
   | { readonly kind: "guard"; readonly seconds: number }
   | { readonly kind: "hunt" };
@@ -1564,6 +1566,14 @@ export const order = {
   /** 原生 Script17：替换当前脚本、光标重置为 -1，但不自动推进新脚本；需要其他原生所有者推进。
    * 不将它当作函数调用或自动接续；注册序号由 Rust 从固定 AIMD + 最终地图列表解析。 */
   changeScript: (script: Script): Order => ({ kind: "changeScript", script }),
+  /** 原生 TeamType 进程注册序号，包含 AIMD 和地图定义；不是 Team ID，重排注册表后需重新核对。 */
+  changeTeamIndex: (index: number): Order => ({ kind: "changeTeamIndex", index }),
+  reduceTiberium: (): Order => ({ kind: "reduceTiberium" }),
+  beginProduction: (): Order => ({ kind: "beginProduction" }),
+  reshroudMap: (): Order => ({ kind: "reshroudMap" }),
+  revealMap: (): Order => ({ kind: "revealMap" }),
+  truckUnload: (): Order => ({ kind: "truckUnload" }),
+  truckLoad: (): Order => ({ kind: "truckLoad" }),
   /** 标记进入下一行，由正常 Team 更新推进。 */
   next: (): Order => ({ kind: "next" }),
   /** 锁存小队成功并推进，不判定玩家胜利，也不立即结束小队。

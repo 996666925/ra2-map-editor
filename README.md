@@ -108,7 +108,7 @@ Windows 可执行文件位于 `target/release/ra2-map-editor.exe`。也可通过
 
 ### 可选 Ares 构建
 
-使用 `cargo run --locked --features ares` 编译启用 Ares 的编辑器，试玩时搭配同样启用 Ares 的 VERA20k 客户端。默认构建使用 YR 地图解析和创作能力；引擎 0.3.3 的部分 Ares 运行时行为会按游戏数据自动启用，完整 Ares 创作仍需该构建选项。[Ares 资源配置示例](examples/profiles/ares.example.json)使用 `vera20k-pinned-ares-v1`，与默认的 `vera20k-pinned-yr-v1` 分开。
+使用 `cargo run --locked --features ares` 编译启用 Ares 的编辑器，试玩时搭配同样启用 Ares 的 VERA20k 客户端。默认构建使用 YR 地图解析和创作能力；引擎 0.3.4 会在游戏目录带有 `ares.mix` 时自动使用 Ares INI 语义和扩展文本表，其他 Ares 行为也会按游戏数据启用，完整 Ares 创作仍需该构建选项。[Ares 资源配置示例](examples/profiles/ares.example.json)使用 `vera20k-pinned-ares-v1`，与默认的 `vera20k-pinned-yr-v1` 分开。
 
 Ares 构建使用引擎的 INI 解析和 include 展开，开放已审计的 Ares 事件、火风暴/辅助电力/驾驶员/EVA/分组动作与脚本 67、68。任务脚本通过 `ares.event`、`ares.action`、`ares.order` 调用，详见[任务脚本说明](examples/missions/README.md#ares-任务)。普通显式键值地图可编辑；含 `[Child]:[Base]` 或 `+` 迭代键的地图可预览和原样导出，修改前需展开为显式键值，以保留引擎实际解析的含义。
 
@@ -118,6 +118,6 @@ Ares 构建使用引擎的 INI 解析和 include 展开，开放已审计的 Are
 
 地图预览使用静态场景，已覆盖常见 SHP/VXL 外观、共享像素深度、House 换色与基础地图光照。完整动画、建筑损伤状态、局部光源及部分桥梁和对象阴影尚未完全实现。
 
-建筑 SHP 炮塔支持 32 向帧序、ART `Start`、调色板选择、透明度及按朝向变化的独立阴影；VXL 炮塔和炮管保留各自的深度。地图场景使用 `TurretAnimYSort` 排序和 `TurretAnimZAdjust` 遮挡，画布、拾取与图片导出共用这条路径。放置/粘贴提示与选择边界沿用相同的坐标换算，建筑及炮塔支持扩展高地的高度补偿；当前仍使用正常状态的静态外观。
+建筑 SHP 炮塔支持 32 向帧序、ART `Start`、调色板选择、透明度及按朝向变化的独立阴影；VXL 炮塔和炮管保留各自的深度。地图场景使用 `TurretAnimYSort` 排序和 `TurretAnimZAdjust` 遮挡，画布、拾取与图片导出共用这条路径。放置/粘贴提示与选择边界沿用相同的坐标换算，建筑及炮塔支持扩展高地的高度补偿；当前仍使用正常状态的静态外观。SHP 车辆的 `Turret=yes` 炮塔从车体 SHP 的 32 向帧环取帧，与地图中的车体朝向同步；不模拟独立瞄准和运动动画。
 
 对象放置包含占地、等高、占用与步兵子格检查；完整通行性及自定义 Mod Foundation 仍待补齐。保存会保留未知字段和未修改的原文，但静态预览与格式校验不代表已完整验证所有游戏运行时行为。

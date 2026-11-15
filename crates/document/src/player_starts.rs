@@ -27,20 +27,27 @@ pub fn house_slot(value: &str) -> Option<u8> {
     (slot < MAX_PLAYERS).then_some(slot)
 }
 
-/// Ordinary maps use the native first eight slots. Extended declarations may
-/// be sparse; older extended maps require a contiguous roster.
+/// Match the engine's explicit, complete MaxPlayers declaration. Ordinary
+/// mission waypoints above seven never become starts just by being contiguous.
 pub fn indices(declared: Option<u8>, starts: impl IntoIterator<Item = u8>) -> Vec<u8> {
     let starts: BTreeSet<_> = starts.into_iter().filter(|&n| n < MAX_PLAYERS).collect();
-    let contiguous = (0..MAX_PLAYERS).take_while(|n| starts.contains(n)).count() as u8;
     let limit = declared
         .filter(|n| (9..=MAX_PLAYERS).contains(n))
-        .unwrap_or(contiguous.max(8));
+        .filter(|&n| (0..n).all(|slot| starts.contains(&slot)))
+        .unwrap_or(8);
     starts.into_iter().filter(|&n| n < limit).collect()
 }
 
 pub fn from_document(doc: &MapDocument) -> Vec<u8> {
+    let maximum = doc.ini_text("Basic", "MaxPlayers");
+    let ini = vera20k_core::rules::ini_parser::IniFile::from_str(&format!(
+        "[Basic]\nMaxPlayers={maximum}\n"
+    ));
     indices(
-        doc.ini_text("Basic", "MaxPlayers").parse().ok(),
+        ini.section_or_empty("Basic")
+            .read_int("MaxPlayers", 0)
+            .try_into()
+            .ok(),
         doc.records().values().filter_map(|r| {
             let slot = r.key.parse::<u8>().ok()?;
             (r.section == "Waypoints"
@@ -199,9 +206,10 @@ mod tests {
     #[test]
     fn declarations_distinguish_mission_waypoints_from_starts() {
         assert_eq!(indices(Some(2), [0, 1, 2, 7, 8, 29, 30]), vec![0, 1, 2, 7]);
-        assert_eq!(indices(Some(30), [0, 29, 30]), vec![0, 29]);
+        assert_eq!(indices(Some(30), [0, 29, 30]), vec![0]);
         assert_eq!(indices(None, [0, 2, 7, 8, 29]), vec![0, 2, 7]);
-        assert_eq!(indices(None, 0..30), (0..30).collect::<Vec<_>>());
+        assert_eq!(indices(None, 0..30), (0..8).collect::<Vec<_>>());
+        assert_eq!(indices(Some(30), 0..30), (0..30).collect::<Vec<_>>());
     }
 
     #[test]

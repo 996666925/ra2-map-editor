@@ -160,6 +160,8 @@ pub struct Baseline {
     pub raw: RawIni,
     pub header: MapHeader,
     pub records: BTreeMap<u64, Record>,
+    /// Retained with the document, including on UI and save worker threads.
+    pub reads_ares: bool,
     terrain: Vec<u8>,
     offsets: BTreeMap<Cell, usize>,
     end: usize,
@@ -168,8 +170,13 @@ pub struct Baseline {
 }
 impl Baseline {
     pub fn parse(bytes: Arc<[u8]>, map: &MapFile) -> Result<Arc<Self>> {
+        Self::parse_with_ares(bytes, map, crate::source::game_reads_ares())
+    }
+    pub fn parse_with_ares(bytes: Arc<[u8]>, map: &MapFile, ares: bool) -> Result<Arc<Self>> {
+        let reads_ares = vera20k_core::rules::ARES_BUILD || ares;
+        let _dialect = vera20k_core::rules::ares_switch::read_ares_way(reads_ares);
         let raw = RawIni::parse(bytes)?;
-        if vera20k_core::rules::ARES_BUILD {
+        if reads_ares {
             // These records have no unambiguous physical edit identity: Ares
             // can synthesize inherited entries or rename iterator keys. The
             // engine may preview them; retain their source for exact export.
@@ -227,7 +234,7 @@ impl Baseline {
         let mut records = BTreeMap::new();
         let mut seen = HashSet::new();
         let mut physical: Vec<_> = raw.lines.iter().enumerate().collect();
-        if vera20k_core::rules::ARES_BUILD {
+        if reads_ares {
             physical.reverse();
         }
         for (id, line) in physical {
@@ -263,6 +270,7 @@ impl Baseline {
         }
         Ok(Arc::new(Self {
             raw,
+            reads_ares,
             header: map.header.clone(),
             records,
             terrain,
@@ -340,6 +348,7 @@ impl Snapshot {
     }
 
     pub fn bytes(&self) -> Result<Vec<u8>> {
+        let _dialect = vera20k_core::rules::ares_switch::read_ares_way(self.base.reads_ares);
         if self.changes.is_empty() {
             return Ok(self.base.raw.bytes.to_vec());
         }
@@ -528,8 +537,9 @@ impl MapDocument {
         if self.snapshot().bytes()? == bytes {
             return Ok(false);
         }
+        let _dialect = vera20k_core::rules::ares_switch::read_ares_way(self.base.reads_ares);
         let map = vera20k_core::map::map_file::load_from_bytes(bytes.clone())?;
-        let base = Baseline::parse(bytes.into(), &map)?;
+        let base = Baseline::parse_with_ares(bytes.into(), &map, self.base.reads_ares)?;
         let before = DocumentState {
             base: self.base.clone(),
             changes: self.changes.clone(),

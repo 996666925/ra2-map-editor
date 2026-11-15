@@ -22,11 +22,12 @@ pub fn read_ini(
         IniFile,
         directives::{DirectiveOptions, process_directives},
     };
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(manager.ares_form());
     let bytes = manager
         .get_ref(name)
         .with_context(|| format!("缺少 {name}"))?;
     let ini = IniFile::from_bytes(bytes)?;
-    if vera20k_core::rules::ARES_BUILD {
+    if manager.ares_form() {
         let expanded = process_directives(
             ini,
             name,

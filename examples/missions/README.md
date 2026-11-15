@@ -2,7 +2,7 @@
 
 ## Ares 任务
 
-使用启用 `ares` feature 的编辑器和 VERA20k 客户端。默认编辑器在构建阶段拒绝 Ares SDK 调用，不会将不支持的编号写入任务。支持的事件、动作、绑定和参数可从能力清单查询，`runtime: "ares"` 表示扩展能力，`enabled` 表示本次编辑器构建已启用它。事件 66 缺少运行时通知，仍不提供 SDK 方法。
+使用启用 `ares` feature 的编辑器和 VERA20k 客户端。默认编辑器的 Ares SDK 创作入口仍关闭；游戏目录安装 `ares.mix` 时，默认构建也会按 Ares 语义读取资源和地图。支持的事件、动作、绑定和参数可从能力清单查询，`runtime: "ares"` 表示扩展能力，`enabled` 表示本次编辑器构建已启用它。事件 66 缺少运行时通知，仍不提供 SDK 方法。
 
 ```ts
 import { ares } from './sdk';
@@ -690,7 +690,7 @@ action.reduceTiberiumAt(at); // 连续减少航点中心矿石，不会清掉周
 `combatFlash` 只请求C4冲击光照，原版弹头是否发亮由规则决定；它不会直接伤害单位。
 
 固定引擎当前已提供具名接口的编号为事件 **58**、动作 **138**、小队命令 **54**。
-能力矩阵在 `capabilities::matrix()`，包括 308 个编号、空洞、模式与特性门控。默认可用事件 58、动作 138、小队命令 54 已暴露；事件 2/3 有条件处理器但缺少生产通知入口，未提供默认 API。Ares 事件、动作和命令保留独立特性标记，由 `enabled` 表示当前构建是否启用。接口覆盖与呈现验收分别记录在扩展计划中。
+能力矩阵在 `capabilities::matrix()`，包括 308 个编号、空洞、模式与特性门控。默认可用事件 58、动作 138、小队命令 61 已暴露；事件 2/3 有条件处理器但缺少生产通知入口，未提供默认 API。Ares 事件、动作和命令保留独立特性标记，由 `enabled` 表示当前构建是否启用。接口覆盖与呈现验收分别记录在扩展计划中。
 
 | 类别 | 接口示例与语义 |
 | --- | --- |
@@ -1247,3 +1247,11 @@ export default defineMission(map, { id: 'lottery', player: House.Americans }, m 
 完整可构建的[奖励单位属性 demo](reward-unit/mission.ts)包含生命、装甲、移动、武器、升级、免疫、隐身、探测、运输、弹药、采矿、展开、子机、外观和声音等分组，适用条件与使用步骤见[说明](reward-unit/README.md)。主配置直接启用，特殊机制以注释形式供按需选用。
 
 奖励副本以稳定 ID 注册为地图自己的 VehicleTypes，沿用基础单位的 Image；SDK 管理其 `TechLevel=-1`、`AllowedToStartInMultiplayer=no` 和 `CrateGoodie=no`，不进入普通生产栏、开局随机兵种或普通箱子奖池。返回值只用于奖励池，不能作为普通小队单位引用。首次使用或资源切换后，先重新加载场景并刷新 SDK 类型。删除声明并构建会移除托管副本。
+
+### 引擎 0.3.4 的小队命令
+
+`order.reduceTiberium()`、`order.beginProduction()`、`order.reshroudMap()`、`order.revealMap()`、`order.truckUnload()`、`order.truckLoad()` 对应原生脚本 28、29、35、36、44、45。卡车命令只将 `TRUCKB` / `TRUCKA` 互换，不装卸乘客。
+
+`order.changeTeamIndex(index)` 对应脚本 18，接收 AIMD 与地图合并后的 **TeamType 进程注册序号**，不是小队 ID，也不是界面排序。更换资源或重排注册表后须重新核对；无有效定义时引擎会停在此行。此命令将成员转入同 House 的新小队并销毁旧小队。
+
+默认构建也会跟随游戏的 `ares.mix` 选择 INI 语义、include 展开和扩展 CSF；Ares SDK 创作仍使用上文的 `ares` 构建选项。

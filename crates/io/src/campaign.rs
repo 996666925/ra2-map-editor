@@ -395,7 +395,7 @@ pub fn audit_resources(
             .map(Vec::as_slice)
             .or_else(|| install.manager.get_ref(name))
     };
-    let table = CsfFile::load_active(lookup)?.0;
+    let table = CsfFile::load_active(install.manager.ares_form(), lookup)?.0;
     let sounds = SoundRegistry::from_ini(&IniFile::from_bytes(
         lookup("soundmd.ini").unwrap_or_default(),
     )?);

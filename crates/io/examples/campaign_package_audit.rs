@@ -152,7 +152,10 @@ fn pcm() -> Vec<u8> {
 }
 fn verify_metadata(install: &Install) -> Result<()> {
     let csf =
-        vera20k_core::assets::csf_file::CsfFile::load_active(|n| install.manager.get_ref(n))?.0;
+        vera20k_core::assets::csf_file::CsfFile::load_active(install.manager.ares_form(), |n| {
+            install.manager.get_ref(n)
+        })?
+        .0;
     ensure!(
         csf.get("ED:HELLO") == Some("跨关测试：中文与 Unicode 😀"),
         "installed CSF missing"

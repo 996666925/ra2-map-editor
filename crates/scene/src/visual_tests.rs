@@ -85,8 +85,9 @@ fn packed_turret_blends_match_the_pinned_native_blitter_controls() {
             continue;
         }
         let rgb = std::array::from_fn(|i| row["rgb"][i].as_u64().unwrap() as u8);
-        let destination =
-            ra2_map_voxel::preview_unpack(row["prior_colors"][0].as_u64().unwrap() as u16);
+        // The upstream corpus retains the initial surface word as `raw`;
+        // its redundant prior_colors array was removed in 0.3.4.
+        let destination = ra2_map_voxel::preview_unpack(row["raw"].as_u64().unwrap() as u16);
         let mixed = ra2_map_voxel::packed_blend(destination, rgb, selector);
         assert_eq!(
             u64::from(ra2_map_voxel::preview_pack(mixed)),

@@ -4,12 +4,14 @@
 The editor pins the engine through its Git tree entry, rather than a moving branch.
 Use `git submodule status` for the revision selected by your editor checkout.
 
-The current integration targets VERA20k 0.3.3 at
-`c3534d772a64f5922624b29a4fed63ad3342429c` (updated 2026-11-14).
+The current integration targets VERA20k 0.3.4 at
+`1dec45d6b3d78bcf6b11560b3551eabf267a8bd3` (updated 2026-11-15).
 The engine mounts `ECACHE*.MIX` and `ELOCAL*.MIX` through the shared asset
 manager. Editor building previews use its RULES slot-9 configuration and
 32-facing frame table for healthy SHP turrets; ART `TurretAnim` is ignored.
-Scene rendering retains the turret's independent Ground sort key and animation
+Static SHP vehicles also draw the engine-selected 32-frame turret ring from
+the body SHP, using the authored heading and the body draw point.
+Scene rendering retains the building turret's independent Ground sort key and animation
 pixel depth, including `TurretAnimYSort`, `TurretAnimZAdjust` and ART draw offsets.
 VXL guns retain separate turret/barrel crops and Z seeds. SHP selection adds
 ART `Start`, uses the selected animation palette, and retains directional shadow
@@ -22,10 +24,18 @@ and town catalogs, and allow its parallel generation to borrow tile blocks.
 Headless mission audits retain simulation resources in the engine's shared `Arc`.
 Building voxel guns use the engine's bound physical model slots, including an
 explicit `VoxelBarrelFile`, instead of reconstructing filenames in the editor.
+Stock team script actions 18, 28, 29, 35, 36, 44 and 45 are available in the
+authoring schema and TypeScript SDK. Extended player starts require an explicit
+MaxPlayers declaration and all declared waypoints, as in the engine map format
+[specification](vera20k/docs/map-format.md). Overlay pack dimensions already
+follow the map header cell grid, including extended maps with overlays below 512.
 
-The editor reads the engine's `ARES_BUILD` flag for document parsing, assets
-and mission authoring. It selects the editor's INI dialect and schema in step
-with the engine's `ares` build feature. The engine also detects some Ares behavior
+The editor selects INI syntax, include expansion and supplemental CSF tables
+from the resource manager's `ares_form()`, including a default build that mounts
+`ares.mix`. A document retains that choice for duplicate keys, physical records,
+structural edits, scene refresh, save workers and recovery snapshots. Inherited and iterator-key maps remain
+read-only until flattened. The authoring schema and Ares SDK still follow the
+editor's `ares` build feature. The engine also detects some Ares behavior
 from game data in either build, so the default
 editor does not imply that Ares keys in a mod are ignored at runtime. Full Ares
 authoring still requires the editor and client to be built with `ares`.

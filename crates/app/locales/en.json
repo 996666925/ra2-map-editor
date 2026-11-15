@@ -1979,5 +1979,22 @@
   "地图内的多人开局默认值；启动器、房间和试玩设置可能覆盖。": "Multiplayer defaults stored in the map; launcher, room and playtest settings may override them.",
   "基本信息": "Basic information",
   "从当前游戏或 Mod 的音乐、影片目录选择；地图文字说明在“基本信息”中编辑。自定义资源可手动输入。": "Select themes and movies from the current game or mod. Edit description text under Basic information. Custom resource IDs can be entered manually.",
-  "结束输入后自动生效，可撤销；Ctrl+S 保存。选择“使用默认值”会删除对应覆盖。": "Edits apply when input finishes and can be undone; Ctrl+S saves. Use default removes the corresponding override."
+  "结束输入后自动生效，可撤销；Ctrl+S 保存。选择“使用默认值”会删除对应覆盖。": "Edits apply when input finishes and can be undone; Ctrl+S saves. Use default removes the corresponding override.",
+  "切换小队": "Change team",
+  "小队注册序号": "Team registration index",
+  "TeamType 序号": "TeamType index",
+  "按进程 TeamTypes 数组序号创建同 House 的新小队并转移成员，销毁原小队；不是小队 ID，无有效定义时停留在此行。": "Create a team for the same house using the process TeamTypes array index, transfer members and destroy the old team. This is not a team ID; an invalid definition stalls this step.",
+  "减少周围矿石": "Reduce nearby tiberium",
+  "对每个成员所在格执行矿石缩减；忽略参数并推进。": "Reduce tiberium around each member cell; ignore the argument and advance.",
+  "开始生产": "Begin production",
+  "开启小队所属 House 的生产标记；忽略参数并推进。": "Enable production for the team house; ignore the argument and advance.",
+  "重置地图迷雾": "Reshroud map",
+  "全局重置迷雾，保留视野计数；忽略参数并推进。": "Reset global shroud while retaining sight counters; ignore the argument and advance.",
+  "揭示整个地图": "Reveal entire map",
+  "沿用引擎全地图揭示入口；忽略参数并推进。": "Use the engine entire-map reveal; ignore the argument and advance.",
+  "卡车卸货": "Truck unload",
+  "仅将 TRUCKB 车辆直接改为 TRUCKA；忽略参数并推进，不执行运输卸载。": "Change TRUCKB vehicles directly to TRUCKA; ignore the argument and advance, without unloading passengers.",
+  "卡车装货": "Truck load",
+  "仅将 TRUCKA 车辆直接改为 TRUCKB；忽略参数并推进，不执行乘客装载。": "Change TRUCKA vehicles directly to TRUCKB; ignore the argument and advance, without loading passengers.",
+  "航点 {ids} 将成为玩家出生点，仍可用于任务；若需保留为普通任务航点，请先重新编号。": "Waypoints {ids} will become player starts and can still serve mission logic. Renumber them first to keep them as ordinary mission waypoints."
 }

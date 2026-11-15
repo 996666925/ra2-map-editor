@@ -197,6 +197,28 @@ pub(crate) fn load(
             } else {
                 continue;
             };
+            if section == "Units"
+                && !preview.voxel
+                && let Some(turret) = catalog.shp_vehicle_turrets.get(&id.to_ascii_uppercase())
+            {
+                // UnitClass SHP draw 0x0073CCB2..0x0073CD08: the engine
+                // owns the ring's start and facing count. Static map objects
+                // have one authored heading for both body and turret; the
+                // ring shares the body draw point, with no TurretOffset.
+                let palette = object_palette(install, catalog, &image_id, section, id);
+                for (step, body) in facings.iter_mut().enumerate() {
+                    let frame = turret
+                        .start_frame
+                        .saturating_add((step as u16 + 4) % turret.facings.max(1));
+                    if let Ok(gun) =
+                        decode_shp_frame(install, &body.info.name, &palette, usize::from(frame))
+                        && let Some(combined) =
+                            composite(&[(body.clone(), [0, 0]), (Arc::new(gun), [0, 0])])
+                    {
+                        *body = Arc::new(combined);
+                    }
+                }
+            }
             let mut anchor = [0., 0.];
             let mut shadow = None;
             let mut shp_turret = None;

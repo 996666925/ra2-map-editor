@@ -47,7 +47,7 @@ pub(crate) fn load(manager: &AssetManager) -> MissionResources {
             .map(|t| (t.key.clone(), t.key.clone()))
             .collect(),
     );
-    match CsfFile::load_active(|name| manager.get_ref(name)) {
+    match CsfFile::load_active(manager.ares_form(), |name| manager.get_ref(name)) {
         Ok((table, _)) => {
             if let Some(choices) = out.choices.get_mut("Theme") {
                 for ((_, label), theme) in choices.iter_mut().zip(themes.entries()) {
@@ -104,6 +104,8 @@ pub struct InfantryAppearance {
 pub struct NativeRegistries {
     pub radar: std::sync::Arc<crate::radar::Palette>,
     pub infantry_appearances: BTreeMap<String, InfantryAppearance>,
+    pub shp_vehicle_turrets:
+        BTreeMap<String, vera20k_core::rules::animation_sequence::ShpVehicleTurret>,
     pub vehicle_templates: BTreeMap<String, BTreeMap<String, String>>,
     pub countries: BTreeMap<String, i32>,
     /// Exact production alias-before-ID lookup, folded only for matching.
@@ -138,7 +140,7 @@ pub fn scenario_registries(
     let eva = EvaRegistry::from_ini(&audio(manager.ini_roots().eva())?);
     let mut owner =
         RetailRulesSources::select(manager)?.into_owner(Arc::new(sounds), Arc::new(eva))?;
-    let (mut rules, processed_ini, _, _) = owner
+    let (mut rules, processed_ini, art, _) = owner
         .load_scenario(
             if multiplayer {
                 NativeScenarioRulesPrefix::NonCampaign(mode)
@@ -149,6 +151,7 @@ pub fn scenario_registries(
         )
         .map_err(|error| error.to_string())?
         .into_parts();
+    rules.install_art_data(vera20k_core::rules::art_data::ArtRegistry::from_ini(&art));
     let mut country_names = BTreeMap::new();
     for (id, alias) in rules.cooperative_country_candidates() {
         for token in alias.into_iter().chain(std::iter::once(id)) {
@@ -197,6 +200,16 @@ pub fn scenario_registries(
     ));
     Ok(NativeRegistries {
         radar,
+        shp_vehicle_turrets: rules
+            .all_objects()
+            .filter_map(|object| {
+                (object.category == vera20k_core::rules::object_type::ObjectCategory::Vehicle)
+                    .then(|| rules.animation_sequence_in_category(object.category, &object.id))
+                    .flatten()
+                    .and_then(|set| set.shp_vehicle_turret())
+                    .map(|turret| (object.id.to_ascii_uppercase(), turret))
+            })
+            .collect(),
         infantry_appearances: rules
             .all_objects()
             .filter(|object| {
