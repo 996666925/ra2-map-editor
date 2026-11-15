@@ -102,6 +102,12 @@ cargo run --locked -p ra2-map-render --example framework_gpu_audit -- 'D:/Games/
 cargo run --locked -p ra2-map-render --example cliff_refresh_audit -- 'D:/Games/YR' target/cliff-refresh-audit
 ```
 
+桥梁审计覆盖各环境的双方向混凝土桥与木桥、短跨度、临水悬崖和低桥，检查桥头两侧保持原有悬崖高度、端点吸附、保存重开及撤销重做，并导出地图、PNG 与报告。包含新城市环境木桥模板排列不同的情况；不支持悬崖的环境检查拒绝放置：
+
+```powershell
+cargo run --locked -p ra2-map-scene --example bridge_audit -- 'D:/Games/YR' target/bridge-audit
+```
+
 体素适配直接编译固定版本引擎的 GPU 光栅器和 WGSL，在资源线程按最多 32 个朝向批量生成静态图，每批只提交、读回一次，供预览、拾取与地图图集共享。`UseBuffer` 等上游不支持的 GPU 路径直接复用 CPU 结果；车体、炮塔、炮管相交合成需要几何深度，因此整体走一次 CPU 路径，避免 GPU 绘制后再完整执行 CPU 光栅化。
 
 使用真实资源验证 GPU 的 32 朝向像素、合成深度和 CPU 回退（测试会要求实际 GPU 执行，不能以回退代替）：

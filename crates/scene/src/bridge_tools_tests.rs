@@ -7,7 +7,10 @@ use ra2_map_document::{
 };
 
 fn setup() -> (MapDocument, MapScene) {
-    let f = Fixture::with_joining();
+    setup_fixture(Fixture::with_joining())
+}
+
+fn setup_fixture(f: Fixture) -> (MapDocument, MapScene) {
     let mut i = f.install();
     i.catalog = Catalog::load(&i.manager, &i.theater);
     let scene = crate::map::load_scene_bytes(
@@ -29,6 +32,86 @@ fn setup() -> (MapDocument, MapScene) {
         MapDocument::new(scene.source.edit_base.as_ref().unwrap().clone()),
         scene,
     )
+}
+
+#[test]
+fn reordered_wooden_heads_match_both_banks_and_survive_later_cliff_edits() {
+    for axis in 0..2 {
+        let f = Fixture::with_joining();
+        // NEWURBAN: positive-X is piece 2 and negative-Y is piece 3;
+        // pieces 4/5 are deck sections rather than negative-Y heads.
+        for (from, to) in [(3, 2), (4, 3), (7, 4), (7, 5)] {
+            std::fs::copy(
+                f.0.join(format!("wood{from:02}.tem")),
+                f.0.join(format!("wood{to:02}.tem")),
+            )
+            .unwrap();
+        }
+        let (mut doc, scene) = setup_fixture(f);
+        let rotate = |[x, y]: Cell| if axis == 0 { [x, y] } else { [y, x] };
+        for (a, b) in [([60, 60], [79, 74]), ([94, 60], [108, 74])] {
+            cliff_tools::plan(
+                &doc,
+                &scene,
+                cliff_tools::rectangle(rotate(a), rotate(b)),
+                4,
+            )
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+            doc.commit("bank");
+        }
+        let before = doc.snapshot().bytes().unwrap();
+        let p = plan(
+            &doc,
+            &scene,
+            rotate([77, 67]),
+            rotate([98, 67]),
+            BridgeKind::HighWood,
+        )
+        .unwrap();
+        let family = scene
+            .palette
+            .tile_ids
+            .unwrap()
+            .cliffs
+            .wood_bridge_set
+            .unwrap();
+        let expected = if axis == 0 { [0, 1] } else { [2, 5] };
+        for (head, offset) in p.cliffs.iter().zip(expected) {
+            assert_eq!(head.tile, family + offset);
+        }
+        p.apply(&mut doc).unwrap();
+        doc.commit("bridge");
+        let saved = doc.snapshot().bytes().unwrap();
+        let (source, _) = ra2_map_document::source::SourceMap::parse(
+            "saved.map".into(),
+            "test".into(),
+            saved.clone(),
+        )
+        .unwrap();
+        let mut reopened = MapDocument::new(source.edit_base.as_ref().unwrap().clone());
+        crate::cliff_authoring::reshape(
+            &reopened,
+            &scene,
+            cliff_tools::rectangle(rotate([60, 54]), rotate([74, 63])),
+            4,
+            false,
+        )
+        .unwrap()
+        .apply(&mut reopened)
+        .unwrap();
+        for (&at, &v) in &p.edits {
+            assert_eq!(reopened.terrain(at), Some(v));
+        }
+        for (&at, &v) in &p.overlays {
+            assert_eq!(reopened.overlay(at), v);
+        }
+        doc.undo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), before);
+        doc.redo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), saved);
+    }
 }
 #[test]
 fn low_bridge_draft_tracks_open_water_endpoints_without_relaxing_placement() {
@@ -187,6 +270,30 @@ fn high_bridges_both_materials_and_axes_write_heads_and_canonical_overlay_data()
             assert_eq!(doc.snapshot().bytes().unwrap(), before);
             assert_eq!(p.cliffs.len(), 2);
             let axis = usize::from(!along_x);
+            // The road overhangs the ravine, but the two outer shoulder rows
+            // must keep the existing cliff profile. Aligning the road's raised
+            // centre instead shifts both cliff joins inward by one cell (#6).
+            for head in &p.cliffs {
+                let t = &scene.palette.templates[&(head.tile, 0)];
+                let across = if along_x { t.height } else { t.width };
+                for (sub, s) in t.cells.iter().enumerate() {
+                    if s.is_none() {
+                        continue;
+                    }
+                    let at = [
+                        head.origin[0] + sub as u16 % t.width,
+                        head.origin[1] + sub as u16 / t.width,
+                    ];
+                    let side = at[1 - axis] - head.origin[1 - axis];
+                    if side == 0 || side == across - 1 {
+                        assert_eq!(
+                            p.edits[&at].level,
+                            value(&doc, &scene, at).level,
+                            "{kind:?}: bridge shoulder must follow the cliff at {at:?}"
+                        );
+                    }
+                }
+            }
             let distance = p.cliffs[1].origin[axis] - p.cliffs[0].origin[axis];
             assert_eq!(p.overlays.len(), usize::from(distance - 2));
             let obstructed = if along_x { [86, 65] } else { [65, 81] };
@@ -433,7 +540,7 @@ fn snapping_does_not_bypass_blockers_bad_heights_or_missing_bridge_resources() {
 }
 
 #[test]
-fn high_bridges_fit_short_ravines_without_overlapping_heads() {
+fn high_bridges_fit_short_ravines_only_when_aligned_heads_have_room() {
     for axis in 0..2 {
         let rotate = |[x, y]: Cell| if axis == 0 { [x, y] } else { [y, x] };
         for span in 3..8 {
@@ -450,15 +557,21 @@ fn high_bridges_fit_short_ravines_without_overlapping_heads() {
                 .unwrap();
                 doc.commit("bank");
             }
+            let before = doc.snapshot().bytes().unwrap();
             for kind in [BridgeKind::HighConcrete, BridgeKind::HighWood] {
-                let p = plan(
+                let result = plan(
                     &doc,
                     &scene,
                     rotate([77, 67]),
                     rotate([84 + span, 67]),
                     kind,
-                )
-                .unwrap();
+                );
+                assert_eq!(doc.snapshot().bytes().unwrap(), before);
+                if span < 5 {
+                    assert!(result.err().unwrap().to_string().contains("桥梁跨度过短"));
+                    continue;
+                }
+                let p = result.unwrap();
                 assert_eq!(p.cliffs.len(), 2);
                 assert!(!p.overlays.is_empty());
             }

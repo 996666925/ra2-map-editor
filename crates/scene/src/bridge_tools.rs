@@ -137,6 +137,66 @@ fn step(at: Cell, axis: usize, amount: i32) -> Result<Cell> {
     }
 }
 
+fn same_head_geometry(scene: &MapScene, a: u16, b: u16) -> bool {
+    let (Some(a), Some(b)) = (
+        scene.palette.templates.get(&(a, 0)),
+        scene.palette.templates.get(&(b, 0)),
+    ) else {
+        return false;
+    };
+    a.width == b.width
+        && a.height == b.height
+        && a.cells.len() == b.cells.len()
+        && a.cells.iter().zip(&b.cells).all(|(a, b)| match (a, b) {
+            (Some(a), Some(b)) => a.height == b.height && a.slope == b.slope,
+            (None, None) => true,
+            _ => false,
+        })
+}
+
+fn head_tile(scene: &MapScene, family: u16, relative: i32) -> Result<u16> {
+    let offset = u16::try_from(relative - 1)?;
+    let preferred = family.checked_add(offset).context("桥头编号溢出")?;
+    let reference = scene
+        .palette
+        .tile_ids
+        .and_then(|ids| ids.cliffs.bridge_set)
+        .and_then(|base| base.checked_add(offset))
+        .context("当前环境缺少桥头方向配置")?;
+    if same_head_geometry(scene, preferred, reference) {
+        return Ok(preferred);
+    }
+    // NEWURBAN's wooden set orders its heads differently from BridgeSet.
+    // Keep the declared piece when compatible; otherwise locate its geometry
+    // within this family instead of placing a head facing the wrong bank.
+    (0..16)
+        .filter_map(|n| family.checked_add(n))
+        .find(|&tile| same_head_geometry(scene, tile, reference))
+        .context("当前环境缺少桥头方向配置")
+}
+
+/// Recover the same bank profile when later cliff edits encounter a saved head.
+pub(crate) fn head_profile(scene: &MapScene, tile: u16) -> Option<(usize, i32, bool)> {
+    let base = scene.palette.tile_ids?.cliffs.bridge_set?;
+    let rim = scene.palette.bridge_rim?;
+    for (pair, profile) in [
+        (rim.top_left, (0, 0, false)),
+        (rim.bottom_right, (0, 1, true)),
+        (rim.top_right, (1, 0, false)),
+        (rim.bottom_left, (1, 1, true)),
+    ] {
+        for relative in pair {
+            if let Some(offset) = relative.checked_sub(1).and_then(|n| u16::try_from(n).ok())
+                && let Some(reference) = base.checked_add(offset)
+                && same_head_geometry(scene, tile, reference)
+            {
+                return Some(profile);
+            }
+        }
+    }
+    None
+}
+
 fn high_end(
     doc: &MapDocument,
     scene: &MapScene,
@@ -178,12 +238,12 @@ fn high_end(
         );
         doc.check_cell(next)?;
         if value(doc, scene, next).level != landing {
-            // The positive-side head's first raised centre cell is one
-            // cell before its anchor (BottomRight/BottomLeft TMP profile).
+            // Align the outer cliff shoulders, not the raised centre of the
+            // road. Both heads overhang the low ground by one centre cell.
             return if direction > 0 {
-                Ok(at)
-            } else {
                 step(at, axis, 1)
+            } else {
+                Ok(at)
             };
         }
         at = next;
@@ -369,9 +429,7 @@ pub fn plan(
             cell(b, -2, -1)?
         };
         for (n, origin) in [(first, o1), (last, o2)] {
-            let tile = family
-                .checked_add(u16::try_from(n - 1)?)
-                .context("桥头编号溢出")?;
+            let tile = head_tile(scene, family, n)?;
             for (at, v) in stamp(doc, scene, tile, origin, base)? {
                 ensure!(p.edits.insert(at, v).is_none(), "两端桥头重叠，请增加跨度");
                 footprint.insert(at);

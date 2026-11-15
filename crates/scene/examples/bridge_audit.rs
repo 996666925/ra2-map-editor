@@ -32,6 +32,31 @@ fn verify(
     png: bool,
 ) -> Result<serde_json::Value> {
     let before = doc.snapshot().bytes()?;
+    // Bridgeheads include raised road cells beyond the cliff. Their outside
+    // shoulders must retain the bank profile, or the cliff/bridge seam opens.
+    if p.cliffs.len() == 2 {
+        let axis = usize::from(p.cliffs[0].origin[0] == p.cliffs[1].origin[0]);
+        for head in &p.cliffs {
+            let t = &scene.palette.templates[&(head.tile, 0)];
+            let across = if axis == 0 { t.height } else { t.width };
+            for (sub, s) in t.cells.iter().enumerate() {
+                if s.is_none() {
+                    continue;
+                }
+                let at = [
+                    head.origin[0] + sub as u16 % t.width,
+                    head.origin[1] + sub as u16 / t.width,
+                ];
+                let side = at[1 - axis] - head.origin[1 - axis];
+                if side == 0 || side == across - 1 {
+                    ensure!(
+                        p.edits[&at].level == value(doc, scene, at).level,
+                        "{name}: bridge shoulder changed the cliff profile at {at:?}"
+                    );
+                }
+            }
+        }
+    }
     p.apply(doc)?;
     doc.commit(name);
     let bytes = doc.snapshot().bytes()?;
@@ -112,7 +137,7 @@ fn verify(
         )?;
     }
     Ok(
-        serde_json::json!({"case":name,"terrain_cells":p.edits.len(),"overlay_cells":p.overlays.len(),"engine_reload":true,"undo_redo":true}),
+        serde_json::json!({"case":name,"terrain_cells":p.edits.len(),"overlay_cells":p.overlays.len(),"engine_reload":true,"undo_redo":true,"cliff_profile_preserved":(p.cliffs.len() == 2).then_some(true)}),
     )
 }
 fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json::Value> {
@@ -177,8 +202,11 @@ fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json:
                 );
                 let p = match result {
                     Ok(p) => p,
-                    // New Urban wood heads are larger than the other retail
-                    // heads. Reject spans that overlap their actual TMP cells.
+                    Err(e) if span < 5 && e.to_string().contains("桥梁跨度过短") => {
+                        cases.push(serde_json::json!({"case":format!("{kind:?}-axis{axis}-span{span}"),"short_span_rejected":true}));
+                        continue;
+                    }
+                    // Reject spans that overlap the actual TMP footprints.
                     Err(e) if e.to_string().contains("两端桥头重叠") => {
                         cases.push(serde_json::json!({"case":format!("{kind:?}-axis{axis}-span{span}"),"overlapping_heads_rejected":true}));
                         continue;
@@ -188,7 +216,7 @@ fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json:
                             .with_context(|| format!("short bridge {span}/{axis}/{kind:?}"));
                     }
                 };
-                if span == 3 {
+                if span == 5 {
                     let name = format!("{kind:?}-axis{axis}-short");
                     cases.push(verify(install, &scene, &mut doc, &p, out, &name, true)?);
                     doc.undo();

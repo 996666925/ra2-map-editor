@@ -252,13 +252,7 @@ fn portals(
                 .into_iter()
                 .flatten()
                 .find(|&b| (b..b + 16).contains(&id));
-            family.and_then(|b| match id - b {
-                0 | 1 => Some((0, 0, false)),
-                2 => Some((0, 1, true)),
-                3 | 4 => Some((1, 0, false)),
-                5 => Some((1, 1, true)),
-                _ => None,
-            })
+            family.and_then(|_| crate::bridge_tools::head_profile(scene, id))
         };
         let Some((axis, edge, positive)) = profile else {
             continue;
