@@ -7,6 +7,10 @@ use ra2_map_document::{
 };
 
 fn setup() -> (MapDocument, MapScene) {
+    setup_size(60)
+}
+
+fn setup_size(size: u16) -> (MapDocument, MapScene) {
     let f = Fixture::with_authoring();
     let mut i = f.install();
     i.catalog = Catalog::load(&i.manager, &i.theater);
@@ -15,8 +19,8 @@ fn setup() -> (MapDocument, MapScene) {
         "edit.map",
         "test".into(),
         NewMapOptions {
-            width: 60,
-            height: 60,
+            width: size,
+            height: size,
             level: 4,
             ..Default::default()
         }
@@ -48,6 +52,503 @@ fn complete(doc: &MapDocument, scene: &MapScene, p: &PlateauPlan) {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn polyline_internal_vertex_keeps_native_corners_for_both_sides_and_all_rotations() {
+    let (doc, scene) = setup();
+    for rotation in 0..4 {
+        let rotate = |at: Cell| {
+            let (mut x, mut y) = (i32::from(at[0]) - 60, i32::from(at[1]) - 60);
+            for _ in 0..rotation {
+                (x, y) = (-y, x);
+            }
+            [(60 + x) as u16, (60 + y) as u16]
+        };
+        let path = [[40, 60], [60, 60], [60, 40]].map(rotate);
+        let closed = [path[0], path[1], path[2], rotate([40, 40]), path[0]];
+        for high_left in [true, false] {
+            let reference = polyline(&doc, &scene, &closed, 4, high_left).unwrap();
+            let p = polyline(&doc, &scene, &path, 4, high_left).unwrap();
+            let reversed: Vec<_> = path.into_iter().rev().collect();
+            assert_eq!(
+                p.edits,
+                polyline(&doc, &scene, &reversed, 4, !high_left)
+                    .unwrap()
+                    .edits
+            );
+            let corners: Vec<_> = reference
+                .cliffs
+                .iter()
+                .filter(|s| {
+                    let dx = i32::from(s.origin[0]) - 60;
+                    let dy = i32::from(s.origin[1]) - 60;
+                    dx * dx + dy * dy <= 4
+                })
+                .collect();
+            assert!(!corners.is_empty());
+            for corner in corners {
+                assert!(
+                    p.cliffs
+                        .iter()
+                        .any(|s| s.origin == corner.origin && s.tile == corner.tile),
+                    "joint must preserve the whole native corner: rotation={rotation}, left={high_left}, origin={:?}",
+                    corner.origin
+                );
+                for (at, v) in stamp(&doc, &scene, corner.tile, corner.origin, 4).unwrap() {
+                    assert_eq!(p.edits.get(&at), Some(&v));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn polyline_oblique_joint_matches_the_same_corner_when_closed() {
+    let (doc, scene) = setup_size(80);
+    for rotation in 0..4 {
+        let rotate = |at: Cell| {
+            let (mut x, mut y) = (i32::from(at[0]) - 80, i32::from(at[1]) - 80);
+            for _ in 0..rotation {
+                (x, y) = (-y, x);
+            }
+            [(80 + x) as u16, (80 + y) as u16]
+        };
+        let path = [[60, 58], [80, 80], [84, 60]].map(rotate);
+        let closed = [path[0], path[1], path[2], rotate([64, 38]), path[0]];
+        for high_left in [true, false] {
+            let reference = polyline(&doc, &scene, &closed, 4, high_left).unwrap();
+            let p = polyline(&doc, &scene, &path, 4, high_left).unwrap();
+            assert!(p.interior.is_empty());
+            let reversed: Vec<_> = path.into_iter().rev().collect();
+            assert_eq!(
+                p.edits,
+                polyline(&doc, &scene, &reversed, 4, !high_left)
+                    .unwrap()
+                    .edits
+            );
+            let corners: Vec<_> = reference
+                .cliffs
+                .iter()
+                .filter(|s| {
+                    let dx = i32::from(s.origin[0]) - 80;
+                    let dy = i32::from(s.origin[1]) - 80;
+                    dx * dx + dy * dy <= 16
+                })
+                .collect();
+            assert!(!corners.is_empty());
+            for corner in corners {
+                assert!(
+                    p.cliffs
+                        .iter()
+                        .any(|s| s.origin == corner.origin && s.tile == corner.tile),
+                    "oblique joint must match the closed corner: rotation={rotation}, left={high_left}, missing={corner:?}, actual={:?}",
+                    p.cliffs
+                        .iter()
+                        .filter(|s| s.origin[0].abs_diff(80) <= 4 && s.origin[1].abs_diff(80) <= 4)
+                        .collect::<Vec<_>>()
+                );
+                for (at, v) in stamp(&doc, &scene, corner.tile, corner.origin, 4).unwrap() {
+                    assert_eq!(p.edits.get(&at), Some(&v));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn polyline_closed_direction_chooses_plateau_or_pit_without_changing_the_exterior() {
+    let (mut doc, scene) = setup();
+    let clockwise = [[40, 40], [64, 40], [64, 64], [40, 64], [40, 40]];
+    let mut counterclockwise = clockwise;
+    counterclockwise.reverse();
+    let before = doc.snapshot().bytes().unwrap();
+    for (path, high_left, target) in [
+        (&clockwise, false, 8),
+        (&clockwise, true, 0),
+        (&counterclockwise, true, 8),
+        (&counterclockwise, false, 0),
+    ] {
+        let p = polyline(&doc, &scene, path, 4, high_left).unwrap();
+        assert_eq!(p.edits[&[50, 50]].level, target);
+        assert!(
+            !p.edits.contains_key(&[30, 30]),
+            "the exterior must retain its original height"
+        );
+        p.apply(&mut doc).unwrap();
+        complete(&doc, &scene, &p);
+        assert_eq!(value(&doc, &scene, [30, 30]).level, 4);
+        doc.commit("directed closed cliff");
+        doc.undo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn polyline_pits_require_raised_matching_exterior_and_support_the_height_limit() {
+    let (mut doc, scene) = setup();
+    let path = [[40, 40], [64, 40], [64, 64], [40, 64], [40, 40]];
+    for ground in [0, 127] {
+        for c in &scene.cells {
+            let at = [c.rx, c.ry];
+            if doc.check_cell(at).is_ok() {
+                doc.set(
+                    Target::Terrain(at),
+                    Some(Value::Terrain(TerrainValue {
+                        level: ground,
+                        ..value(&doc, &scene, at)
+                    })),
+                )
+                .unwrap();
+            }
+        }
+        doc.commit("reference ground");
+        let before = doc.snapshot().bytes().unwrap();
+        if ground == 0 {
+            let error = polyline(&doc, &scene, &path, 0, true).err().unwrap();
+            assert!(error.to_string().contains("请先抬高地面"));
+            let error = polyline(&doc, &scene, &path, 4, true).err().unwrap();
+            assert!(error.to_string().contains("轮廓外侧地面须统一"));
+            assert_eq!(doc.snapshot().bytes().unwrap(), before);
+            continue;
+        }
+        let p = polyline(&doc, &scene, &path, ground, true).unwrap();
+        assert_eq!(p.base, 123);
+        assert!(p.interior.iter().all(|at| p.edits[at].level == 123));
+        assert!(p.edits.values().all(|v| (123..=127).contains(&v.level)));
+        p.apply(&mut doc).unwrap();
+        complete(&doc, &scene, &p);
+        for c in &scene.cells {
+            let at = [c.rx, c.ry];
+            if doc.check_cell(at).is_ok() && !p.edits.contains_key(&at) {
+                assert_eq!(value(&doc, &scene, at).level, ground);
+            }
+        }
+        doc.commit("maximum height pit");
+        doc.undo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn polyline_open_faces_all_directions_keep_only_complete_edge_templates() {
+    let (mut doc, scene) = setup();
+    let before = doc.snapshot().bytes().unwrap();
+    for high_left in [false, true] {
+        for (dx, dy) in [
+            (16, 0),
+            (0, 16),
+            (-16, 0),
+            (0, -16),
+            (16, 16),
+            (-16, 16),
+            (16, -16),
+            (-16, -16),
+        ] {
+            let a = [60, 60];
+            let b = offset(a, dx, dy).unwrap();
+            let p = polyline(&doc, &scene, &[a, b], 4, high_left).unwrap();
+            assert!(!p.cliffs.is_empty());
+            assert!(
+                p.interior.is_empty(),
+                "open edges must never fill a strip or polygon"
+            );
+            assert_eq!(doc.snapshot().bytes().unwrap(), before);
+            let reversed = polyline(&doc, &scene, &[b, a], 4, !high_left).unwrap();
+            assert_eq!(
+                p.edits, reversed.edits,
+                "reversing the edge and high side preserves geometry"
+            );
+            let mut covered = BTreeSet::new();
+            let mut main_faces = 0;
+            for s in &p.cliffs {
+                let x = i32::from(s.origin[0]) - i32::from(a[0]);
+                let y = i32::from(s.origin[1]) - i32::from(a[1]);
+                let t = dx * x + dy * y;
+                if crate::coastal_cliffs::piece(&scene, s.tile).is_some()
+                    && (dx * y - dy * x).abs() <= 2 * (dx.abs() + dy.abs())
+                    && (0..=dx * dx + dy * dy).contains(&t)
+                {
+                    main_faces += 1;
+                }
+                let template = &scene.palette.templates[&(s.tile, 0)];
+                for (i, c) in template.cells.iter().enumerate() {
+                    if c.is_some() {
+                        covered.insert(
+                            offset(
+                                s.origin,
+                                i as i32 % i32::from(template.width),
+                                i as i32 / i32::from(template.width),
+                            )
+                            .unwrap(),
+                        );
+                    }
+                }
+            }
+            assert!(main_faces > 0, "the requested cliff face must be present");
+            assert_eq!(
+                covered,
+                p.edits.keys().copied().collect(),
+                "open paths must write cliff template cells only"
+            );
+            for s in &p.cliffs {
+                assert!(
+                    crate::coastal_cliffs::piece(&scene, s.tile).is_some(),
+                    "open paths must never add ramp templates"
+                );
+                let x = i32::from(s.origin[0]) - i32::from(a[0]);
+                let y = i32::from(s.origin[1]) - i32::from(a[1]);
+                assert!((dx * y - dy * x).abs() <= 2 * (dx.abs() + dy.abs()));
+                assert!(
+                    (0..=dx * dx + dy * dy).contains(&(dx * x + dy * y)),
+                    "no end caps or return faces"
+                );
+            }
+            p.apply(&mut doc).unwrap();
+            complete(&doc, &scene, &p);
+            doc.commit("open edge");
+            let saved = doc.snapshot().bytes().unwrap();
+            let (loaded, _) = ra2_map_document::source::SourceMap::parse(
+                "open.map".into(),
+                "test".into(),
+                saved.clone(),
+            )
+            .unwrap();
+            let reopened = MapDocument::new(loaded.edit_base.as_ref().unwrap().clone());
+            for (&at, &v) in &p.edits {
+                assert_eq!(reopened.terrain(at), Some(v));
+            }
+            doc.undo();
+            assert_eq!(doc.snapshot().bytes().unwrap(), before);
+            doc.redo();
+            assert_eq!(doc.snapshot().bytes().unwrap(), saved);
+            doc.undo();
+        }
+    }
+}
+
+#[test]
+fn polyline_closed_unifies_uneven_interior_independent_of_direction() {
+    let (mut doc, scene) = setup();
+    doc.set(
+        Target::Terrain([50, 50]),
+        Some(Value::Terrain(TerrainValue {
+            level: 12,
+            ..value(&doc, &scene, [50, 50])
+        })),
+    )
+    .unwrap();
+    doc.commit("uneven ground");
+    let before = doc.snapshot().bytes().unwrap();
+    let path = [[40, 40], [64, 40], [64, 64], [40, 64], [40, 40]];
+    let p = polyline(&doc, &scene, &path, 4, false).unwrap();
+    let mut reversed = path;
+    reversed.reverse();
+    assert_eq!(
+        p.edits,
+        polyline(&doc, &scene, &reversed, 4, true).unwrap().edits
+    );
+    assert!(!p.interior.is_empty());
+    assert!(p.interior.iter().all(|at| p.edits[at].level == 8));
+    p.apply(&mut doc).unwrap();
+    complete(&doc, &scene, &p);
+    assert_eq!(doc.terrain([50, 50]).unwrap().level, 8);
+    doc.commit("closed cliff");
+    doc.undo();
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+fn polyline_oblique_edges_do_not_accept_uncovered_height_boundaries() {
+    let (doc, scene) = setup();
+    let start = [55, 55];
+    let mut oblique = 0;
+    for dx in [-17, -11, -5, 0, 5, 11, 17] {
+        for dy in [-17, -11, -5, 0, 5, 11, 17] {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let end = offset(start, dx, dy).unwrap();
+            for high_left in [false, true] {
+                let Ok(p) = polyline(&doc, &scene, &[start, end], 4, high_left) else {
+                    continue;
+                };
+                if dx != 0 && dy != 0 && dx.abs() != dy.abs() {
+                    oblique += 1;
+                }
+                assert_eq!(
+                    p.edits,
+                    polyline(&doc, &scene, &[end, start], 4, !high_left)
+                        .unwrap()
+                        .edits
+                );
+                let rim: BTreeSet<_> = cell_line(start, end).into_iter().collect();
+                let high = |at: Cell| {
+                    let x = i32::from(at[0]) - i32::from(start[0]);
+                    let y = i32::from(at[1]) - i32::from(start[1]);
+                    rim.contains(&at)
+                        || if high_left {
+                            dx * y - dy * x <= 0
+                        } else {
+                            dx * y - dy * x >= 0
+                        }
+                };
+                let project = |at: Cell| {
+                    let x = i32::from(at[0]) - i32::from(start[0]);
+                    let y = i32::from(at[1]) - i32::from(start[1]);
+                    (x * dx + y * dy) as f64 / f64::from(dx * dx + dy * dy)
+                };
+                for at in cliff_tools::rectangle([35, 35], [75, 75]) {
+                    for (nx, ny) in [(1, 0), (0, 1)] {
+                        let next = offset(at, nx, ny).unwrap();
+                        if (0.15..0.85).contains(&project(at))
+                            && (0.15..0.85).contains(&project(next))
+                            && high(at) != high(next)
+                        {
+                            assert!(
+                                p.edits.contains_key(&at) || p.edits.contains_key(&next),
+                                "uncovered edge {start:?}->{end:?}, left={high_left}: {at:?}->{next:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        oblique > 0,
+        "the coverage check must exercise accepted oblique lines"
+    );
+}
+
+#[test]
+fn polyline_near_grid_edge_checks_written_templates_not_virtual_padding() {
+    let (doc, scene) = setup();
+    let path = [[5, 59], [5, 63]];
+    for at in path {
+        doc.check_cell(at).unwrap();
+    }
+    for high_left in [true, false] {
+        let p = polyline(&doc, &scene, &path, 4, high_left).unwrap();
+        assert!(!p.edits.is_empty());
+        assert!(p.edits.keys().all(|&at| doc.check_cell(at).is_ok()));
+    }
+    // Actual template cells crossing the Size diamond are still rejected.
+    let path = [[2, 60], [2, 61]];
+    for at in path {
+        doc.check_cell(at).unwrap();
+    }
+    assert!(
+        [true, false]
+            .into_iter()
+            .any(|high_left| polyline(&doc, &scene, &path, 4, high_left).is_err())
+    );
+}
+
+#[test]
+fn polyline_open_faces_preserve_surrounding_ground_at_the_maximum_height() {
+    let (mut doc, scene) = setup();
+    let path = [[50, 55], [70, 55]];
+    let p = polyline(&doc, &scene, &path, 4, true).unwrap();
+    let stamped: BTreeSet<_> = p
+        .cliffs
+        .iter()
+        .flat_map(|s| {
+            stamp(&doc, &scene, s.tile, s.origin, s.base)
+                .unwrap()
+                .into_keys()
+        })
+        .collect();
+    assert_eq!(stamped, p.edits.keys().copied().collect());
+    let at = *p.edits.keys().next().unwrap();
+    doc.set(Target::Overlay(at), Some(Value::Overlay(0, 0)))
+        .unwrap();
+    let before = doc.snapshot().bytes().unwrap();
+    assert!(polyline(&doc, &scene, &path, 4, true).is_err());
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    doc.cancel();
+    for c in &scene.cells {
+        let at = [c.rx, c.ry];
+        if doc.check_cell(at).is_ok() {
+            doc.set(
+                Target::Terrain(at),
+                Some(Value::Terrain(TerrainValue {
+                    level: 123,
+                    ..value(&doc, &scene, at)
+                })),
+            )
+            .unwrap();
+        }
+    }
+    doc.commit("high ground");
+    let before = doc.snapshot().bytes().unwrap();
+    let p = polyline(&doc, &scene, &path, 123, true).unwrap();
+    assert!(p.edits.values().all(|v| (123..=127).contains(&v.level)));
+    assert!(p.edits.values().any(|v| v.level == 127));
+    p.apply(&mut doc).unwrap();
+    complete(&doc, &scene, &p);
+    for c in &scene.cells {
+        let at = [c.rx, c.ry];
+        if doc.check_cell(at).is_ok() && !p.edits.contains_key(&at) {
+            assert_eq!(
+                value(&doc, &scene, at).level,
+                123,
+                "surrounding ground must stay at its original height"
+            );
+            assert!(
+                crate::coastal_cliffs::piece(
+                    &scene,
+                    scene.palette.raw_ids[&value(&doc, &scene, at).tile]
+                )
+                .is_none()
+            );
+        }
+    }
+    doc.commit("supported high cliff");
+    doc.undo();
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+fn polyline_turns_and_protected_cells_are_atomic() {
+    let (mut doc, scene) = setup();
+    for high_left in [false, true] {
+        for path in [
+            vec![[40, 40], [60, 40], [60, 60]],
+            vec![[40, 40], [60, 40], [60, 60], [40, 60]],
+            vec![[40, 40], [60, 60], [70, 50]],
+        ] {
+            let p = polyline(&doc, &scene, &path, 4, high_left).unwrap();
+            let middle = [(path[0][0] + path[1][0]) / 2, (path[0][1] + path[1][1]) / 2];
+            let at = *p
+                .edits
+                .iter()
+                .find(|(at, v)| {
+                    at[0].abs_diff(middle[0]) + at[1].abs_diff(middle[1]) <= 3
+                        && crate::coastal_cliffs::piece(&scene, scene.palette.raw_ids[&v.tile])
+                            .is_some()
+                })
+                .expect("the requested face remains at the middle of the first segment")
+                .0;
+            doc.set(Target::Overlay(at), Some(Value::Overlay(0, 0)))
+                .unwrap();
+            let before = doc.snapshot().bytes().unwrap();
+            assert!(polyline(&doc, &scene, &path, 4, high_left).is_err());
+            assert_eq!(doc.snapshot().bytes().unwrap(), before);
+            doc.cancel();
+        }
+    }
+    for path in [&[][..], &[[40, 40]][..], &[[40, 40], [40, 40]][..]] {
+        assert!(polyline(&doc, &scene, path, 4, true).is_err());
+    }
+    assert!(polyline(&doc, &scene, &[[40, 40], [60, 40]], 124, true).is_err());
+    for path in [
+        vec![[40, 40], [60, 60], [40, 60], [60, 40]],
+        vec![[40, 40], [60, 40], [50, 40]],
+        vec![[40, 40], [60, 40], [60, 60], [50, 40]],
+    ] {
+        assert!(polyline(&doc, &scene, &path, 4, true).is_err());
     }
 }
 #[test]

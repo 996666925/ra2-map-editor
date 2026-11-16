@@ -160,6 +160,7 @@ impl Editor {
             self.terrain_mode,
             TerrainMode::Plateau
                 | TerrainMode::CliffOutline
+                | TerrainMode::CliffPolyline
                 | TerrainMode::CliffFront
                 | TerrainMode::CliffBack
                 | TerrainMode::RampEntrance
@@ -168,7 +169,11 @@ impl Editor {
             return;
         }
         let Some(doc) = self.doc.as_ref() else { return };
-        let mut max = 123u8;
+        let mut max = if self.terrain_mode == TerrainMode::CliffPolyline {
+            127u8
+        } else {
+            123u8
+        };
         let inferred = if manual {
             let Some(brush) = scene.brushes.get(self.brush) else {
                 return;
@@ -220,7 +225,11 @@ impl Editor {
                 .unwrap_or(0)
         } else {
             self.terrain_hover.map_or(0, |at| {
-                ra2_map_scene::cliff_authoring::infer_base(doc, scene, at)
+                if self.terrain_mode == TerrainMode::CliffPolyline {
+                    terrain_tools::value(doc, scene, at).level
+                } else {
+                    ra2_map_scene::cliff_authoring::infer_base(doc, scene, at)
+                }
             })
         };
         let level = (i16::from(self.template_level.unwrap_or(inferred)) + i16::from(delta))

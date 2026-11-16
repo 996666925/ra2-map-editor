@@ -5,7 +5,7 @@ use crate::{
     terrain_tools::value,
 };
 use anyhow::{Context, Result, ensure};
-use ra2_map_document::document::{Cell, MapDocument, TerrainValue};
+use ra2_map_document::document::{Cell, MapDocument, TerrainValue, cell_line};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
@@ -449,6 +449,195 @@ pub fn line(
         }
     }
     reshape(doc, scene, band, base, false)
+}
+
+/// Clicked vertices describe a directed edge; `high_left` selects the high
+/// side as seen on the isometric canvas. Repeating the first vertex closes it.
+/// Closed paths keep the reference exterior height and raise or lower the
+/// interior by four levels according to the selected high side and winding.
+pub fn polyline(
+    doc: &MapDocument,
+    scene: &MapScene,
+    path: &[Cell],
+    base: u8,
+    high_left: bool,
+) -> Result<PlateauPlan> {
+    let mut path = path.to_vec();
+    path.dedup();
+    ensure!(path.len() >= 2, "请点击至少两个不同的悬崖折点");
+    for &at in &path {
+        doc.check_cell(at)?;
+    }
+    let closed = path.first() == path.last();
+    validate_polyline_path(&path)?;
+    let pit = polyline_is_pit(&path, high_left);
+    ensure!(
+        base <= if pit {
+            cliff_tools::MAX_CLIFF_LEVEL
+        } else {
+            cliff_tools::MAX_CLIFF_BASE
+        },
+        "基准高度超出悬崖范围"
+    );
+    let mut p = if closed {
+        ensure!(path.len() >= 4, "闭合悬崖需要至少三个不同的折点");
+        let interior = cliff_tools::enclose(&path)?;
+        for at in interior
+            .iter()
+            .flat_map(|&at| crate::terrain_tools::neighbors(at))
+        {
+            if !interior.contains(&at) && doc.check_cell(at).is_ok() {
+                ensure!(
+                    value(doc, scene, at).level == base,
+                    "轮廓外侧地面须统一为基准 {base} 层；请先调整地面高度"
+                );
+            }
+        }
+        if pit {
+            let floor = base
+                .checked_sub(4)
+                .context("生成坑需要至少 4 层的外侧地面；请先抬高地面再绘制")?;
+            // The drawn contour is the high rim. Keep it on the same side
+            // as an open stroke and lower only the area strictly inside it.
+            let rim: BTreeSet<_> = path
+                .windows(2)
+                .flat_map(|ab| cell_line(ab[0], ab[1]))
+                .collect();
+            let floor_cells = interior.difference(&rim).copied().collect();
+            cliff_tools::pit_geometry(doc, scene, floor_cells, floor)?
+        } else {
+            cliff_tools::geometry(doc, scene, interior, base)?
+        }
+    } else {
+        // Virtual high ground selects the facing of the cliff templates.
+        // Only the finite edge is written; open paths never fill or grade land.
+        let min = path
+            .iter()
+            .fold([u16::MAX; 2], |a, p| [a[0].min(p[0]), a[1].min(p[1])]);
+        let max = path
+            .iter()
+            .fold([0; 2], |a, p| [a[0].max(p[0]), a[1].max(p[1])]);
+        let lo = min.map(|v| v.saturating_sub(4));
+        let hi = max.map(|v| v.saturating_add(4).min(MAX_CELL_SIDE - 1));
+        let mut high = BTreeSet::new();
+        let mut edge = BTreeSet::new();
+        for at in cliff_tools::rectangle(lo, hi) {
+            let mut nearest = (f64::INFINITY, 0., false, None);
+            for (i, ab) in path.windows(2).enumerate() {
+                let dx = f64::from(ab[1][0]) - f64::from(ab[0][0]);
+                let dy = f64::from(ab[1][1]) - f64::from(ab[0][1]);
+                let x = f64::from(at[0]) - f64::from(ab[0][0]);
+                let y = f64::from(at[1]) - f64::from(ab[0][1]);
+                let t = (x * dx + y * dy) / (dx * dx + dy * dy);
+                let distance =
+                    (x - t.clamp(0., 1.) * dx).powi(2) + (y - t.clamp(0., 1.) * dy).powi(2);
+                let on_segment = (0. ..=1.).contains(&t);
+                if distance < nearest.0 || distance == nearest.0 && on_segment && !nearest.2 {
+                    nearest = (
+                        distance,
+                        dx * y - dy * x,
+                        on_segment,
+                        (!on_segment).then_some(if t < 0. { i } else { i + 1 }),
+                    );
+                }
+            }
+            let high_side = |cross: f64| if high_left { cross <= 0. } else { cross >= 0. };
+            // Past a shared vertex both segment projections can be outside
+            // their finite ranges. The turn's inner side is the intersection
+            // of the two half-planes; its outer side is their union.
+            let on_high_side = if let Some(i) = nearest.3.filter(|&i| i > 0 && i + 1 < path.len()) {
+                let cross = |a: Cell, b: Cell, c: Cell| {
+                    (f64::from(b[0]) - f64::from(a[0])) * (f64::from(c[1]) - f64::from(a[1]))
+                        - (f64::from(b[1]) - f64::from(a[1])) * (f64::from(c[0]) - f64::from(a[0]))
+                };
+                let incoming = high_side(cross(path[i - 1], path[i], at));
+                let outgoing = high_side(cross(path[i], path[i + 1], at));
+                if (cross(path[i - 1], path[i], path[i + 1]) < 0.) == high_left {
+                    incoming && outgoing
+                } else {
+                    incoming || outgoing
+                }
+            } else {
+                high_side(nearest.1)
+            };
+            if on_high_side {
+                high.insert(at);
+            }
+            // A convex joint lies past both finite segment projections. It
+            // still needs its complete native corner; free endpoints do not.
+            let joint = path[1..path.len() - 1].iter().any(|v| {
+                let dx = i32::from(at[0]) - i32::from(v[0]);
+                let dy = i32::from(at[1]) - i32::from(v[1]);
+                dx * dx + dy * dy <= 4
+            });
+            if nearest.0 <= 4. && (nearest.2 || joint) {
+                edge.insert(at);
+            }
+        }
+        // Match the closed compiler's rasterized high rim. An oblique
+        // segment can visit cells on either side of its mathematical line.
+        high.extend(path.windows(2).flat_map(|ab| cell_line(ab[0], ab[1])));
+        cliff_tools::open_geometry(doc, scene, high, base, &edge)?
+    };
+    crate::coastal_cliffs::adapt(doc, scene, &mut p)?;
+    if closed {
+        cliff_tools::validate_polyline(doc, scene, &p.edits, p.base)?;
+    } else {
+        cliff_tools::validate(doc, scene, &p.edits, base, false)?;
+    }
+    Ok(p)
+}
+
+/// Winding is measured in screen coordinates: positive area is clockwise.
+/// A clockwise loop has its interior on the drawing direction's right side.
+pub fn polyline_is_pit(path: &[Cell], high_left: bool) -> bool {
+    if path.len() < 4 || path.first() != path.last() {
+        return false;
+    }
+    let area: i64 = path
+        .windows(2)
+        .map(|ab| {
+            i64::from(ab[0][0]) * i64::from(ab[1][1]) - i64::from(ab[1][0]) * i64::from(ab[0][1])
+        })
+        .sum();
+    area != 0 && (area < 0) != high_left
+}
+
+fn validate_polyline_path(path: &[Cell]) -> Result<()> {
+    let closed = path.first() == path.last();
+    // A directed edge must have an unambiguous side. Reject crossings, touches
+    // and retraced segments before selecting any templates.
+    let cross = |a: Cell, b: Cell, c: Cell| {
+        (i64::from(b[0]) - i64::from(a[0])) * (i64::from(c[1]) - i64::from(a[1]))
+            - (i64::from(b[1]) - i64::from(a[1])) * (i64::from(c[0]) - i64::from(a[0]))
+    };
+    for (i, ab) in path.windows(2).enumerate() {
+        for (j, cd) in path.windows(2).enumerate().skip(i + 1) {
+            if j == i + 1 || closed && i == 0 && j == path.len() - 2 {
+                let (a, b, c) = if j == i + 1 {
+                    (ab[0], ab[1], cd[1])
+                } else {
+                    (cd[0], cd[1], ab[1])
+                };
+                let dot = (i64::from(b[0]) - i64::from(a[0])) * (i64::from(c[0]) - i64::from(b[0]))
+                    + (i64::from(b[1]) - i64::from(a[1])) * (i64::from(c[1]) - i64::from(b[1]));
+                ensure!(
+                    cross(a, b, c) != 0 || dot >= 0,
+                    "悬崖折线不能回折重叠，请撤回折点"
+                );
+                continue;
+            }
+            let overlap = (0..2).all(|axis| {
+                ab[0][axis].min(ab[1][axis]) <= cd[0][axis].max(cd[1][axis])
+                    && cd[0][axis].min(cd[1][axis]) <= ab[0][axis].max(ab[1][axis])
+            });
+            let intersects = overlap
+                && cross(ab[0], ab[1], cd[0]).signum() * cross(ab[0], ab[1], cd[1]).signum() <= 0
+                && cross(cd[0], cd[1], ab[0]).signum() * cross(cd[0], cd[1], ab[1]).signum() <= 0;
+            ensure!(!intersects, "悬崖折线不能自交或重复经过折点，请撤回折点");
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn stamp(

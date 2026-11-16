@@ -25,6 +25,7 @@ impl TerrainPage {
             | TerrainMode::CliffHeightRepair
             | TerrainMode::Plateau
             | TerrainMode::CliffOutline
+            | TerrainMode::CliffPolyline
             | TerrainMode::CliffFront
             | TerrainMode::CliffBack
             | TerrainMode::PlateauCut
@@ -53,6 +54,7 @@ impl TerrainPage {
                 (HeightFill, "填高地"),
                 (CliffHeightRepair, "修正悬崖高度"),
                 (CliffOutline, "围合悬崖 C"),
+                (CliffPolyline, "折线悬崖"),
                 (Plateau, "矩形高台 H"),
                 (CliffFront, "正面悬崖"),
                 (CliffBack, "背面悬崖"),
@@ -157,7 +159,7 @@ impl Editor {
                     (TerrainMode::Subtile, tr!("画笔")),
                     (TerrainMode::Fill, tr!("铺地 G")),
                     (TerrainMode::CliffOutline, tr!("围合悬崖 C")),
-                    (TerrainMode::CliffFront, tr!("悬崖线")),
+                    (TerrainMode::CliffPolyline, tr!("折线悬崖")),
                     (TerrainMode::Plateau, tr!("高台 H")),
                     (TerrainMode::HeightFill, tr!("填高地")),
                     (TerrainMode::RampEntrance, tr!("坡道")),

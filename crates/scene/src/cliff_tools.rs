@@ -200,12 +200,46 @@ pub fn plan(
     Ok(result)
 }
 
+/// Materialize only complete templates along the requested open edge.
+/// The high-side mask is virtual; surrounding ground is never written.
+pub(crate) fn open_geometry(
+    doc: &MapDocument,
+    scene: &MapScene,
+    interior: BTreeSet<Cell>,
+    base: u8,
+    edge: &BTreeSet<Cell>,
+) -> Result<PlateauPlan> {
+    geometry_impl(doc, scene, interior, base, Some(edge), false)
+}
+
 /// Pure topology compiler, shared by new plateaus and existing-terrain edits.
 pub(crate) fn geometry(
     doc: &MapDocument,
     scene: &MapScene,
     interior: BTreeSet<Cell>,
     base: u8,
+) -> Result<PlateauPlan> {
+    geometry_impl(doc, scene, interior, base, None, false)
+}
+
+/// Inward-facing cliffs with a lowered floor; ordinary exterior ground is
+/// never included in the edits. `base` is the floor's low-ground level.
+pub(crate) fn pit_geometry(
+    doc: &MapDocument,
+    scene: &MapScene,
+    interior: BTreeSet<Cell>,
+    base: u8,
+) -> Result<PlateauPlan> {
+    geometry_impl(doc, scene, interior, base, None, true)
+}
+
+fn geometry_impl(
+    doc: &MapDocument,
+    scene: &MapScene,
+    interior: BTreeSet<Cell>,
+    base: u8,
+    edge: Option<&BTreeSet<Cell>>,
+    low_inside: bool,
 ) -> Result<PlateauPlan> {
     ensure!(
         base <= MAX_CLIFF_BASE,
@@ -226,8 +260,15 @@ pub(crate) fn geometry(
         interior.iter().map(|p| p[1]).max().unwrap(),
     ];
     ensure!(max[0] > min[0] && max[1] > min[1], "高台区域至少为 2×2 格");
-    let lo = (i32::from(min[0]) - 3, i32::from(min[1]) - 3);
-    let hi = (i32::from(max[0]) + 3, i32::from(max[1]) + 3);
+    let mut lo = (i32::from(min[0]) - 3, i32::from(min[1]) - 3);
+    let mut hi = (i32::from(max[0]) + 3, i32::from(max[1]) + 3);
+    if edge.is_some() {
+        lo = (lo.0.max(0), lo.1.max(0));
+        hi = (
+            hi.0.min(i32::from(MAX_CELL_SIDE) - 1),
+            hi.1.min(i32::from(MAX_CELL_SIDE) - 1),
+        );
+    }
     ensure!(
         lo.0 >= 0
             && lo.1 >= 0
@@ -240,7 +281,7 @@ pub(crate) fn geometry(
         for y in lo.1..=hi.1 {
             levels.insert(
                 (x, y),
-                base + if interior.contains(&[x as u16, y as u16]) {
+                base + if interior.contains(&[x as u16, y as u16]) != low_inside {
                     4
                 } else {
                     0
@@ -253,6 +294,9 @@ pub(crate) fn geometry(
     let mut stamped = BTreeMap::new();
     let mut cliffs = Vec::new();
     for (x, y) in coords {
+        if edge.is_some_and(|edge| !edge.contains(&[x as u16, y as u16])) {
+            continue;
+        }
         if stamped.contains_key(&[x as u16, y as u16]) {
             continue;
         }
@@ -359,7 +403,19 @@ pub(crate) fn geometry(
         });
     }
     ensure!(!cliffs.is_empty(), "未能生成悬崖边界");
+    if edge.is_some() {
+        return Ok(PlateauPlan {
+            edits: stamped,
+            overlays: BTreeMap::new(),
+            cliffs,
+            interior: BTreeSet::new(),
+            base,
+        });
+    }
     for &at in &interior {
+        if low_inside {
+            continue;
+        }
         ensure!(
             levels.get(&(i32::from(at[0]), i32::from(at[1]))) == Some(&(base + 4)),
             "轮廓过窄，无法保留连续高台内部；请扩大区域"
@@ -382,9 +438,21 @@ pub(crate) fn geometry(
             }
         }
     }
+    let interior = if low_inside {
+        let floor: BTreeSet<_> = interior
+            .into_iter()
+            .filter(|at| !stamped.contains_key(at))
+            .collect();
+        ensure!(!floor.is_empty(), "坑内没有可用的平地，请扩大轮廓");
+        floor
+    } else {
+        interior
+    };
     let mut edits = stamped;
     for (&(x, y), &level) in &levels {
-        if level == base + 4 {
+        if !low_inside && level == base + 4
+            || low_inside && interior.contains(&[x as u16, y as u16])
+        {
             let at = [x as u16, y as u16];
             edits.entry(at).or_insert_with(|| TerrainValue {
                 level,
@@ -407,6 +475,28 @@ pub(crate) fn validate(
     edits: &BTreeMap<Cell, TerrainValue>,
     base: u8,
     existing: bool,
+) -> Result<()> {
+    validate_impl(doc, scene, edits, base, existing, false)
+}
+
+/// A newly enclosed plateau flattens ordinary ground of differing elevations.
+/// Special templates and occupied cells retain the usual protection.
+pub(crate) fn validate_polyline(
+    doc: &MapDocument,
+    scene: &MapScene,
+    edits: &BTreeMap<Cell, TerrainValue>,
+    base: u8,
+) -> Result<()> {
+    validate_impl(doc, scene, edits, base, false, true)
+}
+
+fn validate_impl(
+    doc: &MapDocument,
+    scene: &MapScene,
+    edits: &BTreeMap<Cell, TerrainValue>,
+    base: u8,
+    existing: bool,
+    flatten: bool,
 ) -> Result<()> {
     ensure!(base <= MAX_CLIFF_BASE, "低地高度超出悬崖基准范围");
     let ids = scene.palette.tile_ids.context("当前环境没有地形配置")?;
@@ -441,7 +531,9 @@ pub(crate) fn validate(
             && crate::shore_tools::id(scene, *v)
                 .is_some_and(|t| crate::coastal_cliffs::piece(scene, t).is_some());
         ensure!(
-            (if existing {
+            (if flatten {
+                old.level <= MAX_CLIFF_LEVEL
+            } else if existing {
                 (base..=base + 4).contains(&old.level)
             } else {
                 old.level == base

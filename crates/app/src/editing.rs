@@ -141,6 +141,7 @@ pub struct Editor {
     pub template_level: Option<u8>,
     terrain_hover: Option<Cell>,
     cliff_repair_base: u8,
+    cliff_high_left: bool,
     pub bridge_kind: ra2_map_scene::bridge_tools::BridgeKind,
     pub auto_walls: bool,
     stroke: Option<Stroke>,
@@ -247,6 +248,7 @@ impl Editor {
             template_level: None,
             terrain_hover: None,
             cliff_repair_base: 0,
+            cliff_high_left: true,
             bridge_kind: Default::default(),
             auto_walls: true,
             stroke: None,
@@ -679,6 +681,7 @@ impl Editor {
         if undo || redo {
             self.history(redo, scene);
         }
+        self.cliff_polyline_shortcuts(ctx, scene);
         self.tool_shortcuts(ctx);
         self.terrain_placement_shortcuts(ctx, scene);
         if self.stroking {

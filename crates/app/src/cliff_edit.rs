@@ -14,6 +14,7 @@ struct Gesture {
     start: Cell,
     path: Vec<Cell>,
     base: u8,
+    high_left: bool,
     bridge: ra2_map_scene::bridge_tools::BridgeKind,
 }
 #[derive(PartialEq)]
@@ -24,6 +25,7 @@ struct Key {
     mode: TerrainMode,
     path: Vec<Cell>,
     base: u8,
+    high_left: bool,
     bridge: ra2_map_scene::bridge_tools::BridgeKind,
 }
 struct Preview {
@@ -48,7 +50,7 @@ impl PlateauEdit {
         }
         if !matches!(
             g.mode,
-            TerrainMode::CliffOutline | TerrainMode::WaterOutline
+            TerrainMode::CliffOutline | TerrainMode::CliffPolyline | TerrainMode::WaterOutline
         ) {
             path = vec![
                 g.start,
@@ -66,10 +68,20 @@ impl PlateauEdit {
             mode: g.mode,
             path,
             base: g.base,
+            high_left: g.high_left,
             bridge: g.bridge,
         };
         if self.preview.as_ref().is_none_or(|p| p.key != key) {
             let result = (|| -> Result<Arc<PlateauPlan>> {
+                if key.mode == TerrainMode::CliffPolyline {
+                    return Ok(Arc::new(cliff_authoring::polyline(
+                        doc,
+                        scene,
+                        &key.path,
+                        key.base,
+                        key.high_left,
+                    )?));
+                }
                 if key.mode == TerrainMode::CliffHeightRepair {
                     return Ok(Arc::new(ra2_map_scene::height_tools::repair(
                         doc,
@@ -165,6 +177,65 @@ impl PlateauEdit {
     }
 }
 impl Editor {
+    pub(super) fn cliff_polyline_shortcuts(&mut self, ctx: &egui::Context, scene: &MapScene) {
+        if !self
+            .plateau
+            .gesture
+            .as_ref()
+            .is_some_and(|g| g.mode == TerrainMode::CliffPolyline)
+        {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            self.finish_plateau(scene);
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)) {
+            let g = self.plateau.gesture.as_mut().unwrap();
+            if g.path.len() > 1 {
+                g.path.pop();
+                self.plateau.preview = None;
+            } else {
+                self.cancel_active(scene);
+            }
+        }
+    }
+
+    fn finish_plateau(&mut self, scene: &MapScene) {
+        let Some(g) = self.plateau.gesture.as_ref() else {
+            return;
+        };
+        let last = *g.path.last().unwrap();
+        let mode = g.mode;
+        let result = self
+            .plateau
+            .generate(self.doc.as_ref().unwrap(), scene, last);
+        // Keep an invalid polyline editable so its last vertex can be removed.
+        if mode == TerrainMode::CliffPolyline
+            && let Err(ref e) = result
+        {
+            self.status = e.clone();
+            return;
+        }
+        self.plateau.cancel();
+        self.stroking = false;
+        match result {
+            Ok(plan) => match plan.apply(self.doc.as_mut().unwrap()) {
+                Ok(cells) => {
+                    self.feedback = cells.into_iter().collect();
+                    self.commit(scene, mode.name());
+                    self.status = tr!(
+                        "{arg0} · {arg1} 格 · {arg2} 个地形模板 · {arg3} 个桥面格",
+                        arg0 = mode.name(),
+                        arg1 = self.feedback.len(),
+                        arg2 = plan.cliffs.len(),
+                        arg3 = plan.overlays.len()
+                    );
+                }
+                Err(e) => self.abort_stroke(scene, e),
+            },
+            Err(e) => self.abort_stroke(scene, anyhow::anyhow!(e)),
+        }
+    }
+
     pub(crate) fn plateau_preview_plan(
         &mut self,
         scene: &MapScene,
@@ -188,6 +259,23 @@ impl Editor {
         {
             return false;
         }
+        if self
+            .plateau
+            .gesture
+            .as_ref()
+            .is_some_and(|g| g.mode == TerrainMode::CliffPolyline)
+        {
+            if press && let Some(at) = at {
+                let g = self.plateau.gesture.as_mut().unwrap();
+                if g.path.last() != Some(&at) {
+                    g.path.push(at);
+                    if at == g.start && g.path.len() >= 4 {
+                        self.finish_plateau(scene);
+                    }
+                }
+            }
+            return true;
+        }
         if press && let Some(at) = at {
             let Some(doc) = self.doc.as_ref() else {
                 return true;
@@ -199,6 +287,7 @@ impl Editor {
                 mode: self.terrain_mode,
                 start: at,
                 path: vec![at],
+                high_left: self.cliff_high_left,
                 bridge: self.bridge_kind,
                 base: if self.terrain_mode == TerrainMode::HeightFill {
                     self.flatten_level
@@ -206,7 +295,9 @@ impl Editor {
                     self.cliff_repair_base
                 } else {
                     self.template_level.unwrap_or_else(|| {
-                        if self.terrain_mode.joining() {
+                        if self.terrain_mode.joining()
+                            || self.terrain_mode == TerrainMode::CliffPolyline
+                        {
                             terrain_tools::value(doc, scene, at).level
                         } else if self.terrain_mode == TerrainMode::Bridge {
                             terrain_tools::value(doc, scene, at)
@@ -218,6 +309,9 @@ impl Editor {
                     })
                 },
             });
+            if self.terrain_mode == TerrainMode::CliffPolyline {
+                return true;
+            }
         }
         if let Some(g) = self.plateau.gesture.as_mut() {
             if (down || press || release)
@@ -227,30 +321,7 @@ impl Editor {
                 g.path.push(at);
             }
             if release || !down {
-                let last = *g.path.last().unwrap();
-                let mode = g.mode;
-                let result = self
-                    .plateau
-                    .generate(self.doc.as_ref().unwrap(), scene, last);
-                self.plateau.cancel();
-                self.stroking = false;
-                match result {
-                    Ok(plan) => match plan.apply(self.doc.as_mut().unwrap()) {
-                        Ok(cells) => {
-                            self.feedback = cells.into_iter().collect();
-                            self.commit(scene, mode.name());
-                            self.status = tr!(
-                                "{arg0} · {arg1} 格 · {arg2} 个地形模板 · {arg3} 个桥面格",
-                                arg0 = mode.name(),
-                                arg1 = self.feedback.len(),
-                                arg2 = plan.cliffs.len(),
-                                arg3 = plan.overlays.len()
-                            );
-                        }
-                        Err(e) => self.abort_stroke(scene, e),
-                    },
-                    Err(e) => self.abort_stroke(scene, anyhow::anyhow!(e)),
-                }
+                self.finish_plateau(scene);
             }
         }
         true
@@ -273,6 +344,8 @@ impl Editor {
                 egui::Align2::LEFT_TOP,
                 if self.picking_height {
                     tr!("点击崖顶或地面拾取高度；此次点击不会修改地图。")
+                } else if self.terrain_mode == TerrainMode::CliffPolyline {
+                    tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。")
                 } else {
                     crate::i18n::text(self.terrain_mode.name())
                 },
@@ -531,6 +604,18 @@ impl Editor {
                     tr!("低地基准 {arg0} 层；保留原悬崖子块", arg0 = plan.base)
                 } else if g.mode == TerrainMode::HeightFill {
                     tr!("目标高度 {arg0} 层；保留原悬崖", arg0 = plan.base)
+                } else if g.mode == TerrainMode::CliffPolyline && plan.base < g.base {
+                    tr!(
+                        "坑：外侧 {arg0} / 坑底 {arg1} 层",
+                        arg0 = g.base,
+                        arg1 = plan.base
+                    )
+                } else if g.mode == TerrainMode::CliffPolyline && !plan.interior.is_empty() {
+                    tr!(
+                        "高台：外侧 {arg0} / 内部 {arg1} 层",
+                        arg0 = g.base,
+                        arg1 = plan.base + 4
+                    )
                 } else if g.mode.joining() {
                     tr!("按原高度连接地形").into()
                 } else if g.mode == TerrainMode::Bridge && !g.bridge.high() {
@@ -555,12 +640,14 @@ impl Editor {
                             )
                         })
                         .unwrap_or_else(|| {
-                            tr!(
+                            if g.mode == TerrainMode::CliffPolyline {
+                                format!("{heights} · {}", tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。"))
+                            } else { tr!(
                                 "{arg0} 格修改 · {arg1} 个地形模板 · {arg2}；松开放置，Esc 取消",
                                 arg0 = plan.edits.len() + plan.overlays.len(),
                                 arg1 = plan.cliffs.len(),
                                 arg2 = heights
-                            )
+                            ) }
                         }),
                     egui::FontId::proportional(13.),
                     if error.is_some() {
@@ -606,9 +693,77 @@ impl Editor {
                 );
             }
         }
+        if let Some(g) = self.plateau.gesture.as_ref()
+            && g.mode == TerrainMode::CliffPolyline
+        {
+            let position = |at: Cell| {
+                let (x, y) = vera20k_core::map::terrain::iso_to_screen(
+                    at[0],
+                    at[1],
+                    if self.flat_view { 0 } else { g.base },
+                );
+                rect.min + (egui::pos2(x + 30., y + 15.) - world.min) * camera.zoom
+            };
+            let mut path = g.path.clone();
+            if path.last() != Some(&at) {
+                path.push(at);
+            }
+            let high_left = g.high_left;
+            for (i, ab) in path.windows(2).enumerate() {
+                let a = position(ab[0]);
+                let b = position(ab[1]);
+                if i + 1 < g.path.len() {
+                    painter.line_segment([a, b], egui::Stroke::new(2., Color32::YELLOW));
+                } else {
+                    painter.extend(egui::Shape::dashed_line(
+                        &[a, b],
+                        egui::Stroke::new(2., Color32::YELLOW),
+                        6.,
+                        4.,
+                    ));
+                }
+                if a.distance(b) > 12. {
+                    let d = (b - a).normalized();
+                    let normal = egui::vec2(d.y, -d.x) * if high_left { 1. } else { -1. };
+                    painter.arrow(
+                        a + (b - a) * 0.5,
+                        normal * 18.,
+                        egui::Stroke::new(2., color),
+                    );
+                }
+            }
+            for (i, &vertex) in g.path.iter().enumerate() {
+                painter.circle_stroke(
+                    position(vertex),
+                    if i == 0 { 6. } else { 3. },
+                    egui::Stroke::new(2., Color32::YELLOW),
+                );
+            }
+        }
     }
 
     pub(super) fn plateau_options(&mut self, ui: &mut egui::Ui, scene: &MapScene) {
+        if self.terrain_mode == TerrainMode::CliffPolyline {
+            ui.add_enabled_ui(!self.stroking, |ui| {
+                let label = ui.label(tr!("高侧方向"));
+                egui::ComboBox::from_id_salt("cliff-polyline-high-side")
+                    .selected_text(if self.cliff_high_left {
+                        tr!("绘制方向左侧")
+                    } else {
+                        tr!("绘制方向右侧")
+                    })
+                    .width(ui.available_width())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.cliff_high_left, true, tr!("绘制方向左侧"));
+                        ui.selectable_value(&mut self.cliff_high_left, false, tr!("绘制方向右侧"));
+                    })
+                    .response
+                    .labelled_by(label.id);
+            });
+            ui.small(tr!(
+                "箭头始终指向所选高侧；闭合后按绕行方向生成高台或坑，内外相差 4 层，外侧地面保持原高。"
+            ));
+        }
         if self.terrain_mode == TerrainMode::CliffHeightRepair {
             ui.add(egui::Slider::new(&mut self.cliff_repair_base, 0..=123).text(tr!("低地高度")));
             ui.small(tr!(
@@ -681,21 +836,56 @@ impl Editor {
             );
         }
         let mut fixed = self.template_level.is_some();
-        if ui.checkbox(&mut fixed, tr!("指定低地基准高度")).changed() {
+        let polyline = self.terrain_mode == TerrainMode::CliffPolyline;
+        if ui
+            .checkbox(
+                &mut fixed,
+                if polyline {
+                    tr!("指定基准地面高度")
+                } else {
+                    tr!("指定低地基准高度")
+                },
+            )
+            .changed()
+        {
             self.template_level = fixed.then_some(0);
         }
         if let Some(level) = self.template_level.as_mut() {
             ui.add(
-                egui::Slider::new(level, 0..=cliff_tools::MAX_CLIFF_BASE)
-                    .smart_aim(false)
-                    .drag_value_speed(1.)
-                    .text(tr!("低地高度")),
+                egui::Slider::new(
+                    level,
+                    0..=if polyline {
+                        cliff_tools::MAX_CLIFF_LEVEL
+                    } else {
+                        cliff_tools::MAX_CLIFF_BASE
+                    },
+                )
+                .smart_aim(false)
+                .drag_value_speed(1.)
+                .text(if polyline {
+                    tr!("基准地面高度")
+                } else {
+                    tr!("低地高度")
+                }),
             );
-            ui.small(tr!("可点击数字直接输入高度；高地比低地高 4 层。"));
+            if !polyline {
+                ui.small(tr!("可点击数字直接输入高度；高地比低地高 4 层。"));
+            }
         } else {
-            ui.small(tr!("自动识别所选高台的低地高度；悬崖高差为 4 层。"));
+            if !polyline {
+                ui.small(tr!("自动识别所选高台的低地高度；悬崖高差为 4 层。"));
+            }
+        }
+        if polyline {
+            ui.small(tr!("闭合时以外侧地面为基准：高台内部加 4 层，坑内减 4 层。地面低于 4 层时请先抬高再挖坑。"));
         }
         match self.terrain_mode {
+            TerrainMode::CliffPolyline => {
+                ui.small(tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。"));
+                ui.small(tr!(
+                    "开放折线只沿线放置一侧崖壁，周围地面保持原高；不生成坡道、填高区域或末端封口。闭合后才统一内部高度。"
+                ));
+            }
             TerrainMode::Plateau => {
                 ui.small(tr!("拖到对角格：新建、扩建或合并同层高台，重建悬崖边界。"));
             }
@@ -720,9 +910,11 @@ impl Editor {
         ui.small(tr!(
             "使用标准陆地悬崖，保留未改变的对象；修改范围内的覆盖物和对象会阻止放置。"
         ));
-        ui.small(tr!(
-            "绿色为可生成预览；红色说明原因。松开整笔提交，Esc 取消。"
-        ));
+        if self.terrain_mode != TerrainMode::CliffPolyline {
+            ui.small(tr!(
+                "绿色为可生成预览；红色说明原因。松开整笔提交，Esc 取消。"
+            ));
+        }
     }
 }
 #[cfg(test)]

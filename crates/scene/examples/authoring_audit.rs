@@ -14,7 +14,7 @@ use ra2_map_scene::{
     visual::ViewOptions,
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -35,6 +35,73 @@ fn with_lat(doc: &MapDocument, scene: &MapScene, mut plan: PlateauPlan) -> Resul
         })
         .collect();
     Ok(plan)
+}
+fn verify_joint_pixels(scene: &MapScene, p: &PlateauPlan, out: &Path, name: &str) -> Result<()> {
+    let mut joint_cells = BTreeSet::new();
+    for s in &p.cliffs {
+        let dx = i32::from(s.origin[0]) - 80;
+        let dy = i32::from(s.origin[1]) - 80;
+        if dx * dx + dy * dy > 16 {
+            continue;
+        }
+        let t = &scene.palette.templates[&(s.tile, 0)];
+        for (sub, c) in t.cells.iter().enumerate() {
+            if c.is_some() {
+                joint_cells.insert([
+                    s.origin[0] + sub as u16 % t.width,
+                    s.origin[1] + sub as u16 / t.width,
+                ]);
+            }
+        }
+    }
+    let cells: Vec<_> = scene
+        .cells
+        .iter()
+        .filter(|c| joint_cells.contains(&[c.rx, c.ry]))
+        .collect();
+    ensure!(!cells.is_empty(), "{name}: no joint cells to render");
+    let mut bounds = egui::Rect::NOTHING;
+    for c in &cells {
+        bounds = bounds.union(scene.cell_rect(c).context("missing native joint image")?);
+    }
+    bounds = bounds.expand(30.);
+    let size = [bounds.width() as u32, bounds.height() as u32];
+    let rgba = scene.visual.raster(
+        bounds,
+        size,
+        ViewOptions {
+            lighting: false,
+            ..Default::default()
+        },
+    )?;
+    let mut checked = 0;
+    for c in cells {
+        let image = scene.image(c).context("missing joint subtile")?;
+        let x = (c.screen_x + image.offset_x as f32 - bounds.min.x) as usize;
+        let y = (c.screen_y + image.offset_y as f32 - bounds.min.y) as usize;
+        for (i, pixel) in image.rgba.as_chunks::<4>().0.iter().enumerate() {
+            if pixel[3] == 0 {
+                continue;
+            }
+            let at =
+                ((y + i / image.width as usize) * size[0] as usize + x + i % image.width as usize)
+                    * 4;
+            ensure!(
+                rgba[at..at + 4] != [11, 15, 20, 255],
+                "{name}: native joint pixel became a background hole"
+            );
+            checked += 1;
+        }
+    }
+    ensure!(checked > 0, "{name}: empty native joint images");
+    image::save_buffer(
+        out.join(format!("{name}-detail.png")),
+        &rgba,
+        size[0],
+        size[1],
+        image::ColorType::Rgba8,
+    )?;
+    Ok(())
 }
 fn verify(
     install: &mut Install,
@@ -59,6 +126,55 @@ fn verify(
     )?;
     let reopened = document(&reloaded);
     let cells: BTreeMap<_, _> = reloaded.cells.iter().map(|c| ([c.rx, c.ry], c)).collect();
+    if name.starts_with("open-") {
+        let ids = scene
+            .palette
+            .tile_ids
+            .context("missing terrain configuration")?;
+        let mut stamped = BTreeSet::new();
+        for s in &p.cliffs {
+            let id = u32::from(s.tile);
+            ensure!(
+                ids.cliffs
+                    .cliff_set
+                    .is_some_and(|start| (u32::from(start)..u32::from(start) + 40).contains(&id))
+                    || ids
+                        .cliffs
+                        .water_cliffs
+                        .is_some_and(
+                            |start| (u32::from(start)..u32::from(start) + 22).contains(&id)
+                        ),
+                "{name}: open path generated a non-cliff template"
+            );
+            let t = &scene.palette.templates[&(s.tile, 0)];
+            for (sub, c) in t.cells.iter().enumerate() {
+                if c.is_some() {
+                    stamped.insert([
+                        s.origin[0] + sub as u16 % t.width,
+                        s.origin[1] + sub as u16 / t.width,
+                    ]);
+                }
+            }
+        }
+        ensure!(
+            stamped == p.edits.keys().copied().collect(),
+            "{name}: open path modified ground outside the cliff templates"
+        );
+        ensure!(
+            p.interior.is_empty(),
+            "{name}: open path filled an interior"
+        );
+        for c in &scene.cells {
+            let at = [c.rx, c.ry];
+            if !stamped.contains(&at) {
+                let actual = cells.get(&at).context("missing surrounding terrain cell")?;
+                ensure!(
+                    (actual.tile_id, actual.sub_tile, actual.z) == (c.tile_id, c.sub_tile, c.z),
+                    "{name}: surrounding terrain changed at {at:?}"
+                );
+            }
+        }
+    }
     for (&at, &v) in &p.edits {
         ensure!(
             reopened.terrain(at) == Some(v),
@@ -83,6 +199,9 @@ fn verify(
     doc.redo();
     ensure!(doc.snapshot().bytes()? == bytes, "{name}: redo mismatch");
     if png {
+        if name.starts_with("open-joint-") {
+            verify_joint_pixels(&reloaded, p, out, name)?;
+        }
         let at: Vec<_> = p.edits.keys().chain(p.overlays.keys()).copied().collect();
         let lo = [
             at.iter().map(|p| p[0]).min().unwrap().saturating_sub(4),
@@ -124,9 +243,30 @@ fn verify(
             size[1],
             image::ColorType::Rgba8,
         )?;
+        if name.starts_with("closed-") {
+            let original = scene.visual.raster(
+                bounds,
+                size,
+                ViewOptions {
+                    lighting: false,
+                    ..Default::default()
+                },
+            )?;
+            let holes = original
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(rgba.as_chunks::<4>().0.iter())
+                .filter(|(old, new)| **old != [11, 15, 20, 255] && **new == [11, 15, 20, 255])
+                .count();
+            ensure!(
+                holes == 0,
+                "{name}: generated terrain exposes {holes} background pixels"
+            );
+        }
     }
     Ok(
-        serde_json::json!({"case":name,"terrain_cells":p.edits.len(),"overlay_cells":p.overlays.len(),"engine_reload":true,"undo_redo":true}),
+        serde_json::json!({"case":name,"terrain_cells":p.edits.len(),"overlay_cells":p.overlays.len(),"engine_reload":true,"undo_redo":true,"cliff_only_checked":name.starts_with("open-"),"pixel_coverage_checked":png && name.starts_with("closed-"),"joint_pixel_coverage_checked":png && name.starts_with("open-joint-")}),
     )
 }
 fn audit(
@@ -1027,6 +1167,191 @@ fn audit(
     Ok(serde_json::json!({"theater":theater,"cases":cases,
         "standard_cliff_templates_checked":standard_templates,"standard_cliff_subtiles_checked":standard_subtiles}))
 }
+fn audit_polyline(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json::Value> {
+    std::fs::create_dir_all(out)?;
+    let scene = load_scene_bytes(
+        install,
+        "polyline.map",
+        "audit".into(),
+        NewMapOptions {
+            theater: theater.into(),
+            width: 80,
+            height: 80,
+            level: 4,
+            ..Default::default()
+        }
+        .bytes()?,
+        Instant::now(),
+    )?;
+    let closed = [[50, 50], [78, 50], [78, 78], [50, 78], [50, 50]];
+    if !scene
+        .palette
+        .tile_ids
+        .is_some_and(|ids| ids.cliffs.cliff_set.is_some())
+    {
+        for path in [&closed[..2], &closed[..]] {
+            ensure!(
+                cliff_authoring::polyline(&document(&scene), &scene, path, 4, true).is_err(),
+                "unsupported theater accepted cliffs"
+            );
+        }
+        return Ok(serde_json::json!({"theater":theater,"unsupported_cliffs_rejected":true}));
+    }
+    let mut cases = Vec::new();
+    for high_left in [false, true] {
+        for (i, (dx, dy)) in [
+            (20, 0),
+            (0, 20),
+            (-20, 0),
+            (0, -20),
+            (20, 20),
+            (-20, 20),
+            (20, -20),
+            (-20, -20),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = [[80, 80], [(80 + dx) as u16, (80 + dy) as u16]];
+            let mut doc = document(&scene);
+            let before = doc.snapshot().bytes()?;
+            let p = cliff_authoring::polyline(&doc, &scene, &path, 4, high_left)
+                .with_context(|| format!("open-{i}-left-{high_left}"))?;
+            ensure!(
+                doc.snapshot().bytes()? == before && p.interior.is_empty(),
+                "open preview changed the map or filled ground"
+            );
+            cases.push(verify(
+                install,
+                &scene,
+                &mut doc,
+                &p,
+                out,
+                &format!("open-{i}-left-{high_left}"),
+                true,
+            )?);
+        }
+        let mut doc = document(&scene);
+        let p = cliff_authoring::polyline(&doc, &scene, &closed[..4], 4, high_left)?;
+        cases.push(verify(
+            install,
+            &scene,
+            &mut doc,
+            &p,
+            out,
+            &format!("open-turns-left-{high_left}"),
+            true,
+        )?);
+        for (kind, vertices, back) in [
+            ("axis", [[60, 80], [80, 80], [80, 60]], [60, 60]),
+            ("oblique", [[60, 58], [80, 80], [84, 60]], [64, 38]),
+        ] {
+            for rotation in 0..4 {
+                let rotate = |at: [u16; 2]| {
+                    let (mut x, mut y) = (i32::from(at[0]) - 80, i32::from(at[1]) - 80);
+                    for _ in 0..rotation {
+                        (x, y) = (-y, x);
+                    }
+                    [(80 + x) as u16, (80 + y) as u16]
+                };
+                let path = vertices.map(rotate);
+                let reference_path = [path[0], path[1], path[2], rotate(back), path[0]];
+                let mut doc = document(&scene);
+                let reference =
+                    cliff_authoring::polyline(&doc, &scene, &reference_path, 4, high_left)?;
+                let p = cliff_authoring::polyline(&doc, &scene, &path, 4, high_left)?;
+                let corners: Vec<_> = reference
+                    .cliffs
+                    .iter()
+                    .filter(|s| {
+                        let dx = i32::from(s.origin[0]) - 80;
+                        let dy = i32::from(s.origin[1]) - 80;
+                        dx * dx + dy * dy <= 16
+                    })
+                    .collect();
+                ensure!(!corners.is_empty(), "missing native reference corner");
+                for corner in corners {
+                    ensure!(
+                        p.cliffs
+                            .iter()
+                            .any(|s| s.origin == corner.origin && s.tile == corner.tile),
+                        "open joint omitted native corner: rotation={rotation}, left={high_left}, origin={:?}",
+                        corner.origin
+                    );
+                }
+                let mut result = verify(
+                    install,
+                    &scene,
+                    &mut doc,
+                    &p,
+                    out,
+                    &format!("open-joint-{kind}-{rotation}-left-{high_left}"),
+                    true,
+                )?;
+                result["native_joint_checked"] = true.into();
+                result["joint_kind"] = kind.into();
+                cases.push(result);
+            }
+        }
+        for reversed in [false, true] {
+            let mut path = closed;
+            if reversed {
+                path.reverse();
+            }
+            let mut doc = document(&scene);
+            let at = [64, 64];
+            doc.set(
+                ra2_map_document::document::Target::Terrain(at),
+                Some(ra2_map_document::document::Value::Terrain(
+                    ra2_map_document::document::TerrainValue {
+                        level: 12,
+                        ..ra2_map_scene::terrain_tools::value(&doc, &scene, at)
+                    },
+                )),
+            )?;
+            doc.commit("uneven ground");
+            let p = cliff_authoring::polyline(&doc, &scene, &path, 4, high_left)?;
+            let expected_level = if cliff_authoring::polyline_is_pit(&path, high_left) {
+                0
+            } else {
+                8
+            };
+            ensure!(
+                !p.interior.is_empty()
+                    && p.interior
+                        .iter()
+                        .all(|at| p.edits[at].level == expected_level),
+                "closed interior not level"
+            );
+            ensure!(
+                !p.edits.contains_key(&[40, 40]),
+                "closed contour changed exterior ground"
+            );
+            cases.push(verify(
+                install,
+                &scene,
+                &mut doc,
+                &p,
+                out,
+                &format!("closed-reversed-{reversed}-left-{high_left}"),
+                true,
+            )?);
+        }
+        let mut doc = document(&scene);
+        let p = cliff_authoring::polyline(&doc, &scene, &[[24, 79], [24, 83]], 4, high_left)?;
+        cases.push(verify(
+            install,
+            &scene,
+            &mut doc,
+            &p,
+            out,
+            &format!("open-grid-edge-left-{high_left}"),
+            true,
+        )?);
+    }
+    Ok(serde_json::json!({"theater":theater,"cases":cases}))
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let directory = PathBuf::from(args.next().context("game directory required")?);
@@ -1043,18 +1368,25 @@ fn main() -> Result<()> {
         .filter(|s| s != "ALL");
     let scope = args.next();
     ensure!(
-        scope.as_ref().is_none_or(|s| s == "--height-only"),
+        scope
+            .as_ref()
+            .is_none_or(|s| s == "--height-only" || s == "--polyline-only"),
         "unknown audit scope"
     );
-    let height_only = scope.is_some();
+    let height_only = scope.as_ref().is_some_and(|s| s == "--height-only");
+    let polyline_only = scope.as_ref().is_some_and(|s| s == "--polyline-only");
     for (theater, _) in THEATERS {
         if filter.as_ref().is_some_and(|f| f != theater) {
             continue;
         }
         println!("Auditing {theater}...");
         reports.push(
-            audit(&mut install, theater, &out.join(theater), height_only)
-                .with_context(|| theater.to_owned())?,
+            (if polyline_only {
+                audit_polyline(&mut install, theater, &out.join(theater))
+            } else {
+                audit(&mut install, theater, &out.join(theater), height_only)
+            })
+            .with_context(|| theater.to_owned())?,
         );
     }
     ensure!(!reports.is_empty(), "unknown theater filter");

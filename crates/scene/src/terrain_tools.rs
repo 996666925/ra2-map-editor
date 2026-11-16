@@ -29,6 +29,7 @@ pub enum TerrainMode {
     CliffHeightRepair,
     Plateau,
     CliffOutline,
+    CliffPolyline,
     CliffFront,
     CliffBack,
     PlateauCut,
@@ -43,7 +44,7 @@ pub enum TerrainMode {
     CoastalCliff,
 }
 impl TerrainMode {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Subtile,
         Self::Template,
         Self::Fill,
@@ -54,6 +55,7 @@ impl TerrainMode {
         Self::CliffHeightRepair,
         Self::Plateau,
         Self::CliffOutline,
+        Self::CliffPolyline,
         Self::CliffFront,
         Self::CliffBack,
         Self::PlateauCut,
@@ -79,6 +81,7 @@ impl TerrainMode {
             Self::CliffHeightRepair => "修正悬崖高度（保留子块）",
             Self::Plateau => "矩形高台（自动悬崖）",
             Self::CliffOutline => "围合高台（自动拐角）",
+            Self::CliffPolyline => "折线悬崖",
             Self::CliffFront => "悬崖线段（正面）",
             Self::CliffBack => "悬崖线段（背面）",
             Self::PlateauCut => "切除高台（矩形）",
@@ -104,6 +107,7 @@ impl TerrainMode {
                     | Self::CliffHeightRepair
                     | Self::Plateau
                     | Self::CliffOutline
+                    | Self::CliffPolyline
                     | Self::CliffFront
                     | Self::CliffBack
                     | Self::PlateauCut

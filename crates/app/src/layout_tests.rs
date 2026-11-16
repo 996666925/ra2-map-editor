@@ -667,6 +667,97 @@ fn flat_terrain_canvas_drag_preview_commit_and_history_share_exact_cells() {
 }
 
 #[test]
+fn cliff_polyline_canvas_clicks_preview_close_enter_and_cancel_use_one_transaction() {
+    use ra2_map_scene::terrain_tools::TerrainMode;
+    let (mut view, scene, root) = flat_authoring_view();
+    let ctx = egui::Context::default();
+    view.editor
+        .activate_terrain_mode(TerrainMode::CliffPolyline);
+    flat_frame(&mut view, &ctx, None, None, None);
+    let before = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    for closed in [false, true] {
+        let path = if closed {
+            vec![[30, 30], [44, 30], [44, 44], [30, 44]]
+        } else {
+            vec![[30, 30], [44, 30], [44, 44]]
+        };
+        for &at in &path {
+            flat_frame(&mut view, &ctx, Some(at), Some(true), None);
+            flat_frame(&mut view, &ctx, Some(at), Some(false), None);
+            assert!(view.editor.stroking);
+            assert_eq!(
+                view.editor
+                    .doc
+                    .as_ref()
+                    .unwrap()
+                    .snapshot()
+                    .bytes()
+                    .unwrap(),
+                before
+            );
+        }
+        let end = if closed {
+            path[0]
+        } else {
+            *path.last().unwrap()
+        };
+        flat_frame(&mut view, &ctx, Some(end), None, None);
+        let p = view.editor.plateau_preview_plan(&scene, end).unwrap();
+        assert_eq!(p.interior.is_empty(), !closed);
+        if closed {
+            flat_frame(&mut view, &ctx, Some(end), Some(true), None);
+            flat_frame(&mut view, &ctx, Some(end), Some(false), None);
+        } else {
+            flat_frame(&mut view, &ctx, Some(end), None, Some(egui::Key::Enter));
+        }
+        assert!(!view.editor.stroking, "{}", view.editor.status);
+        for (&at, &v) in &p.edits {
+            assert_eq!(view.editor.doc.as_ref().unwrap().terrain(at), Some(v));
+        }
+        view.editor.history(false, &scene);
+        assert_eq!(
+            view.editor
+                .doc
+                .as_ref()
+                .unwrap()
+                .snapshot()
+                .bytes()
+                .unwrap(),
+            before
+        );
+    }
+    flat_frame(&mut view, &ctx, Some([30, 30]), Some(true), None);
+    flat_frame(&mut view, &ctx, Some([30, 30]), Some(false), None);
+    flat_frame(
+        &mut view,
+        &ctx,
+        Some([44, 30]),
+        None,
+        Some(egui::Key::Escape),
+    );
+    assert!(!view.editor.stroking);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn flat_terrain_manual_cliff_uses_the_selected_subtile_and_base_height() {
     let (mut view, scene, root) = flat_authoring_view();
     view.editor

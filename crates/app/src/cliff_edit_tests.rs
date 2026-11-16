@@ -2,6 +2,10 @@ use super::super::tests::editor;
 use super::*;
 
 fn scene() -> MapScene {
+    scene_at_level(4)
+}
+
+fn scene_at_level(level: u8) -> MapScene {
     let f = ra2_map_assets::test_support::Fixture::with_authoring();
     let mut install = f.install();
     install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
@@ -12,7 +16,7 @@ fn scene() -> MapScene {
         crate::new_map::NewMapOptions {
             width: 40,
             height: 40,
-            level: 4,
+            level,
             ..Default::default()
         }
         .bytes()
@@ -20,6 +24,156 @@ fn scene() -> MapScene {
         Instant::now(),
     )
     .unwrap()
+}
+
+fn polyline_key(e: &mut Editor, ctx: &egui::Context, scene: &MapScene, key: egui::Key) {
+    let input = egui::RawInput {
+        events: vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }],
+        ..Default::default()
+    };
+    let _ = crate::test_support::run_ui(ctx, input, |ui| e.shortcuts(ui.ctx(), scene));
+}
+
+#[test]
+fn polyline_high_side_dropdown_selects_a_direction_without_terrain_edits() {
+    use egui_kittest::kittest::Queryable as _;
+    let (mut e, _, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    e.activate_terrain_mode(TerrainMode::CliffPolyline);
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    let mut harness = crate::test_support::harness()
+        .with_context_setup(|ctx| {
+            ctx.add_font_provider(Arc::new(
+                egui_system_font_provider::SystemFontProvider::new(),
+            ));
+        })
+        .with_accessibility_check(false)
+        .with_size([420., 600.])
+        .build_ui(|ui| e.plateau_options(ui, &scene));
+    harness.run();
+    assert!(harness.query_by_label("绘制方向右侧").is_none());
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::ComboBox, "高侧方向")
+        .click();
+    harness.run();
+    harness.get_by_label("绘制方向右侧").click();
+    harness.run();
+    assert!(harness.query_by_label("绘制方向左侧").is_none());
+    drop(harness);
+    assert!(!e.cliff_high_left);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn polyline_clicks_keep_a_draft_enter_commits_confirmed_vertices_and_history_is_atomic() {
+    let (mut e, ctx, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    e.activate_terrain_mode(TerrainMode::CliffPolyline);
+    e.cliff_high_left = false;
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    for at in [[30, 30], [44, 30], [44, 44]] {
+        e.pointer(&scene, Some(at), true, true, false, None);
+        e.pointer(&scene, Some(at), false, false, true, None);
+        assert!(e.stroking, "releasing a click must keep the polyline draft");
+        assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    }
+    let p = e.plateau_preview_plan(&scene, [44, 44]).unwrap();
+    assert!(p.interior.is_empty());
+    assert!(Arc::ptr_eq(
+        &p,
+        &e.plateau_preview_plan(&scene, [44, 44]).unwrap()
+    ));
+    // Hovering an extra segment must not confirm it on Enter.
+    let _ = e.plateau_preview_plan(&scene, [30, 44]);
+    e.cliff_high_left = true;
+    polyline_key(&mut e, &ctx, &scene, egui::Key::Enter);
+    assert!(!e.stroking, "{}", e.status);
+    for (&at, &v) in &p.edits {
+        assert_eq!(e.doc.as_ref().unwrap().terrain(at), Some(v));
+    }
+    let after = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.history(true, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn polyline_closes_on_first_vertex_and_can_retract_invalid_or_cancelled_drafts() {
+    let (mut e, ctx, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    e.activate_terrain_mode(TerrainMode::CliffPolyline);
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.pointer(&scene, Some([30, 30]), true, true, false, None);
+    polyline_key(&mut e, &ctx, &scene, egui::Key::Enter);
+    assert!(e.stroking, "invalid draft remains editable");
+    e.pointer(&scene, Some([44, 30]), true, true, false, None);
+    polyline_key(&mut e, &ctx, &scene, egui::Key::Backspace);
+    assert_eq!(e.plateau.gesture.as_ref().unwrap().path, vec![[30, 30]]);
+    for at in [[44, 30], [44, 44], [30, 44]] {
+        e.pointer(&scene, Some(at), true, true, false, None);
+        e.pointer(&scene, Some(at), false, false, true, None);
+    }
+    let p = e.plateau_preview_plan(&scene, [30, 30]).unwrap();
+    assert!(!p.interior.is_empty());
+    assert_eq!(
+        p.edits[&[36, 36]].level,
+        0,
+        "clockwise drawing with the left high side makes a pit"
+    );
+    e.pointer(&scene, Some([30, 30]), true, true, false, None);
+    e.pointer(&scene, Some([30, 30]), false, false, true, None);
+    assert!(!e.stroking);
+    for (&at, &v) in &p.edits {
+        assert_eq!(e.doc.as_ref().unwrap().terrain(at), Some(v));
+    }
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.pointer(&scene, Some([30, 30]), true, true, false, None);
+    e.pointer(&scene, Some([44, 30]), true, true, false, None);
+    polyline_key(&mut e, &ctx, &scene, egui::Key::Escape);
+    assert!(!e.stroking);
+    e.pointer(&scene, Some([44, 30]), false, false, true, None);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn polyline_zero_ground_pit_prompts_to_raise_ground_and_keeps_an_editable_draft() {
+    let (mut e, ctx, root) = editor();
+    let scene = scene_at_level(0);
+    e.attach(&scene);
+    e.activate_terrain_mode(TerrainMode::CliffPolyline);
+    e.cliff_high_left = true;
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    for at in [[30, 30], [44, 30], [44, 44], [30, 44], [30, 30]] {
+        e.pointer(&scene, Some(at), true, true, false, None);
+        e.pointer(&scene, Some(at), false, false, true, None);
+    }
+    assert!(e.status.contains("请先抬高地面"), "{}", e.status);
+    assert!(e.stroking);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    polyline_key(&mut e, &ctx, &scene, egui::Key::Backspace);
+    assert_eq!(e.plateau.gesture.as_ref().unwrap().path.len(), 4);
+    polyline_key(&mut e, &ctx, &scene, egui::Key::Escape);
+    assert!(!e.stroking);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
