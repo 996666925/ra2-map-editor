@@ -171,6 +171,102 @@ fn flat_authoring_view() -> (MapView, MapScene, PathBuf) {
     (view, scene, root)
 }
 
+#[test]
+fn flatten_canvas_routes_arrows_to_height_and_keeps_wheel_zoom_without_terrain_edits() {
+    let ctx = egui::Context::default();
+    setup(&ctx);
+    let (mut view, _, root) = flat_authoring_view();
+    view.editor
+        .activate_terrain_mode(ra2_map_scene::terrain_tools::TerrainMode::Flatten);
+    view.editor.smooth_heights = false;
+    view.editor.auto_lat = false;
+    flat_frame(&mut view, &ctx, None, None, None);
+    flat_frame(
+        &mut view,
+        &ctx,
+        Some([35, 35]),
+        None,
+        Some(egui::Key::ArrowUp),
+    );
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .terrain([35, 35])
+            .unwrap()
+            .level,
+        5
+    );
+    assert_eq!(view.zoom, 1.);
+    let wheel = |view: &mut MapView, modifiers| {
+        let rect = view.workbench.canvas_rect.unwrap();
+        let camera = crate::camera::MapCamera {
+            center: view.center,
+            zoom: view.zoom,
+        };
+        let pos = rect.min
+            + (crate::flat_view::position([35, 35]) - camera.world_rect(rect).min) * camera.zoom;
+        crate::test_support::run_ui(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200., 800.),
+                )),
+                events: vec![
+                    egui::Event::ModifiersChanged(modifiers),
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0., 120.),
+                        modifiers,
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| view.canvas_inner(ui, None),
+        );
+    };
+    let before = view
+        .editor
+        .doc
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .bytes()
+        .unwrap();
+    wheel(&mut view, egui::Modifiers::NONE);
+    assert!(view.zoom > 1.);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    let zoom = view.zoom;
+    wheel(&mut view, egui::Modifiers::CTRL);
+    assert!(view.zoom > zoom);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn flat_frame(
     view: &mut MapView,
     ctx: &egui::Context,

@@ -94,6 +94,22 @@ fn put(doc: &mut MapDocument, scene: &MapScene, at: Cell, tile: i32, level: u8, 
 }
 
 #[test]
+fn ctrl_fill_follows_source_ground_and_lat_across_heights_but_not_a_separate_island() {
+    let (mut doc, scene, brush) = setup();
+    put(&mut doc, &scene, [35, 35], 4000, 0, 3);
+    put(&mut doc, &scene, [36, 35], 4010, 7, 9);
+    put(&mut doc, &scene, [38, 35], 4000, 0, 4);
+    doc.commit("disjoint ground groups");
+    let cells = connected(&doc, &scene, [35, 35]).unwrap();
+    assert_eq!(cells, BTreeSet::from([[35, 35], [36, 35]]));
+    let before = doc.snapshot().bytes().unwrap();
+    let plan = plan(&doc, &scene, &brush, cells, false).unwrap();
+    assert_eq!(plan.edits[&[36, 35]].level, 7);
+    assert_eq!(plan.edits[&[36, 35]].ice, 9);
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
 fn rectangle_replaces_mixed_ground_preserves_height_ice_and_structures_and_clips_size() {
     let (mut doc, scene, brush) = setup();
     put(&mut doc, &scene, [40, 40], 4000, 3, 7);

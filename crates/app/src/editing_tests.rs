@@ -203,6 +203,42 @@ pub(crate) fn terrain_scene() -> MapScene {
 }
 
 #[test]
+fn alt_line_retracts_the_previous_diagonal_segment_and_freezes_no_lat_on_press() {
+    let (mut e, _, root) = editor();
+    let mut scene = terrain_scene();
+    scene.brushes[0].raw = 1;
+    e.attach(&scene);
+    e.activate_terrain_mode(TerrainMode::Subtile);
+    e.auto_lat = true;
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.brush_modifiers(egui::Modifiers {
+        alt: true,
+        ctrl: true,
+        shift: true,
+        ..Default::default()
+    });
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    assert!(!e.stroke.unwrap().lat);
+    e.cancel_active(&scene);
+    e.auto_lat = false;
+    e.brush_modifiers(egui::Modifiers::ALT);
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    e.pointer(&scene, Some([25, 23]), false, true, false, None);
+    e.pointer(&scene, Some([22, 25]), false, false, true, None);
+    let expected: BTreeSet<_> = cell_line([20, 20], [22, 25]).into_iter().collect();
+    assert_eq!(e.feedback, expected);
+    for at in cell_line([20, 20], [25, 23]) {
+        if !expected.contains(&at) {
+            assert_eq!(e.doc.as_ref().unwrap().terrain(at).unwrap().tile, 0);
+        }
+    }
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn shift_locks_terrain_brushes_to_one_axis_including_preview_release_and_history() {
     for mode in [
         TerrainMode::Subtile,
@@ -357,6 +393,43 @@ fn shift_erase_retraction_restores_original_overlays_under_a_wide_brush() {
     }
     e.history(false, &scene);
     assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn custom_height_modes_freeze_on_press_and_undo_as_one_stroke() {
+    let (mut e, _, root) = editor();
+    let scene = terrain_scene();
+    e.attach(&scene);
+    e.activate_terrain_mode(TerrainMode::Raise);
+    e.smooth_heights = false;
+    e.auto_lat = false;
+    e.height_step = 4;
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    e.height_step = 1;
+    e.height_absolute = true;
+    e.height_target = 9;
+    e.pointer(&scene, Some([21, 20]), false, true, false, None);
+    e.pointer(&scene, Some([20, 20]), false, false, true, None);
+    for at in [[20, 20], [21, 20]] {
+        assert_eq!(e.doc.as_ref().unwrap().terrain(at).unwrap().level, 4);
+    }
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.history(true, &scene);
+    e.height_target = 7;
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    e.height_target = 12;
+    e.pointer(&scene, None, false, false, true, None);
+    assert_eq!(e.doc.as_ref().unwrap().terrain([20, 20]).unwrap().level, 7);
+    assert_eq!(e.doc.as_ref().unwrap().terrain([21, 20]).unwrap().level, 4);
+    e.activate_terrain_mode(TerrainMode::Lower);
+    e.height_target = 5;
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    e.pointer(&scene, None, false, false, true, None);
+    assert_eq!(e.doc.as_ref().unwrap().terrain([20, 20]).unwrap().level, 5);
     drop(e);
     std::fs::remove_dir_all(root).unwrap();
 }

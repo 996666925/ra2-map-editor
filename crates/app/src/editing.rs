@@ -73,6 +73,12 @@ struct Stroke {
     lat: bool,
     smooth: bool,
     level: u8,
+    height_change: terrain_tools::HeightChange,
+    height_origin: Option<Cell>,
+    height_connected: bool,
+    height_steep: bool,
+    height_vertices: bool,
+    height_force: bool,
     walls: bool,
     overlay: u8,
     frame: u8,
@@ -112,8 +118,12 @@ pub struct Editor {
     tunnel_edit: tunnel_edit::TunnelEdit,
     plateau: cliff_edit::PlateauEdit,
     fill: fill_edit::FillEdit,
+    flatten: flatten_edit::FlattenEdit,
+    height_edit: height_edit::HeightEdit,
     object_brush: object_brush::ObjectBrush,
     brush_direction: crate::brush_direction::BrushDirection,
+    brush_ctrl: bool,
+    brush_shift: bool,
     brush_segment: Option<BrushSegment>,
     pub allow_overlap: bool,
     pub infantry_subcell: u8,
@@ -122,7 +132,15 @@ pub struct Editor {
     pub auto_lat: bool,
     pub smooth_heights: bool,
     pub flatten_level: u8,
+    pub height_absolute: bool,
+    pub height_step: u8,
+    pub height_target: u8,
+    pub height_vertices: bool,
+    pub flatten_fixed: bool,
+    picking_height: bool,
     pub template_level: Option<u8>,
+    terrain_hover: Option<Cell>,
+    cliff_repair_base: u8,
     pub bridge_kind: ra2_map_scene::bridge_tools::BridgeKind,
     pub auto_walls: bool,
     stroke: Option<Stroke>,
@@ -203,8 +221,12 @@ impl Editor {
             tunnel_edit: Default::default(),
             plateau: Default::default(),
             fill: Default::default(),
+            flatten: Default::default(),
+            height_edit: Default::default(),
             object_brush: Default::default(),
             brush_direction: Default::default(),
+            brush_ctrl: false,
+            brush_shift: false,
             brush_segment: None,
             allow_overlap: false,
             infantry_subcell: 0,
@@ -216,7 +238,15 @@ impl Editor {
             auto_lat: true,
             smooth_heights: true,
             flatten_level: 0,
+            height_absolute: false,
+            height_step: 1,
+            height_target: 4,
+            height_vertices: false,
+            flatten_fixed: false,
+            picking_height: false,
             template_level: None,
+            terrain_hover: None,
+            cliff_repair_base: 0,
             bridge_kind: Default::default(),
             auto_walls: true,
             stroke: None,
@@ -262,6 +292,9 @@ impl Editor {
         })
     }
     pub fn attach(&mut self, scene: &MapScene) {
+        self.height_edit.cancel();
+        self.flatten.cancel();
+        self.picking_height = false;
         self.plateau.cancel();
         self.fill.cancel();
         self.object_brush.cancel();
@@ -271,6 +304,8 @@ impl Editor {
         self.ui_state.template_textures.clear();
         self.ui_state.terrain_group = None;
         self.template_level = None;
+        self.terrain_hover = None;
+        self.cliff_repair_base = 0;
         self.document_name = scene.source.name.clone();
         self.doc = if scene.images.is_empty() {
             None
@@ -645,6 +680,7 @@ impl Editor {
             self.history(redo, scene);
         }
         self.tool_shortcuts(ctx);
+        self.terrain_placement_shortcuts(ctx, scene);
         if self.stroking {
             if delete {
                 self.status = tr!("请先完成或取消当前一笔，再删除选择。").into();
@@ -852,14 +888,24 @@ impl Editor {
         }
     }
     pub(crate) fn brush_modifiers(&mut self, modifiers: egui::Modifiers) {
-        self.brush_direction.set_shift(modifiers.shift);
-        if !modifiers.shift {
+        self.brush_ctrl = modifiers.ctrl || modifiers.command;
+        self.brush_shift = modifiers.shift;
+        let height =
+            self.tool == Tool::Terrain && self.terrain_mode.edits_height() && self.smooth_heights;
+        let axis_shift = modifiers.shift && (!height || modifiers.alt);
+        self.brush_direction
+            .set_modifiers(axis_shift, modifiers.alt);
+        if !axis_shift && !modifiers.alt {
+            self.flatten.finish_segment();
             self.brush_segment = None;
             self.object_brush.finish_segment();
         }
     }
 
     fn uses_brush_direction(&self) -> bool {
+        if self.flatten.active() {
+            return true;
+        }
         if self.object_brush.active() {
             return true;
         }
@@ -886,6 +932,39 @@ impl Editor {
         marker: Option<u64>,
     ) {
         if self.doc.is_none() {
+            return;
+        }
+        if self.tool == Tool::Terrain
+            && matches!(
+                self.terrain_mode,
+                TerrainMode::Flatten | TerrainMode::HeightFill
+            )
+            && self.picking_height
+        {
+            if press && let Some(at) = at {
+                match ra2_map_scene::height_tools::sample(self.doc.as_ref().unwrap(), scene, at) {
+                    Ok(level)
+                        if self.terrain_mode == TerrainMode::HeightFill
+                            || !self.smooth_heights
+                            || level <= 12 =>
+                    {
+                        self.flatten_level = level;
+                        if self.terrain_mode == TerrainMode::Flatten {
+                            self.flatten_fixed = true;
+                        }
+                        self.picking_height = false;
+                        self.status = tr!(
+                            "已拾取 {arg0} 层；点击目标地表，按住预览，松开提交。",
+                            arg0 = level
+                        );
+                    }
+                    Ok(_) => {
+                        self.status =
+                            tr!("自动坡面支持 0～12 层；请先关闭自动坡面再拾取此高度。").into()
+                    }
+                    Err(e) => self.status = format!("{e:#}"),
+                }
+            }
             return;
         }
         if self.tool == Tool::Tunnel {
@@ -922,6 +1001,9 @@ impl Editor {
         if self.plateau_pointer(scene, at, press, down, release) {
             return;
         }
+        if self.flatten_pointer(scene, at, press, down, release) {
+            return;
+        }
         if self.region_pointer(scene, at, press, down, release) {
             return;
         }
@@ -948,9 +1030,15 @@ impl Editor {
                 } else {
                     self.radius
                 },
-                lat: self.auto_lat,
+                lat: self.auto_lat && !(self.brush_ctrl && self.brush_shift),
                 smooth: self.smooth_heights,
                 level: self.flatten_level,
+                height_change: self.height_change(),
+                height_origin: at,
+                height_connected: self.brush_ctrl,
+                height_steep: self.brush_shift,
+                height_vertices: self.height_vertices && self.smooth_heights,
+                height_force: self.brush_ctrl && self.brush_shift && self.smooth_heights,
                 walls: self.auto_walls,
                 overlay: self.overlay_id,
                 frame: self.overlay_frame,
@@ -1185,19 +1273,28 @@ impl Editor {
             let result = (|| -> Result<()> {
                 let doc = self.doc.as_mut().unwrap();
                 if stroke.tool == Tool::Terrain {
-                    if stroke.mode.edits_height() {
-                        self.feedback = terrain_tools::height(
+                    let planned_height =
+                        matches!(stroke.mode, TerrainMode::Raise | TerrainMode::Lower);
+                    if planned_height {
+                        let plan = self
+                            .height_edit
+                            .plan(doc, scene, &self.stroke_cells, stroke.into())
+                            .map_err(anyhow::Error::msg)?;
+                        self.feedback = plan.apply(doc)?.into_iter().collect();
+                    } else if stroke.mode.edits_height() {
+                        self.feedback = terrain_tools::height_with_change(
                             doc,
                             scene,
                             &self.stroke_cells,
                             stroke.mode,
                             stroke.level,
                             stroke.smooth,
+                            stroke.height_change,
                         )?
                         .into_iter()
                         .collect();
                     }
-                    if stroke.lat && !self.feedback.is_empty() {
+                    if stroke.lat && !planned_height && !self.feedback.is_empty() {
                         self.feedback.extend(terrain_tools::recalculate(
                             doc,
                             scene,
@@ -1230,6 +1327,8 @@ impl Editor {
         }
     }
     fn abort_stroke(&mut self, scene: &MapScene, error: anyhow::Error) {
+        self.height_edit.cancel();
+        self.flatten.cancel();
         self.plateau.cancel();
         self.fill.cancel();
         self.object_brush.cancel();
@@ -1256,10 +1355,19 @@ impl Editor {
         at: Option<Cell>,
     ) {
         self.set_framework(self.framework);
+        self.terrain_hover = at;
+        if self.doc.is_some() && self.raise_lower_preview_active() {
+            self.raise_lower_preview(painter, scene, rect, camera, at);
+            return;
+        }
         if self.tool != Tool::Terrain {
             return;
         }
-        if self.terrain_mode == TerrainMode::Fill {
+        if self.flatten.active() {
+            self.flatten_preview(painter, scene, rect, camera);
+            return;
+        }
+        if self.terrain_mode == TerrainMode::Fill || self.fill_active_or_requested() {
             self.fill_preview(painter, scene, rect, camera, at);
             return;
         }
@@ -1379,7 +1487,31 @@ impl Editor {
                     }
                     let cell = [x as u16, y as u16];
                     doc.check_cell(cell).ok()?;
-                    Some((cell, terrain_tools::value(doc, scene, cell).level))
+                    let mut level = terrain_tools::value(doc, scene, cell).level;
+                    if self.terrain_mode == TerrainMode::Subtile
+                        && let Some(brush) = scene.brushes.get(self.brush)
+                    {
+                        match terrain_tools::subtile_placement_at_height(
+                            doc,
+                            scene,
+                            brush,
+                            cell,
+                            self.template_level,
+                        ) {
+                            Ok(v) => level = v.level,
+                            Err(error) => {
+                                valid = false;
+                                painter.text(
+                                    rect.left_top() + egui::vec2(12., 12.),
+                                    egui::Align2::LEFT_TOP,
+                                    error.to_string(),
+                                    egui::FontId::proportional(13.),
+                                    Color32::LIGHT_RED,
+                                );
+                            }
+                        }
+                    }
+                    Some((cell, level))
                 })
                 .collect()
         };
@@ -1561,6 +1693,10 @@ mod cliff_edit;
 mod editing_ui;
 #[path = "fill_edit.rs"]
 mod fill_edit;
+#[path = "flatten_edit.rs"]
+mod flatten_edit;
+#[path = "height_edit.rs"]
+mod height_edit;
 #[path = "object_brush.rs"]
 mod object_brush;
 #[path = "terrain_ui.rs"]

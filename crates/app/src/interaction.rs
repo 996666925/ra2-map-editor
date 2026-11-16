@@ -18,7 +18,9 @@ pub(crate) const TOOL_KEYS: [(egui::Key, Tool, &str); 10] = [
     (egui::Key::O, Tool::Ore, "O"),
 ];
 
-pub(crate) const TERRAIN_KEYS: [(egui::Key, TerrainMode, &str); 3] = [
+pub(crate) const TERRAIN_KEYS: [(egui::Key, TerrainMode, &str); 5] = [
+    (egui::Key::F6, TerrainMode::Lower, "F6"),
+    (egui::Key::F7, TerrainMode::Flatten, "F7"),
     (egui::Key::G, TerrainMode::Fill, "G"),
     (egui::Key::C, TerrainMode::CliffOutline, "C"),
     (egui::Key::H, TerrainMode::Plateau, "H"),
@@ -43,7 +45,9 @@ impl Tool {
             Self::Tunnel => tr!("点击或拖动依次绘制隧道路径；完成后在左侧保存"),
             Self::Erase => tr!("拖动擦除覆盖物与资源；按住 Shift 锁定地图轴向，Ctrl+Z 撤销整笔"),
             Self::Terrain => {
-                tr!("选择地形模式后绘制；画笔按住 Shift 锁定地图轴向，松开提交，Esc 取消")
+                tr!(
+                    "选择地形模式后绘制；放置画笔 Shift 锁轴，连续坡面 Shift 陡坡；松开提交，Esc 取消"
+                )
             }
             Self::Ore | Self::Gems | Self::Overlay => {
                 tr!("拖动绘制；按住 Shift 锁定地图轴向，[ / ] 调整笔刷，松开提交，Esc 取消")
@@ -119,6 +123,8 @@ impl Editor {
             return false;
         }
         self.plateau.cancel();
+        self.flatten.cancel();
+        self.height_edit.cancel();
         self.fill.cancel();
         self.object_brush.cancel();
         self.region.cancel();
@@ -143,6 +149,8 @@ impl Editor {
             return;
         }
         self.plateau.cancel();
+        self.flatten.cancel();
+        self.height_edit.cancel();
         self.fill.cancel();
         self.object_brush.cancel();
         self.region.cancel();
@@ -155,6 +163,13 @@ impl Editor {
     pub(crate) fn tool_shortcuts(&mut self, ctx: &egui::Context) {
         if self.stroking {
             return;
+        }
+        if self.tool == Tool::Terrain
+            && self.terrain_mode.edits_height()
+            && self.smooth_heights
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::A))
+        {
+            self.height_vertices = !self.height_vertices;
         }
         let tool = ctx.input_mut(|i| {
             if i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt || i.modifiers.shift {
@@ -175,6 +190,9 @@ impl Editor {
             if i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt || i.modifiers.shift {
                 return None;
             }
+            if self.tool == Tool::Terrain && i.consume_key(egui::Modifiers::NONE, egui::Key::F5) {
+                return Some(TerrainMode::Raise);
+            }
             TERRAIN_KEYS.iter().find_map(|&(key, mode, _)| {
                 i.consume_key(egui::Modifiers::NONE, key).then_some(mode)
             })
@@ -186,7 +204,8 @@ impl Editor {
             self.tool,
             Tool::Ore | Tool::Gems | Tool::Overlay | Tool::Erase
         ) || self.tool == Tool::Terrain
-            && self.terrain_mode == ra2_map_scene::terrain_tools::TerrainMode::Subtile
+            && (self.terrain_mode == ra2_map_scene::terrain_tools::TerrainMode::Subtile
+                || self.terrain_mode.edits_height())
         {
             ctx.input_mut(|i| {
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::OpenBracket) {

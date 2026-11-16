@@ -9,6 +9,7 @@ use ra2_map_scene::{
     bridge_tools::{self, BridgeKind},
     cliff_authoring,
     cliff_tools::{self, PlateauPlan},
+    flatten_tools, height_tools,
     map::{MapScene, load_scene_bytes},
     visual::ViewOptions,
 };
@@ -19,6 +20,21 @@ use std::{
 };
 fn document(scene: &MapScene) -> MapDocument {
     MapDocument::new(scene.source.edit_base.as_ref().unwrap().clone())
+}
+fn with_lat(doc: &MapDocument, scene: &MapScene, mut plan: PlateauPlan) -> Result<PlateauPlan> {
+    let mut copy = doc.fork();
+    let mut changed: std::collections::BTreeSet<_> = plan.apply(&mut copy)?.into_iter().collect();
+    changed.extend(ra2_map_scene::terrain_tools::recalculate(
+        &mut copy, scene, &changed,
+    )?);
+    plan.edits = changed
+        .into_iter()
+        .filter_map(|at| {
+            let v = ra2_map_scene::terrain_tools::value(&copy, scene, at);
+            (v != ra2_map_scene::terrain_tools::value(doc, scene, at)).then_some((at, v))
+        })
+        .collect();
+    Ok(plan)
 }
 fn verify(
     install: &mut Install,
@@ -113,7 +129,12 @@ fn verify(
         serde_json::json!({"case":name,"terrain_cells":p.edits.len(),"overlay_cells":p.overlays.len(),"engine_reload":true,"undo_redo":true}),
     )
 }
-fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json::Value> {
+fn audit(
+    install: &mut Install,
+    theater: &str,
+    out: &Path,
+    height_only: bool,
+) -> Result<serde_json::Value> {
     std::fs::create_dir_all(out)?;
     let scene = load_scene_bytes(
         install,
@@ -142,6 +163,598 @@ fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json:
             "unsupported cliff theater accepted"
         );
         return Ok(serde_json::json!({"theater":theater,"unsupported_cliffs_rejected":true}));
+    }
+    let mut standard_templates = 0;
+    let mut standard_subtiles = 0;
+    for &tile in scene.palette.groups.keys() {
+        let ids = scene.palette.tile_ids.context("missing tile ids")?;
+        let standard = ids
+            .cliffs
+            .cliff_set
+            .is_some_and(|base| (base..base + 40).contains(&tile))
+            || ids.cliffs.water_cliffs.is_some_and(|base| {
+                (base..base + 22).contains(&tile)
+                    && ra2_map_scene::coastal_cliffs::supports(&scene, tile - base)
+            });
+        if !standard {
+            continue;
+        }
+        let Some(t) = scene.palette.templates.get(&(tile, 0)) else {
+            continue;
+        };
+        let sub = t
+            .cells
+            .iter()
+            .position(Option::is_some)
+            .context("empty standard cliff")?;
+        let brush = ra2_map_assets::catalog::TerrainBrush {
+            key: vera20k_core::map::theater::TileKey {
+                tile_id: tile,
+                sub_tile: sub as u8,
+                variant: 0,
+            },
+            raw: scene.catalog.raw_tiles[&tile],
+            label: "height audit".into(),
+        };
+        let mut probe = document(&scene);
+        let edits = ra2_map_scene::terrain_tools::template_placement(
+            &probe,
+            &scene,
+            &brush,
+            [70, 70],
+            Some(4),
+        )?;
+        for &(at, v) in &edits {
+            probe.set(
+                ra2_map_document::document::Target::Terrain(at),
+                Some(ra2_map_document::document::Value::Terrain(v)),
+            )?;
+        }
+        for &(at, _) in &edits {
+            ensure!(
+                height_tools::sample(&probe, &scene, at)? == 8,
+                "{theater}: cliff {tile} at {at:?} picked the wrong cliff top"
+            );
+            standard_subtiles += 1;
+        }
+        standard_templates += 1;
+    }
+    // A pre-existing cliff ring whose interior has not yet been raised.
+    let mut fill_doc = document(&scene);
+    let mut ring = cliff_tools::plan(
+        &fill_doc,
+        &scene,
+        cliff_tools::rectangle([60, 60], [74, 74]),
+        4,
+    )?;
+    for at in &ring.interior {
+        ring.edits
+            .get_mut(at)
+            .context("interior cell absent")?
+            .level = 4;
+    }
+    cases.push(verify(
+        install,
+        &scene,
+        &mut fill_doc,
+        &ring,
+        out,
+        "height-fill-before",
+        true,
+    )?);
+    let top = height_tools::sample(&fill_doc, &scene, ring.cliffs[0].origin)?;
+    ensure!(top == 8, "cliff top sample mismatch");
+    let filled = height_tools::fill(&fill_doc, &scene, [67, 67], top)?;
+    ensure!(
+        filled.interior == ring.interior,
+        "fill crossed the original cliff boundary"
+    );
+    cases.push(verify(
+        install,
+        &scene,
+        &mut fill_doc,
+        &filled,
+        out,
+        "height-fill-after",
+        true,
+    )?);
+    for (&at, &v) in &ring.edits {
+        if !ring.interior.contains(&at) {
+            ensure!(
+                fill_doc.terrain(at) == Some(v),
+                "fill changed an existing cliff"
+            );
+        }
+    }
+    let stamp = ring
+        .cliffs
+        .iter()
+        .find(|s| {
+            let t = &scene.palette.templates[&(s.tile, 0)];
+            t.cells.iter().flatten().any(|s| s.height == 0)
+                && t.cells.iter().flatten().any(|s| s.height == 4)
+        })
+        .context("no cliff template with both high and low subtiles")?;
+    let template = &scene.palette.templates[&(stamp.tile, 0)];
+    let selected = template
+        .cells
+        .iter()
+        .position(Option::is_some)
+        .context("empty cliff template")?;
+    let selected = [
+        stamp.origin[0] + selected as u16 % template.width,
+        stamp.origin[1] + selected as u16 / template.width,
+    ];
+    let changed = ra2_map_scene::terrain_tools::height(
+        &mut fill_doc,
+        &scene,
+        &std::collections::BTreeSet::from([selected]),
+        ra2_map_scene::terrain_tools::TerrainMode::Raise,
+        0,
+        false,
+    )?;
+    ensure!(
+        changed.len() == template.cells.iter().flatten().count() && changed.len() > 1,
+        "cliff raise did not include the whole template"
+    );
+    let moved = PlateauPlan {
+        edits: changed
+            .into_iter()
+            .map(|at| (at, fill_doc.terrain(at).unwrap()))
+            .collect(),
+        overlays: BTreeMap::new(),
+        cliffs: vec![],
+        interior: Default::default(),
+        base: 5,
+    };
+    fill_doc.cancel();
+    cases.push(verify(
+        install,
+        &scene,
+        &mut fill_doc,
+        &moved,
+        out,
+        "height-cliff-raised",
+        true,
+    )?);
+    for (name, mode, change, smooth, cells) in [
+        (
+            "height-custom-smooth-step",
+            ra2_map_scene::terrain_tools::TerrainMode::Raise,
+            ra2_map_scene::terrain_tools::HeightChange::Step(4),
+            true,
+            cliff_tools::rectangle([60, 60], [64, 64]),
+        ),
+        (
+            "height-custom-smooth-target",
+            ra2_map_scene::terrain_tools::TerrainMode::Lower,
+            ra2_map_scene::terrain_tools::HeightChange::To(2),
+            true,
+            cliff_tools::rectangle([60, 60], [64, 64]),
+        ),
+        (
+            "height-custom-cliff-step",
+            ra2_map_scene::terrain_tools::TerrainMode::Raise,
+            ra2_map_scene::terrain_tools::HeightChange::Step(4),
+            false,
+            std::collections::BTreeSet::from([selected]),
+        ),
+        (
+            "height-custom-cliff-target",
+            ra2_map_scene::terrain_tools::TerrainMode::Raise,
+            ra2_map_scene::terrain_tools::HeightChange::To(12),
+            false,
+            std::collections::BTreeSet::from([selected]),
+        ),
+    ] {
+        let mut custom_doc = document(&scene);
+        if !smooth {
+            ring.apply(&mut custom_doc)?;
+            custom_doc.commit("cliff source");
+        }
+        let before = custom_doc.fork();
+        let mut changed: std::collections::BTreeSet<_> = if smooth {
+            let target = change.target(mode, 4);
+            flatten_tools::plan(&custom_doc, &scene, &cells, target, true)?
+                .apply(&mut custom_doc)?
+        } else {
+            ra2_map_scene::terrain_tools::height_with_change(
+                &mut custom_doc,
+                &scene,
+                &cells,
+                mode,
+                0,
+                smooth,
+                change,
+            )?
+        }
+        .into_iter()
+        .collect();
+        changed.extend(ra2_map_scene::terrain_tools::recalculate(
+            &mut custom_doc,
+            &scene,
+            &changed,
+        )?);
+        for &at in &cells {
+            let expected = change.target(
+                mode,
+                ra2_map_scene::terrain_tools::value(&before, &scene, at).level,
+            );
+            if smooth {
+                ensure!(
+                    ra2_map_scene::terrain_tools::value(&custom_doc, &scene, at).level == expected,
+                    "custom smooth target mismatch"
+                );
+            } else {
+                ensure!(
+                    height_tools::sample(&custom_doc, &scene, at)? == 12,
+                    "custom cliff top mismatch"
+                );
+            }
+        }
+        let plan = PlateauPlan {
+            edits: changed
+                .into_iter()
+                .map(|at| {
+                    (
+                        at,
+                        ra2_map_scene::terrain_tools::value(&custom_doc, &scene, at),
+                    )
+                })
+                .collect(),
+            overlays: BTreeMap::new(),
+            cliffs: vec![],
+            interior: cells,
+            base: 0,
+        };
+        custom_doc.cancel();
+        cases.push(verify(
+            install,
+            &scene,
+            &mut custom_doc,
+            &plan,
+            out,
+            name,
+            true,
+        )?);
+    }
+    for (name, options, cliff_source) in [
+        (
+            "fa2-common-steep",
+            flatten_tools::Options {
+                steep: true,
+                ..Default::default()
+            },
+            false,
+        ),
+        (
+            "fa2-common-vertex",
+            flatten_tools::Options {
+                vertices: true,
+                ..Default::default()
+            },
+            false,
+        ),
+        (
+            "fa2-common-force",
+            flatten_tools::Options {
+                force: true,
+                ..Default::default()
+            },
+            true,
+        ),
+    ] {
+        let mut doc = document(&scene);
+        if cliff_source {
+            ring.apply(&mut doc)?;
+            doc.commit("cliff source");
+        }
+        let cells =
+            std::collections::BTreeSet::from([if cliff_source { selected } else { [65, 65] }]);
+        let initial = flatten_tools::plan_with_options(&doc, &scene, &cells, 8, true, options)?;
+        ensure!(!initial.edits.is_empty(), "{name}: no terrain changed");
+        let plan = with_lat(&doc, &scene, initial)?;
+        cases.push(verify(install, &scene, &mut doc, &plan, out, name, true)?);
+        if options.vertices {
+            ensure!(
+                flatten_tools::vertex_height(&doc, &scene, [65, 65], false)? == Some(8),
+                "vertex target changed after LAT"
+            );
+        } else {
+            ensure!(
+                ra2_map_scene::terrain_tools::value(&doc, &scene, *cells.first().unwrap()).level
+                    == 8,
+                "height target changed after LAT"
+            );
+        }
+    }
+    let mut connected_doc = document(&scene);
+    ring.apply(&mut connected_doc)?;
+    connected_doc.commit("cliff group");
+    let connected = height_tools::cliff_selection(&connected_doc, &scene, selected, true)?
+        .context("no cliff group")?;
+    ensure!(
+        connected.len() > template.cells.iter().flatten().count(),
+        "Ctrl did not expand beyond one template"
+    );
+    let changed = ra2_map_scene::terrain_tools::height_with_change(
+        &mut connected_doc,
+        &scene,
+        &connected,
+        ra2_map_scene::terrain_tools::TerrainMode::Raise,
+        0,
+        false,
+        ra2_map_scene::terrain_tools::HeightChange::Step(1),
+    )?;
+    let plan = PlateauPlan {
+        edits: changed
+            .into_iter()
+            .map(|at| {
+                (
+                    at,
+                    ra2_map_scene::terrain_tools::value(&connected_doc, &scene, at),
+                )
+            })
+            .collect(),
+        overlays: BTreeMap::new(),
+        cliffs: vec![],
+        interior: connected,
+        base: 5,
+    };
+    connected_doc.cancel();
+    let plan = with_lat(&connected_doc, &scene, plan)?;
+    cases.push(verify(
+        install,
+        &scene,
+        &mut connected_doc,
+        &plan,
+        out,
+        "fa2-common-ctrl-cliff-group",
+        true,
+    )?);
+    let mut fixed_doc = document(&scene);
+    let brush = scene
+        .brushes
+        .iter()
+        .find(|b| b.key.tile_id == stamp.tile && b.key.sub_tile == 0 && b.key.variant == 0)
+        .context("cliff brush absent")?;
+    let at = [50, 50];
+    let v = ra2_map_scene::terrain_tools::subtile_placement_at_height(
+        &fixed_doc,
+        &scene,
+        brush,
+        at,
+        Some(7),
+    )?;
+    let plan = PlateauPlan {
+        edits: BTreeMap::from([(at, v)]),
+        overlays: BTreeMap::new(),
+        cliffs: vec![],
+        interior: std::collections::BTreeSet::from([at]),
+        base: 7,
+    };
+    cases.push(verify(
+        install,
+        &scene,
+        &mut fixed_doc,
+        &plan,
+        out,
+        "fa2-common-subtile-fixed-base",
+        true,
+    )?);
+    let ids = scene.palette.tile_ids.context("tile ids absent")?;
+    if let (Some(rough), Some(clear)) = (
+        scene.brushes.iter().find(|b| {
+            i32::from(b.key.tile_id) == ids.rough && b.key.sub_tile == 0 && b.key.variant == 0
+        }),
+        scene.brushes.iter().find(|b| {
+            i32::from(b.key.tile_id) == ids.clear && b.key.sub_tile == 0 && b.key.variant == 0
+        }),
+    ) {
+        let mut flood_doc = document(&scene);
+        ra2_map_scene::fill_tools::plan(
+            &flood_doc,
+            &scene,
+            rough,
+            cliff_tools::rectangle([60, 60], [64, 64]),
+            true,
+        )?
+        .apply(&mut flood_doc)?;
+        flood_doc.commit("rough group with LAT");
+        let cells = ra2_map_scene::fill_tools::connected(&flood_doc, &scene, [62, 62])?;
+        ensure!(cells.len() >= 25, "Ctrl flood dropped source cells");
+        let p = ra2_map_scene::fill_tools::plan(&flood_doc, &scene, clear, cells, true)?;
+        let plan = PlateauPlan {
+            edits: p.edits,
+            overlays: BTreeMap::new(),
+            cliffs: vec![],
+            interior: p.cells,
+            base: 4,
+        };
+        cases.push(verify(
+            install,
+            &scene,
+            &mut flood_doc,
+            &plan,
+            out,
+            "fa2-common-ctrl-ground-fill",
+            true,
+        )?);
+    }
+    let mut manual_doc = document(&scene);
+    let mut manual_ring = cliff_tools::plan(
+        &manual_doc,
+        &scene,
+        cliff_tools::rectangle([60, 60], [74, 74]),
+        4,
+    )?;
+    for value in manual_ring.edits.values_mut() {
+        value.level = 4;
+    }
+    cases.push(verify(
+        install,
+        &scene,
+        &mut manual_doc,
+        &manual_ring,
+        out,
+        "subtile-cliff-before-repair",
+        true,
+    )?);
+    let repaired = height_tools::repair(
+        &manual_doc,
+        &scene,
+        &cliff_tools::rectangle([55, 55], [80, 80]),
+        4,
+    )?;
+    ensure!(
+        !repaired.edits.is_empty(),
+        "repair did not restore cliff heights"
+    );
+    cases.push(verify(
+        install,
+        &scene,
+        &mut manual_doc,
+        &repaired,
+        out,
+        "subtile-cliff-repaired",
+        true,
+    )?);
+    let filled = height_tools::fill(&manual_doc, &scene, [67, 67], 8)?;
+    cases.push(verify(
+        install,
+        &scene,
+        &mut manual_doc,
+        &filled,
+        out,
+        "subtile-cliff-filled",
+        true,
+    )?);
+    let mut brush_doc = document(&scene);
+    ring.apply(&mut brush_doc)?;
+    brush_doc.commit("unraised interior");
+    let source = *ring
+        .edits
+        .iter()
+        .find(|(at, v)| !ring.interior.contains(*at) && v.level == 8)
+        .context("cliff top absent")?
+        .0;
+    let mut selected = std::collections::BTreeSet::new();
+    for center in ra2_map_document::document::cell_line(source, [67, 67]) {
+        selected.extend(flatten_tools::window(&brush_doc, &scene, center, 3, 8)?);
+    }
+    let mut brush_plan = flatten_tools::plan(&brush_doc, &scene, &selected, 8, true)?;
+    let mut scratch = brush_doc.fork();
+    let mut changed: std::collections::BTreeSet<_> =
+        brush_plan.apply(&mut scratch)?.into_iter().collect();
+    changed.extend(ra2_map_scene::terrain_tools::recalculate(
+        &mut scratch,
+        &scene,
+        &changed,
+    )?);
+    brush_plan.edits = changed
+        .into_iter()
+        .map(|at| {
+            (
+                at,
+                ra2_map_scene::terrain_tools::value(&scratch, &scene, at),
+            )
+        })
+        .collect();
+    ensure!(
+        brush_plan
+            .edits
+            .get(&[67, 67])
+            .is_some_and(|v| v.level == 8),
+        "drag brush failed to flatten the interior"
+    );
+    cases.push(verify(
+        install,
+        &scene,
+        &mut brush_doc,
+        &brush_plan,
+        out,
+        "fa2-flatten-drag-from-cliff",
+        true,
+    )?);
+    for (&at, &v) in &ring.edits {
+        if !ring.interior.contains(&at) {
+            ensure!(
+                brush_doc.terrain(at) == Some(v),
+                "flatten brush changed a cliff"
+            );
+        }
+    }
+    // Finish brushing the whole interior, rather than treating one narrow
+    // stroke as evidence that the entire platform meets the surrounding rim.
+    for &center in &ring.interior {
+        selected.extend(flatten_tools::window(&brush_doc, &scene, center, 3, 8)?);
+    }
+    let mut complete = flatten_tools::plan(&brush_doc, &scene, &selected, 8, true)?;
+    let mut scratch = brush_doc.fork();
+    let mut changed: std::collections::BTreeSet<_> =
+        complete.apply(&mut scratch)?.into_iter().collect();
+    changed.extend(ra2_map_scene::terrain_tools::recalculate(
+        &mut scratch,
+        &scene,
+        &changed,
+    )?);
+    complete.edits = changed
+        .into_iter()
+        .map(|at| {
+            (
+                at,
+                ra2_map_scene::terrain_tools::value(&scratch, &scene, at),
+            )
+        })
+        .collect();
+    for &at in &ring.interior {
+        let v = ra2_map_scene::terrain_tools::value(&scratch, &scene, at);
+        ensure!(
+            v.level == 8,
+            "complete brush left an unraised cell at {at:?}"
+        );
+        let tile = scene.palette.raw_ids[&v.tile];
+        ensure!(
+            scene.palette.templates[&(tile, 0)].cells[usize::from(v.sub)]
+                .as_ref()
+                .is_some_and(|s| s.slope == 0),
+            "complete brush left a slope at {at:?}"
+        );
+    }
+    cases.push(verify(
+        install,
+        &scene,
+        &mut brush_doc,
+        &complete,
+        out,
+        "fa2-flatten-complete-interior",
+        true,
+    )?);
+    for (&at, &v) in &ring.edits {
+        if !ring.interior.contains(&at) {
+            ensure!(
+                brush_doc.terrain(at) == Some(v),
+                "complete brush changed a cliff"
+            );
+        }
+    }
+    if height_only {
+        let mut census = Vec::new();
+        for (&tile, group) in &scene.palette.groups {
+            if group.category != ra2_map_assets::terrain_library::TerrainCategory::Cliff {
+                continue;
+            }
+            let Some(t) = scene.palette.templates.get(&(tile, 0)) else {
+                continue;
+            };
+            census.push(serde_json::json!({"tile":tile,"heights":t.cells.iter().flatten().map(|s| s.height).collect::<Vec<_>>() }));
+        }
+        std::fs::write(
+            out.join("cliff-height-census.json"),
+            serde_json::to_vec_pretty(&census)?,
+        )?;
+        return Ok(serde_json::json!({"theater":theater,"cases":cases,
+            "standard_cliff_templates_checked":standard_templates,"standard_cliff_subtiles_checked":standard_subtiles}));
     }
     for back in [false, true] {
         for (dx, dy) in [
@@ -411,7 +1024,8 @@ fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json:
             )?);
         }
     }
-    Ok(serde_json::json!({"theater":theater,"cases":cases}))
+    Ok(serde_json::json!({"theater":theater,"cases":cases,
+        "standard_cliff_templates_checked":standard_templates,"standard_cliff_subtiles_checked":standard_subtiles}))
 }
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
@@ -423,14 +1037,24 @@ fn main() -> Result<()> {
     std::fs::create_dir_all(&out)?;
     let mut install = Install::open(&directory)?;
     let mut reports = Vec::new();
-    let filter = args.next().map(|s| s.to_string_lossy().to_uppercase());
+    let filter = args
+        .next()
+        .map(|s| s.to_string_lossy().to_uppercase())
+        .filter(|s| s != "ALL");
+    let scope = args.next();
+    ensure!(
+        scope.as_ref().is_none_or(|s| s == "--height-only"),
+        "unknown audit scope"
+    );
+    let height_only = scope.is_some();
     for (theater, _) in THEATERS {
         if filter.as_ref().is_some_and(|f| f != theater) {
             continue;
         }
         println!("Auditing {theater}...");
         reports.push(
-            audit(&mut install, theater, &out.join(theater)).with_context(|| theater.to_owned())?,
+            audit(&mut install, theater, &out.join(theater), height_only)
+                .with_context(|| theater.to_owned())?,
         );
     }
     ensure!(!reports.is_empty(), "unknown theater filter");

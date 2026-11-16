@@ -727,7 +727,31 @@ impl MapView {
             self.center -= response.drag_delta() / self.zoom;
         }
         if response.hovered() {
-            let delta = ui.input(|i| i.smooth_scroll_delta.y);
+            let delta = ui.input(|i| {
+                if i.modifiers.ctrl || i.modifiers.command {
+                    // egui consumes Ctrl+wheel as a zoom gesture rather than
+                    // exposing it through smooth_scroll_delta.
+                    i.events
+                        .iter()
+                        .filter_map(|event| {
+                            if let egui::Event::MouseWheel { unit, delta, .. } = event {
+                                Some(
+                                    delta.y
+                                        * match unit {
+                                            egui::MouseWheelUnit::Point => 1.,
+                                            egui::MouseWheelUnit::Line => 50.,
+                                            egui::MouseWheelUnit::Page => rect.height(),
+                                        },
+                                )
+                            } else {
+                                None
+                            }
+                        })
+                        .sum()
+                } else {
+                    i.smooth_scroll_delta.y
+                }
+            });
             let next = (self.zoom * (delta * 0.003).exp()).clamp(0.01, 8.);
             if let Some(pointer) = response.hover_pos() {
                 let mut camera = crate::camera::MapCamera {
@@ -784,6 +808,9 @@ impl MapView {
             let world = camera.world_point(rect, p);
             if self.editor.flat_view {
                 self.workbench.flat_view.pick(world)
+            } else if let Some(at) = self.editor.flatten_hover(scene, world) {
+                self.workbench.flat_view.prepare(scene);
+                self.workbench.flat_view.cell_index(at)
             } else {
                 scene.pick(world)
             }
@@ -799,6 +826,26 @@ impl MapView {
         }
         let at = self.hover.map(|i| [scene.cells[i].rx, scene.cells[i].ry]);
         self.editor.brush_modifiers(ui.input(|i| i.modifiers));
+        if keyboard
+            && !panning
+            && response.hovered()
+            && !self.editor.stroking
+            && self.editor.tool == crate::editing::Tool::Terrain
+            && self.editor.terrain_mode == ra2_map_scene::terrain_tools::TerrainMode::Flatten
+            && let Some(at) = at
+        {
+            let direction = ui.input_mut(|i| {
+                if i.modifiers.ctrl || i.modifiers.command || i.modifiers.alt {
+                    return 0;
+                }
+                let mods = i.modifiers;
+                i8::from(i.consume_key(mods, egui::Key::ArrowUp))
+                    - i8::from(i.consume_key(mods, egui::Key::ArrowDown))
+            });
+            if direction != 0 {
+                self.editor.nudge_flatten_height(scene, at, direction > 0);
+            }
+        }
         if self.editor.flat_view {
             self.editor
                 .terrain_preview(&painter, scene, rect, &camera, at);

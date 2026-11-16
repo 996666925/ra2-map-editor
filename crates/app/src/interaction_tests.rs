@@ -168,6 +168,97 @@ fn unavailable_tools_explain_the_prerequisite_and_keep_the_current_tool() {
 }
 
 #[test]
+fn vertex_shortcut_is_available_for_smooth_height_tools_and_pauses_during_a_stroke() {
+    let (mut e, ctx, root) = editor();
+    let scene = terrain_scene();
+    e.attach(&scene);
+    e.activate_terrain_mode(TerrainMode::Flatten);
+    crate::test_support::run_ui(&ctx, key(egui::Key::A, egui::Modifiers::NONE), |ui| {
+        e.shortcuts(ui.ctx(), &scene)
+    });
+    assert!(e.height_vertices);
+    e.smooth_heights = false;
+    crate::test_support::run_ui(&ctx, key(egui::Key::A, egui::Modifiers::NONE), |ui| {
+        e.shortcuts(ui.ctx(), &scene)
+    });
+    assert!(e.height_vertices);
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    crate::test_support::run_ui(&ctx, key(egui::Key::A, egui::Modifiers::NONE), |ui| {
+        e.shortcuts(ui.ctx(), &scene)
+    });
+    assert!(e.height_vertices);
+    e.cancel_active(&scene);
+    e.smooth_heights = true;
+    crate::test_support::run_ui(&ctx, key(egui::Key::A, egui::Modifiers::NONE), |ui| {
+        e.shortcuts(ui.ctx(), &scene)
+    });
+    assert!(!e.height_vertices);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn page_keys_adjust_template_and_subtile_base_without_writing_the_map() {
+    let (mut e, ctx, root) = editor();
+    let scene = terrain_scene();
+    e.attach(&scene);
+    e.activate_terrain_mode(TerrainMode::Template);
+    e.terrain_hover = Some([20, 20]);
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    for (code, expected) in [
+        (egui::Key::PageUp, 1),
+        (egui::Key::PageUp, 2),
+        (egui::Key::PageDown, 1),
+    ] {
+        crate::test_support::run_ui(&ctx, key(code, egui::Modifiers::NONE), |ui| {
+            e.shortcuts(ui.ctx(), &scene)
+        });
+        assert_eq!(e.template_level, Some(expected));
+    }
+    e.activate_terrain_mode(TerrainMode::Subtile);
+    crate::test_support::run_ui(&ctx, key(egui::Key::PageUp, egui::Modifiers::NONE), |ui| {
+        e.shortcuts(ui.ctx(), &scene)
+    });
+    assert_eq!(e.template_level, Some(2));
+    e.auto_lat = false;
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    e.template_level = Some(9);
+    e.pointer(&scene, None, false, false, true, None);
+    assert_eq!(e.doc.as_ref().unwrap().terrain([20, 20]).unwrap().level, 2);
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn fa2_function_keys_select_height_tools_without_consuming_playtest_f5_outside_terrain() {
+    let (mut e, ctx, root) = editor();
+    let scene = terrain_scene();
+    e.attach(&scene);
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.activate_tool(Tool::Select);
+    let _ = crate::test_support::run_ui(&ctx, key(egui::Key::F5, egui::Modifiers::NONE), |ui| {
+        e.shortcuts(ui.ctx(), &scene)
+    });
+    assert_eq!(e.tool, Tool::Select);
+    for (key_code, mode) in [
+        (egui::Key::F7, TerrainMode::Flatten),
+        (egui::Key::F6, TerrainMode::Lower),
+        (egui::Key::F5, TerrainMode::Raise),
+    ] {
+        let _ = crate::test_support::run_ui(&ctx, key(key_code, egui::Modifiers::NONE), |ui| {
+            e.shortcuts(ui.ctx(), &scene)
+        });
+        assert_eq!(e.tool, Tool::Terrain);
+        assert_eq!(e.terrain_mode, mode);
+    }
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn terrain_shortcuts_reveal_the_workspace_and_preserve_text_entry_and_copy() {
     let (mut e, ctx, root) = editor();
     let scene = terrain_scene();

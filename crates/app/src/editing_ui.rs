@@ -14,6 +14,7 @@ pub(super) struct EditorUi {
     pub sprites: HashMap<(String, String), TextureHandle>,
     pub map_sprites: HashMap<usize, TextureHandle>,
     pub textures: HashMap<(u16, u8, u8), TextureHandle>,
+    pub terrain_palette: usize,
     pub template_textures: HashMap<(u16, u8), TextureHandle>,
     pub terrain_category: Option<ra2_map_assets::terrain_library::TerrainCategory>,
     pub terrain_group: Option<u16>,
@@ -43,6 +44,36 @@ pub(super) fn map_sprite_texture(
 }
 
 impl Editor {
+    pub(super) fn height_change(&self) -> terrain_tools::HeightChange {
+        if self.height_absolute {
+            terrain_tools::HeightChange::To(self.height_target)
+        } else {
+            terrain_tools::HeightChange::Step(self.height_step)
+        }
+    }
+
+    fn height_change_options(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.height_absolute, false, tr!("按层数升降"));
+            ui.selectable_value(&mut self.height_absolute, true, tr!("指定目标高度"));
+        });
+        if self.height_absolute {
+            ui.add(
+                egui::Slider::new(
+                    &mut self.height_target,
+                    0..=if self.smooth_heights { 12 } else { 127 },
+                )
+                .text(tr!("目标高度")),
+            );
+            ui.small(tr!("升高只抬高低于目标的地面，降低只压低高于目标的地面。"));
+            if !self.smooth_heights {
+                ui.small(tr!("悬崖以崖顶作为目标高度，完整模板保持相对高度差。"));
+            }
+        } else {
+            ui.add(egui::Slider::new(&mut self.height_step, 1..=127).text(tr!("每笔升降层数")));
+        }
+    }
+
     pub(crate) fn show_library(&mut self, tab: u8, section: &str, filter: &str) {
         self.ui_state.tab = tab;
         self.ui_state.filters[tab as usize] = filter.into();
@@ -419,6 +450,47 @@ impl Editor {
             }
         }
     }
+    pub(super) fn height_pick_options(&mut self, ui: &mut egui::Ui) {
+        let flatten = self.terrain_mode == TerrainMode::Flatten;
+        if flatten {
+            if ui
+                .checkbox(&mut self.flatten_fixed, tr!("固定目标高度"))
+                .changed()
+                && !self.flatten_fixed
+            {
+                self.picking_height = false;
+            }
+            if !self.flatten_fixed {
+                ui.small(tr!("每笔从按下处取高，按住拖刷；松手提交，Esc 取消。"));
+            }
+        }
+        let max = if self.terrain_mode == TerrainMode::Flatten && self.smooth_heights {
+            12
+        } else {
+            127
+        };
+        if ui
+            .add_enabled(
+                !flatten || self.flatten_fixed,
+                egui::Slider::new(&mut self.flatten_level, 0..=max).text(tr!("目标高度")),
+            )
+            .changed()
+        {
+            self.picking_height = false;
+        }
+        if ui
+            .toggle_value(&mut self.picking_height, tr!("拾取高度"))
+            .clicked()
+            && flatten
+            && self.picking_height
+        {
+            self.flatten_fixed = true;
+        }
+        if self.picking_height {
+            ui.small(tr!("点击崖顶或地面拾取高度；此次点击不会修改地图。"));
+        }
+    }
+
     pub fn tool_options(&mut self, ui: &mut egui::Ui, scene: &MapScene) {
         if self.tool == Tool::Place {
             ui.horizontal(|ui| {
@@ -515,14 +587,26 @@ impl Editor {
                     self.plateau_options(ui, scene);
                 } else if self.terrain_mode.edits_height() {
                     ui.checkbox(&mut self.smooth_heights, tr!("自动生成连续坡面"));
+                    if self.smooth_heights {
+                        ui.checkbox(&mut self.height_vertices, tr!("顶点模式 A"));
+                        ui.small(tr!("Shift 陡坡；Ctrl+Shift 强制塑形；Alt+Shift 锁轴画线。"));
+                    }
                     if self.terrain_mode == TerrainMode::Flatten {
-                        ui.add(
-                            egui::Slider::new(
-                                &mut self.flatten_level,
-                                0..=if self.smooth_heights { 12 } else { 127 },
-                            )
-                            .text(tr!("目标高度")),
-                        );
+                        self.height_pick_options(ui);
+                        ui.small(tr!("鼠标所在处可用 ↑ / ↓ 升降一层；滚轮保持缩放地图。"));
+                        if !self.smooth_heights {
+                            ui.small(tr!("平整会保留悬崖高度；改变崖壁基准请使用修正悬崖高度。"));
+                        }
+                    } else {
+                        self.height_change_options(ui);
+                        if !self.height_vertices || !self.smooth_heights {
+                            ui.small(tr!(
+                                "点击悬崖直接整体升降；Ctrl 扩展到相连的同组悬崖，忽略笔刷大小。"
+                            ));
+                        }
+                        if !self.smooth_heights {
+                            ui.small(tr!("悬崖按完整模板一起升降，保持子块高度差；模板不完整或高度越界时拒绝修改。"));
+                        }
                     }
                     ui.small(tr!("拖动选择区域，释放后整笔塑形。每格每笔只升降一次。"));
                 } else if self.terrain_mode == TerrainMode::Template {
@@ -534,9 +618,29 @@ impl Editor {
                     ));
                     ui.small(tr!("自动 LAT 会修补边缘，浅蓝色标出范围外的过渡调整。"));
                 } else {
-                    ui.small(tr!("拖动连续绘制，保留原有高度。"));
+                    if self.terrain_mode == TerrainMode::Subtile {
+                        let mut fixed = self.template_level.is_some();
+                        if ui.checkbox(&mut fixed, tr!("指定模板基准高度")).changed() {
+                            self.template_level = fixed.then_some(0);
+                        }
+                        if let Some(level) = &mut self.template_level {
+                            ui.add(egui::Slider::new(level, 0..=127).text(tr!("基准高度")));
+                        }
+                        ui.small(tr!(
+                            "PageUp / PageDown 调整放置基准高度；取消指定高度可恢复跟随地面。"
+                        ));
+                    }
+                    ui.small(tr!(
+                        "拖动连续绘制；悬崖子块按低地基准加模板高度，重复绘制不会叠高。"
+                    ));
+                    ui.small(tr!(
+                        "Ctrl 点击连通铺地；Alt 拖动直线；Ctrl+Shift 放置时关闭自动 LAT。"
+                    ));
                 }
-                if !self.terrain_mode.planned() && self.terrain_mode != TerrainMode::Fill {
+                if !self.terrain_mode.planned()
+                    && self.terrain_mode != TerrainMode::Fill
+                    && !(self.terrain_mode.edits_height() && self.smooth_heights)
+                {
                     ui.small(tr!(
                         "按住 Shift 锁定地图轴向；松开恢复自由绘制，拖动中也可按下。"
                     ));

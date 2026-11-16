@@ -23,6 +23,313 @@ fn scene() -> MapScene {
 }
 
 #[test]
+fn repair_options_do_not_change_plateau_or_manual_template_height_settings() {
+    let (mut e, ctx, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    e.activate_terrain_mode(TerrainMode::CliffHeightRepair);
+    let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| e.tool_options(ui, &scene));
+    assert_eq!(
+        e.template_level, None,
+        "repair options must not disable automatic plateau height inference"
+    );
+    e.template_level = Some(9);
+    e.cliff_repair_base = 3;
+    let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| e.tool_options(ui, &scene));
+    assert_eq!(e.template_level, Some(9));
+    assert_eq!(e.cliff_repair_base, 3);
+    e.activate_terrain_mode(TerrainMode::HeightFill);
+    assert!(e.picking_height);
+    e.activate_terrain_mode(TerrainMode::HeightFill);
+    assert!(
+        e.picking_height,
+        "clicking the active tool should not turn off its pending height pick"
+    );
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn repair_ghost_draws_individual_subtiles_at_their_saved_height() {
+    for multi in [false, true] {
+        assert_repair_ghost(multi);
+    }
+}
+
+fn assert_repair_ghost(multi: bool) {
+    let (mut e, ctx, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    let brush = scene
+        .brushes
+        .iter()
+        .find(|b| {
+            let t = &scene.palette.templates[&(b.key.tile_id, 0)];
+            scene.palette.groups.get(&b.key.tile_id).is_some_and(|g| {
+                g.category == ra2_map_assets::terrain_library::TerrainCategory::Cliff
+            }) && (t.width > 1) == multi
+                && t.cells[usize::from(b.key.sub_tile)].is_some_and(|s| s.height == 4)
+        })
+        .unwrap();
+    let at = [36, 36];
+    e.doc
+        .as_mut()
+        .unwrap()
+        .set(
+            Target::Terrain(at),
+            Some(Value::Terrain(crate::document::TerrainValue {
+                tile: brush.raw,
+                sub: brush.key.sub_tile,
+                level: 0,
+                ice: 0,
+            })),
+        )
+        .unwrap();
+    e.doc.as_mut().unwrap().commit("old subtile");
+    e.activate_terrain_mode(TerrainMode::CliffHeightRepair);
+    e.pointer(&scene, Some(at), true, true, false, None);
+    let camera = crate::camera::MapCamera {
+        center: scene.bounds.center(),
+        zoom: 0.75,
+    };
+    let mut expected = egui::Rect::NOTHING;
+    let output = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+        let image = &scene.palette.images[&brush.key];
+        let (x, y) = vera20k_core::map::terrain::iso_to_screen(at[0], at[1], 4);
+        let origin = egui::pos2(
+            x + image.info.offset[0] as f32,
+            y + image.info.offset[1] as f32,
+        );
+        expected = egui::Rect::from_min_size(
+            ui.max_rect().min + (origin - camera.world_rect(ui.max_rect()).min) * camera.zoom,
+            egui::vec2(image.info.width as f32, image.info.height as f32) * camera.zoom,
+        );
+        e.terrain_preview(ui.painter(), &scene, ui.max_rect(), &camera, Some(at));
+    });
+    let meshes: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Mesh(m)
+                if m.vertices
+                    .iter()
+                    .all(|v| v.color == Color32::from_white_alpha(180)) =>
+            {
+                Some(m)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        meshes.len(),
+        1,
+        "a partial multi-cell cliff still needs an individual subtile ghost"
+    );
+    assert_eq!(meshes[0].calc_bounds(), expected);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn height_preview_invalidates_pending_edits_and_resource_reloads() {
+    let (mut e, ctx, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    let brush = scene
+        .brushes
+        .iter()
+        .find(|b| {
+            scene.palette.groups.get(&b.key.tile_id).is_some_and(|g| {
+                g.category == ra2_map_assets::terrain_library::TerrainCategory::Cliff
+            }) && scene.palette.templates[&(b.key.tile_id, 0)].cells[usize::from(b.key.sub_tile)]
+                .is_some_and(|s| s.height == 4)
+        })
+        .unwrap();
+    let at = [36, 36];
+    e.doc
+        .as_mut()
+        .unwrap()
+        .set(
+            Target::Terrain(at),
+            Some(Value::Terrain(crate::document::TerrainValue {
+                tile: brush.raw,
+                sub: brush.key.sub_tile,
+                level: 0,
+                ice: 0,
+            })),
+        )
+        .unwrap();
+    e.doc.as_mut().unwrap().commit("old subtile");
+    e.activate_terrain_mode(TerrainMode::CliffHeightRepair);
+    e.pointer(&scene, Some(at), true, true, false, None);
+    let first = e.plateau_preview_plan(&scene, at).unwrap();
+    e.doc
+        .as_mut()
+        .unwrap()
+        .set(Target::Overlay(at), Some(Value::Overlay(1, 0)))
+        .unwrap();
+    assert!(e.plateau_preview_plan(&scene, at).is_err());
+    e.doc.as_mut().unwrap().cancel();
+    let restored = e.plateau_preview_plan(&scene, at).unwrap();
+    assert!(!Arc::ptr_eq(&first, &restored));
+    let alternate = self::scene();
+    let reloaded = e.plateau_preview_plan(&alternate, at).unwrap();
+    assert!(!Arc::ptr_eq(&restored, &reloaded));
+    let old = terrain_ui::subtile_texture(&mut e.ui_state, &ctx, &scene, brush.key).unwrap();
+    let new = terrain_ui::subtile_texture(&mut e.ui_state, &ctx, &alternate, brush.key).unwrap();
+    assert_ne!(
+        old.id(),
+        new.id(),
+        "a resource reload must not reuse the prior palette texture"
+    );
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cliff_height_repair_previews_only_heights_and_keeps_a_hand_assembled_partial_stamp() {
+    let (mut e, ctx, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    let brush = scene
+        .brushes
+        .iter()
+        .find(|b| {
+            scene.palette.groups.get(&b.key.tile_id).is_some_and(|g| {
+                g.category == ra2_map_assets::terrain_library::TerrainCategory::Cliff
+            }) && scene.palette.templates[&(b.key.tile_id, 0)].cells[usize::from(b.key.sub_tile)]
+                .is_some_and(|s| s.height == 4)
+        })
+        .unwrap();
+    let at = [36, 36];
+    let doc = e.doc.as_mut().unwrap();
+    doc.set(
+        Target::Terrain(at),
+        Some(Value::Terrain(crate::document::TerrainValue {
+            tile: brush.raw,
+            sub: brush.key.sub_tile,
+            level: 0,
+            ice: 7,
+        })),
+    )
+    .unwrap();
+    doc.commit("old partial stamp");
+    let before = doc.snapshot().bytes().unwrap();
+    e.activate_terrain_mode(TerrainMode::CliffHeightRepair);
+    e.template_level = Some(0);
+    e.pointer(&scene, Some([34, 34]), true, true, false, None);
+    e.pointer(&scene, Some([38, 38]), false, true, false, None);
+    let plan = e.plateau_preview_plan(&scene, [38, 38]).unwrap();
+    assert_eq!(plan.edits.len(), 1);
+    assert_eq!(plan.edits[&at].level, 4);
+    let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+        e.tool_options(ui, &scene);
+        e.terrain_preview(
+            ui.painter(),
+            &scene,
+            ui.max_rect(),
+            &crate::camera::MapCamera {
+                center: scene.bounds.center(),
+                zoom: 0.75,
+            },
+            Some([38, 38]),
+        );
+    });
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.pointer(&scene, Some([38, 38]), false, false, true, None);
+    assert_eq!(
+        e.doc.as_ref().unwrap().terrain(at).unwrap(),
+        plan.edits[&at]
+    );
+    assert_eq!(e.doc.as_ref().unwrap().terrain(at).unwrap().ice, 7);
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.history(true, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().terrain(at).unwrap().level, 4);
+    e.activate_terrain_mode(TerrainMode::HeightFill);
+    e.pointer(&scene, Some(at), true, true, false, None);
+    assert_eq!(
+        e.flatten_level, 4,
+        "partial cliff can be picked after repair"
+    );
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn height_fill_picks_cliff_top_previews_then_commits_and_cancels_as_one_edit() {
+    let (mut e, ctx, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    let doc = e.doc.as_mut().unwrap();
+    let cliffs =
+        cliff_tools::plan(doc, &scene, cliff_tools::rectangle([30, 30], [42, 42]), 4).unwrap();
+    cliffs.apply(doc).unwrap();
+    for &at in &cliffs.interior {
+        let old = terrain_tools::value(doc, &scene, at);
+        doc.set(
+            Target::Terrain(at),
+            Some(Value::Terrain(crate::document::TerrainValue {
+                level: 4,
+                ..old
+            })),
+        )
+        .unwrap();
+    }
+    doc.commit("hollow");
+    let before = doc.snapshot().bytes().unwrap();
+    e.activate_terrain_mode(TerrainMode::HeightFill);
+    assert!(e.picking_height);
+    let wall = cliffs.cliffs[0].origin;
+    e.pointer(&scene, Some(wall), true, true, false, None);
+    e.pointer(&scene, Some(wall), false, false, true, None);
+    assert_eq!(e.flatten_level, 8);
+    assert!(!e.picking_height);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.pointer(&scene, Some([36, 36]), true, true, false, None);
+    let plan = e.plateau_preview_plan(&scene, [36, 36]).unwrap();
+    let output = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+        e.terrain_preview(
+            ui.painter(),
+            &scene,
+            ui.max_rect(),
+            &crate::camera::MapCamera {
+                center: scene.bounds.center(),
+                zoom: 0.75,
+            },
+            Some([36, 36]),
+        );
+    });
+    assert!(!output.shapes.is_empty());
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.flatten_level = 12; // An active gesture keeps its picked height.
+    e.pointer(&scene, None, false, false, true, None);
+    assert!(!e.stroking);
+    for (&at, &v) in &plan.edits {
+        assert_eq!(e.doc.as_ref().unwrap().terrain(at), Some(v));
+    }
+    let after = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.history(true, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    e.flatten_level = 9;
+    e.pointer(&scene, Some([36, 36]), true, true, false, None);
+    assert!(e.cancel_active(&scene));
+    e.pointer(&scene, Some([36, 36]), false, false, true, None);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    // The same picker is available for the existing flatten brush.
+    e.activate_terrain_mode(TerrainMode::Flatten);
+    e.picking_height = true;
+    e.pointer(&scene, Some([36, 36]), true, true, false, None);
+    e.pointer(&scene, Some([36, 36]), false, false, true, None);
+    assert_eq!(e.flatten_level, 8);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn manual_cliff_defaults_to_low_ground_and_keeps_explicit_high_anchors() {
     let (mut e, ctx, root) = editor();
     let scene = scene();

@@ -15,10 +15,12 @@ pub(super) struct FillEdit {
 struct Key {
     document: u64,
     state: u64,
+    palette: usize,
     start: Cell,
     end: Cell,
     brush: usize,
     lat: bool,
+    connected: bool,
 }
 struct Preview {
     key: Key,
@@ -29,6 +31,7 @@ struct Gesture {
     last: Cell,
     brush: usize,
     lat: bool,
+    connected: bool,
 }
 impl FillEdit {
     pub fn cancel(&mut self) {
@@ -43,11 +46,13 @@ impl FillEdit {
         let g = self.gesture.as_ref().unwrap();
         let key = Key {
             document: doc.id,
-            state: doc.state_id,
+            state: doc.edit_revision(),
+            palette: Arc::as_ptr(&scene.palette) as usize,
             start: g.start,
             end: at,
             brush: g.brush,
             lat: g.lat,
+            connected: g.connected,
         };
         self.plan(doc, scene, key)
     }
@@ -64,7 +69,12 @@ impl FillEdit {
                 .get(key.brush)
                 .context(tr!("请选择填充地表"))
                 .and_then(|brush| {
-                    fill_tools::plan(doc, scene, brush, rectangle(key.start, key.end), key.lat)
+                    let cells = if key.connected {
+                        fill_tools::connected(doc, scene, key.start)?
+                    } else {
+                        rectangle(key.start, key.end)
+                    };
+                    fill_tools::plan(doc, scene, brush, cells, key.lat)
                 })
                 .map(Arc::new)
                 .map_err(|e| format!("{e:#}"));
@@ -74,6 +84,17 @@ impl FillEdit {
     }
 }
 impl Editor {
+    pub(super) fn fill_active_or_requested(&self) -> bool {
+        self.fill.gesture.is_some()
+            || !self.stroking
+                && self.tool == Tool::Terrain
+                && matches!(
+                    self.terrain_mode,
+                    TerrainMode::Template | TerrainMode::Subtile
+                )
+                && self.brush_ctrl
+                && !self.brush_shift
+    }
     pub(super) fn prepare_fill_material(&mut self, scene: &MapScene) {
         if !self.stroking
             && scene
@@ -97,13 +118,16 @@ impl Editor {
         down: bool,
         release: bool,
     ) -> bool {
-        if self.fill.gesture.is_none()
+        if !self.fill_active_or_requested()
             && !(self.tool == Tool::Terrain && self.terrain_mode == TerrainMode::Fill)
         {
             return false;
         }
         if press && let Some(at) = at {
-            self.prepare_fill_material(scene);
+            let connected = self.terrain_mode != TerrainMode::Fill;
+            if !connected {
+                self.prepare_fill_material(scene);
+            }
             self.fill.cancel();
             self.feedback.clear();
             self.fill.gesture = Some(Gesture {
@@ -111,12 +135,14 @@ impl Editor {
                 last: at,
                 brush: self.brush,
                 lat: self.auto_lat,
+                connected,
             });
             self.stroking = true;
         }
         if let Some(g) = self.fill.gesture.as_mut() {
             if (down || press || release)
                 && let Some(at) = at
+                && !g.connected
             {
                 g.last = at;
             }
@@ -131,7 +157,7 @@ impl Editor {
                             self.feedback = cells.into_iter().collect();
                             self.commit(scene, TerrainMode::Fill.name());
                             self.status = tr!(
-                                "框选铺地 · {arg0} 格修改 · 保留 {arg1} 格结构地形",
+                                "地表填充 · {arg0} 格修改 · 保留 {arg1} 格结构地形",
                                 arg0 = self.feedback.len(),
                                 arg1 = plan.skipped.len()
                             );
@@ -165,11 +191,13 @@ impl Editor {
                 scene,
                 Key {
                     document: doc.id,
-                    state: doc.state_id,
+                    state: doc.edit_revision(),
+                    palette: Arc::as_ptr(&scene.palette) as usize,
                     start: at,
                     end: at,
                     brush: self.brush,
                     lat: self.auto_lat,
+                    connected: self.terrain_mode != TerrainMode::Fill,
                 },
             )
         };

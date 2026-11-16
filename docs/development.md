@@ -108,6 +108,24 @@ cargo run --locked -p ra2-map-render --example cliff_refresh_audit -- 'D:/Games/
 cargo run --locked -p ra2-map-scene --example bridge_audit -- 'D:/Games/YR' target/bridge-audit
 ```
 
+保留悬崖填高地和完整悬崖升降包含在 `authoring_audit` 中。`height-fill-before` / `height-fill-after` 输出同一崖线填高前后的地图和 PNG；审计还检查崖顶高度拾取、填充未跨过原边界、已有崖壁未改动、完整模板升高后的保存重开与撤销重做。可附加环境名称只检查该环境：
+
+```powershell
+cargo run --locked --offline -p ra2-map-scene --example authoring_audit -- 'D:/Games/YR' target/height-authoring-audit SNOW --height-only
+```
+
+该工具填充起点所在的同高度连通平地，遇到地图边缘或需改高的对象 / 覆盖物占地时整笔拒绝；不承诺自动修复原本破损的悬崖，也不代替游戏内通行验收。
+
+`--height-only` 仅运行高度专项，省略则继续执行完整创作审计。`subtile-cliff-before-repair` / `subtile-cliff-repaired` / `subtile-cliff-filled` 复现旧子块画笔所有悬崖子块等高的状态，检查只修正子块高度后再填高内部；保留三阶段地图和 PNG。合成回归另覆盖零层地面、单独放置的不完整模板、重复涂刷不叠高、画笔预览与提交一致、修正时保留图块与冰字节、占用和高度越界拒绝。
+
+环境参数 `ALL` 配合 `--height-only` 可检查全部环境。专项还逐一取样每个标准悬崖模板的每个有效子块，验证只含低侧的模板也返回正确崖顶；`cliff-height-census.json` 记录各模板的原始相对高度。库回归另检查平整保留崖壁高度、修正工具参数独立、单格 / 多格子块预览坐标、异常元数据拒绝，以及文档编辑和资源重载后的预览缓存更新。
+
+FA2 风格刷平默认按下取高、拖动预览、松手整笔提交。地面升降与刷平共用 `flatten_tools` 的可塑地面表面图；普通升降按点击高度选取同高格，顶点模式按点击顶点的高度方向筛选。四 / 八方向顶点约束对应陡坡 / 普通坡面，闭合崖角的地面表面分开；Ctrl+Shift 强制塑形会允许重写结构地形，仍保护对象与覆盖物。该实现参考 FA2sp 的选格和坡面规则，未宣称逐图块结果相同；底层 `terrain_tools::height` 仍保留供其他调用方使用的游戏随机地图角点接口，界面连续地面升降不再调用该规则。
+
+升降工具支持自定义层数和目标高度；`height_edit.rs` 缓存包含 LAT 的验证计划，预览和松手提交共用该计划。目标模式在 LAT 后核查全部可编辑选中格，避免跳过的高格意外降低；冲突时写入前拒绝。普通悬崖点击直接进入完整模板路径，Ctrl 八方向扩展相连同组悬崖；顶点和强制模式使用表面图。`fill_edit.rs` 支持矩形与 Ctrl 同类地表连通填充，缓存包含文档编辑版本和资源身份。放置高度、Alt 线段回撤、Ctrl+Shift 关闭 LAT 和刷平模式方向键临时升降均使用相同的文档事务；滚轮保持缩放地图。
+
+真实资源 `authoring_audit -- ... ALL --height-only` 输出各环境的地图 / PNG、保存重开、引擎重载和撤销重做结果。除旧高度专项外，新增 `fa2-common-steep` / `vertex` / `force` / `ctrl-cliff-group` / `subtile-fixed-base` / `ctrl-ground-fill` 等用例。`fa2-flatten-drag-from-cliff` / `fa2-flatten-complete-interior` 继续检查从崖顶拖入内部和完整刷平。库回归另覆盖修饰键捕获、Alt 回撤、残缺模板拒绝、崖顶上限、背面负基准、方向键改高、滚轮缩放不改地图的真实画布事件；日志保存到 `target/fa2-common-cliff-tests.log` 和 `target/fa2-common-cliff-input-test.log`。这些检查证明本项目结果可保存、可撤销，不构成 FA2 双 GUI 同图对照。
+
 体素适配直接编译固定版本引擎的 GPU 光栅器和 WGSL，在资源线程按最多 32 个朝向批量生成静态图，每批只提交、读回一次，供预览、拾取与地图图集共享。`UseBuffer` 等上游不支持的 GPU 路径直接复用 CPU 结果；车体、炮塔、炮管相交合成需要几何深度，因此整体走一次 CPU 路径，避免 GPU 绘制后再完整执行 CPU 光栅化。
 
 使用真实资源验证 GPU 的 32 朝向像素、合成深度和 CPU 回退（测试会要求实际 GPU 执行，不能以回退代替）：

@@ -4,6 +4,7 @@ use crate::document::Cell;
 #[derive(Clone, Copy, Default)]
 pub(super) struct BrushDirection {
     shift: bool,
+    line: bool,
     last: Option<Cell>,
     lock: Option<AxisLock>,
 }
@@ -15,9 +16,13 @@ struct AxisLock {
 }
 
 impl BrushDirection {
-    pub fn set_shift(&mut self, shift: bool) {
+    pub fn set_modifiers(&mut self, shift: bool, line: bool) {
+        if self.shift != shift || self.line != line {
+            self.lock = None;
+        }
         self.shift = shift;
-        if !shift {
+        self.line = line;
+        if !shift && !line {
             self.lock = None;
         }
     }
@@ -30,14 +35,14 @@ impl BrushDirection {
             self.lock = None;
         }
         let mut at = at?;
-        if self.shift {
+        if self.shift || self.line {
             let lock = self.lock.get_or_insert(AxisLock {
                 origin: self.last.unwrap_or(at),
                 axis: None,
             });
             let dx = at[0].abs_diff(lock.origin[0]);
             let dy = at[1].abs_diff(lock.origin[1]);
-            if lock.axis.is_none() && (dx != 0 || dy != 0) {
+            if self.shift && lock.axis.is_none() && (dx != 0 || dy != 0) {
                 lock.axis = Some(if dx >= dy { 0 } else { 1 });
             }
             if let Some(axis) = lock.axis {

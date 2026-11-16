@@ -6,12 +6,50 @@ use egui::{RichText, TextureHandle};
 use ra2_map_assets::terrain_library::TerrainCategory;
 use vera20k_core::map::theater::TileKey;
 
+fn sync_palette(state: &mut editing_ui::EditorUi, scene: &MapScene) {
+    let source = Arc::as_ptr(&scene.palette) as usize;
+    if state.terrain_palette != source {
+        state.textures.clear();
+        state.template_textures.clear();
+        state.terrain_palette = source;
+    }
+}
+
+pub(super) fn subtile_texture(
+    state: &mut editing_ui::EditorUi,
+    ctx: &egui::Context,
+    scene: &MapScene,
+    key: TileKey,
+) -> Option<TextureHandle> {
+    sync_palette(state, scene);
+    let cache_key = (key.tile_id, key.sub_tile, key.variant);
+    if !state.textures.contains_key(&cache_key) {
+        let image = scene.palette.images.get(&key)?;
+        if state.textures.len() >= 192 {
+            state.textures.clear();
+        }
+        state.textures.insert(
+            cache_key,
+            ctx.load_texture(
+                format!("tile-{cache_key:?}"),
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [image.info.width as usize, image.info.height as usize],
+                    &image.rgba,
+                ),
+                egui::TextureOptions::NEAREST,
+            ),
+        );
+    }
+    state.textures.get(&cache_key).cloned()
+}
+
 pub(super) fn template_texture(
     state: &mut editing_ui::EditorUi,
     ctx: &egui::Context,
     scene: &MapScene,
     key: TileKey,
 ) -> Option<TextureHandle> {
+    sync_palette(state, scene);
     let id = (key.tile_id, key.variant);
     if !state.template_textures.contains_key(&id) {
         let image = if state.framework {
@@ -100,6 +138,97 @@ pub(super) fn choices(
 }
 
 impl Editor {
+    pub(super) fn terrain_placement_shortcuts(&mut self, ctx: &egui::Context, scene: &MapScene) {
+        if self.stroking || self.tool != Tool::Terrain || self.doc.is_none() {
+            return;
+        }
+        let delta = ctx.input_mut(|i| {
+            if i.modifiers.any() {
+                return 0;
+            }
+            i8::from(i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp))
+                - i8::from(i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown))
+        });
+        if delta == 0 {
+            return;
+        }
+        let manual = matches!(
+            self.terrain_mode,
+            TerrainMode::Subtile | TerrainMode::Template
+        );
+        let automatic = matches!(
+            self.terrain_mode,
+            TerrainMode::Plateau
+                | TerrainMode::CliffOutline
+                | TerrainMode::CliffFront
+                | TerrainMode::CliffBack
+                | TerrainMode::RampEntrance
+        );
+        if !manual && !automatic {
+            return;
+        }
+        let Some(doc) = self.doc.as_ref() else { return };
+        let mut max = 123u8;
+        let inferred = if manual {
+            let Some(brush) = scene.brushes.get(self.brush) else {
+                return;
+            };
+            let Some(t) = scene.palette.templates.get(&(brush.key.tile_id, 0)) else {
+                return;
+            };
+            max = 127
+                - t.cells
+                    .iter()
+                    .flatten()
+                    .map(|s| s.height)
+                    .max()
+                    .unwrap_or(0)
+                    .min(127);
+            self.terrain_hover
+                .map(|at| {
+                    let old = terrain_tools::value(doc, scene, at);
+                    if self.terrain_mode == TerrainMode::Template {
+                        let relative = t
+                            .cells
+                            .get(brush.key.sub_tile as usize)
+                            .and_then(|s| *s)
+                            .map_or(0, |s| s.height);
+                        terrain_tools::template_placement(doc, scene, brush, at, None)
+                            .ok()
+                            .and_then(|cells| cells.into_iter().find(|(cell, _)| *cell == at))
+                            .map_or(old.level.saturating_sub(relative), |(_, v)| {
+                                v.level.saturating_sub(relative)
+                            })
+                    } else {
+                        scene
+                            .palette
+                            .raw_ids
+                            .get(&old.tile)
+                            .filter(|tile| {
+                                scene
+                                    .palette
+                                    .groups
+                                    .get(tile)
+                                    .is_some_and(|g| g.category == TerrainCategory::Cliff)
+                            })
+                            .and_then(|tile| scene.palette.templates.get(&(*tile, 0)))
+                            .and_then(|t| t.cells.get(old.sub as usize))
+                            .and_then(|s| *s)
+                            .map_or(old.level, |s| old.level.saturating_sub(s.height))
+                    }
+                })
+                .unwrap_or(0)
+        } else {
+            self.terrain_hover.map_or(0, |at| {
+                ra2_map_scene::cliff_authoring::infer_base(doc, scene, at)
+            })
+        };
+        let level = (i16::from(self.template_level.unwrap_or(inferred)) + i16::from(delta))
+            .clamp(0, i16::from(max)) as u8;
+        self.template_level = Some(level);
+        self.status = tr!("放置基准高度 {arg0}；PageUp / PageDown 调整", arg0 = level);
+    }
+
     pub(crate) fn set_framework(&mut self, enabled: bool) {
         if self.stroking {
             return;
@@ -132,6 +261,7 @@ impl Editor {
     }
 
     pub(super) fn terrain_library(&mut self, ui: &mut egui::Ui, scene: &MapScene, filter: &str) {
+        sync_palette(&mut self.ui_state, scene);
         self.set_framework(self.framework);
         let filling = self.terrain_mode == TerrainMode::Fill && self.tool == Tool::Terrain;
         let fill_groups: BTreeSet<_> = if filling {
@@ -439,6 +569,9 @@ impl Editor {
             ),
         );
         let mut fixed = self.template_level.is_some();
+        ui.small(tr!(
+            "PageUp / PageDown 调整放置基准高度；取消指定高度可恢复跟随地面。"
+        ));
         if ui.checkbox(&mut fixed, tr!("指定模板基准高度")).changed() {
             self.template_level = fixed.then_some(0);
         }

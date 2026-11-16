@@ -8,6 +8,62 @@ use ra2_map_assets::{catalog::TerrainBrush, terrain_library::TerrainCategory};
 use ra2_map_document::document::{Cell, MapDocument, Target, TerrainValue, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Ctrl painting follows the source ground group, including its LAT edges.
+/// It deliberately leaves structural templates to their dedicated tools.
+pub fn connected(doc: &MapDocument, scene: &MapScene, seed: Cell) -> Result<BTreeSet<Cell>> {
+    use std::collections::VecDeque;
+    doc.check_cell(seed)?;
+    let group = |at| {
+        let v = value(doc, scene, at);
+        let tile = scene.palette.raw_ids.get(&v.tile).copied().or_else(|| {
+            matches!(v.tile, -1 | 65535)
+                .then(|| {
+                    scene
+                        .palette
+                        .tile_ids
+                        .and_then(|ids| u16::try_from(ids.clear).ok())
+                })
+                .flatten()
+        })?;
+        if !paintable(scene, v) {
+            return None;
+        }
+        if let Some(ids) = scene.palette.tile_ids {
+            for (base, lat) in [
+                (ids.rough, ids.rough_lat),
+                (ids.sand, ids.sand_lat),
+                (ids.green, ids.green_lat),
+                (ids.pave, ids.pave_lat),
+            ] {
+                if base >= 0
+                    && (i32::from(tile) == base
+                        || lat >= 0 && (lat..lat + 16).contains(&i32::from(tile)))
+                {
+                    return Some((true, base));
+                }
+            }
+        }
+        scene
+            .palette
+            .groups
+            .get(&tile)
+            .map(|g| (false, i32::from(g.id)))
+    };
+    let source = group(seed)
+        .ok_or_else(|| anyhow::anyhow!("连通铺地请点击平坦地表；悬崖、坡道和水面使用专用工具"))?;
+    let mut seen = BTreeSet::new();
+    let mut cells = BTreeSet::new();
+    let mut queue = VecDeque::from([seed]);
+    while let Some(at) = queue.pop_front() {
+        if !seen.insert(at) || doc.check_cell(at).is_err() || group(at) != Some(source) {
+            continue;
+        }
+        cells.insert(at);
+        queue.extend(terrain_tools::neighbors(at));
+    }
+    Ok(cells)
+}
+
 /// Fill materials are flat, complete ground cells. LAT pieces are generated,
 /// rather than offered as repeating materials; slopes and structures have tools.
 pub fn material(scene: &MapScene, brush: &TerrainBrush) -> Result<()> {

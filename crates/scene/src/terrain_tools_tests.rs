@@ -199,6 +199,37 @@ fn visual_variants_with_different_geometry_cannot_be_authored_as_the_pristine_te
 }
 
 #[test]
+fn subtile_preflight_rejects_missing_images_and_variants_with_different_saved_geometry() {
+    let (mut doc, mut scene) = setup();
+    let mut b = brush(&mut scene, 2, 1, &[Some(0)]);
+    let before = doc.snapshot().bytes().unwrap();
+    let image = Arc::get_mut(&mut scene.palette)
+        .unwrap()
+        .images
+        .remove(&b.key)
+        .unwrap();
+    assert!(stamp(&mut doc, &scene, &b, [20, 20], false).is_err());
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    b.key.variant = 1;
+    let palette = Arc::get_mut(&mut scene.palette).unwrap();
+    palette.images.insert(b.key, image);
+    palette.templates.insert(
+        (2, 1),
+        TerrainTemplate {
+            width: 1,
+            height: 1,
+            cells: vec![Some(TerrainSubtile {
+                height: 1,
+                slope: 0,
+                terrain: 0,
+            })],
+        },
+    );
+    assert!(stamp(&mut doc, &scene, &b, [20, 20], false).is_err());
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
 fn sparse_template_anchors_selected_subtile_preserves_height_and_ice_and_is_atomic() {
     let (mut doc, mut scene) = setup();
     let mut b = brush(
@@ -282,6 +313,126 @@ fn ramps(scene: &mut MapScene) {
     let palette = Arc::get_mut(&mut scene.palette).unwrap();
     palette.tile_ids.as_mut().unwrap().ramp_base = 200;
     palette.morphable.insert(0);
+}
+
+#[test]
+fn smooth_absolute_raise_rejects_incompatible_selected_heights_without_lowering_high_ground() {
+    let (mut doc, mut scene) = setup();
+    ramps(&mut scene);
+    put(&mut doc, &scene, [20, 20], 0, 4);
+    put(&mut doc, &scene, [21, 20], 0, 8);
+    doc.commit("mixed raw heights");
+    let before = doc.snapshot().bytes().unwrap();
+    let result = height_with_change(
+        &mut doc,
+        &scene,
+        &BTreeSet::from([[20, 20], [21, 20]]),
+        TerrainMode::Raise,
+        0,
+        true,
+        HeightChange::To(6),
+    );
+    assert!(
+        result.is_err(),
+        "incompatible smooth goals must fail, got {result:?}; levels: {}, {}",
+        value(&doc, &scene, [20, 20]).level,
+        value(&doc, &scene, [21, 20]).level
+    );
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+fn custom_height_steps_and_absolute_targets_keep_direction_and_smooth_limits() {
+    let (mut doc, mut scene) = setup();
+    ramps(&mut scene);
+    let cells = BTreeSet::from([[20, 20], [21, 20]]);
+    height_with_change(
+        &mut doc,
+        &scene,
+        &cells,
+        TerrainMode::Raise,
+        0,
+        true,
+        HeightChange::Step(4),
+    )
+    .unwrap();
+    for &at in &cells {
+        assert_eq!(value(&doc, &scene, at).level, 4);
+    }
+    doc.commit("raise four");
+    let before = doc.snapshot().bytes().unwrap();
+    assert!(
+        height_with_change(
+            &mut doc,
+            &scene,
+            &cells,
+            TerrainMode::Raise,
+            0,
+            true,
+            HeightChange::To(13)
+        )
+        .is_err()
+    );
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    assert!(
+        height_with_change(
+            &mut doc,
+            &scene,
+            &cells,
+            TerrainMode::Raise,
+            0,
+            false,
+            HeightChange::To(2)
+        )
+        .unwrap()
+        .is_empty()
+    );
+    height_with_change(
+        &mut doc,
+        &scene,
+        &BTreeSet::from([[20, 20]]),
+        TerrainMode::Raise,
+        0,
+        false,
+        HeightChange::To(8),
+    )
+    .unwrap();
+    height_with_change(
+        &mut doc,
+        &scene,
+        &cells,
+        TerrainMode::Raise,
+        0,
+        false,
+        HeightChange::To(6),
+    )
+    .unwrap();
+    assert_eq!(value(&doc, &scene, [20, 20]).level, 8);
+    assert_eq!(value(&doc, &scene, [21, 20]).level, 6);
+    height_with_change(
+        &mut doc,
+        &scene,
+        &cells,
+        TerrainMode::Lower,
+        0,
+        false,
+        HeightChange::To(7),
+    )
+    .unwrap();
+    assert_eq!(value(&doc, &scene, [20, 20]).level, 7);
+    assert_eq!(value(&doc, &scene, [21, 20]).level, 6);
+    height_with_change(
+        &mut doc,
+        &scene,
+        &cells,
+        TerrainMode::Lower,
+        0,
+        false,
+        HeightChange::Step(3),
+    )
+    .unwrap();
+    assert_eq!(value(&doc, &scene, [20, 20]).level, 4);
+    assert_eq!(value(&doc, &scene, [21, 20]).level, 3);
 }
 
 #[test]

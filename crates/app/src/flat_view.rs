@@ -116,6 +116,9 @@ impl FlatView {
         let at = [u16::try_from(x).ok()?, u16::try_from(y).ok()?];
         self.cells.get(&at).copied()
     }
+    pub fn cell_index(&self, at: Cell) -> Option<usize> {
+        self.cells.get(&at).copied()
+    }
 
     pub fn draw(
         &mut self,

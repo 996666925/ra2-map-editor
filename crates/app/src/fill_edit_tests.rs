@@ -42,6 +42,48 @@ fn setup() -> MapScene {
 }
 
 #[test]
+fn ctrl_ground_fill_captures_source_and_material_and_commits_once_after_release() {
+    let (mut e, _, root) = editor();
+    let scene = setup();
+    e.attach(&scene);
+    let old = terrain_tools::value(e.doc.as_ref().unwrap(), &scene, [20, 20]);
+    for (at, level) in [([20, 20], 0), ([21, 20], 4), ([24, 20], 0)] {
+        e.doc
+            .as_mut()
+            .unwrap()
+            .set(
+                Target::Terrain(at),
+                Some(Value::Terrain(crate::document::TerrainValue {
+                    tile: 1,
+                    level,
+                    ..old
+                })),
+            )
+            .unwrap();
+    }
+    e.doc.as_mut().unwrap().commit("source group");
+    e.activate_terrain_mode(TerrainMode::Subtile);
+    e.brush = 0;
+    e.auto_lat = false;
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.brush_modifiers(egui::Modifiers::CTRL);
+    e.pointer(&scene, Some([20, 20]), true, true, false, None);
+    e.brush_modifiers(egui::Modifiers::NONE);
+    e.brush = 1;
+    e.pointer(&scene, Some([24, 20]), false, true, false, None);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.pointer(&scene, None, false, false, true, None);
+    assert_eq!(e.doc.as_ref().unwrap().terrain([20, 20]).unwrap().tile, 0);
+    assert_eq!(e.doc.as_ref().unwrap().terrain([21, 20]).unwrap().tile, 0);
+    assert_eq!(e.doc.as_ref().unwrap().terrain([21, 20]).unwrap().level, 4);
+    assert_eq!(e.doc.as_ref().unwrap().terrain([24, 20]).unwrap().tile, 1);
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn fill_drag_previews_without_writing_and_freezes_material_and_lat_until_sidebar_release() {
     let (mut e, ctx, root) = editor();
     let scene = setup();

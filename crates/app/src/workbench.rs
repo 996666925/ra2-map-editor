@@ -1,4 +1,5 @@
 use super::*;
+use crate::editing::Tool;
 use crate::i18n::tr;
 use crate::new_map::{MAX_MAP_DIMENSION, MAX_MAP_SPAN, MAX_PLAYERS, MIN_MAP_DIMENSION};
 use crate::ui_theme::{self as theme, Icon};
@@ -118,6 +119,7 @@ impl MapView {
             }
             if self.editor.doc.is_some()
                 && !self.editor.stroking
+                && self.editor.tool != Tool::Terrain
                 && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F5))
             {
                 self.workbench.playtest = true;
@@ -392,7 +394,9 @@ impl MapView {
                         theme::button(ui, Icon::Play, tr!("试玩"), 76., false)
                     })
                     .inner
-                    .on_hover_text(tr!("设置电脑、游戏速度，并启动当前地图快照  F5"))
+                    .on_hover_text(tr!(
+                        "设置电脑、游戏速度，并启动当前地图快照（选择模式下按 F5）"
+                    ))
                     .on_disabled_hover_text(tr!("先打开地图，并完成当前一笔。"))
                     .clicked()
                 {
@@ -849,7 +853,7 @@ impl MapView {
                 ui.heading(tr!("选择与编辑"));
                 for text in [
                     tr!("Shift + 框选：添加；Alt + 框选：减去；按下鼠标时确定本笔方式"),
-                    tr!("Shift + 地形 / 对象 / 资源画笔：锁定地图轴向；松开恢复自由绘制"),
+                    tr!("Shift + 放置 / 对象 / 资源画笔：锁轴；连续坡面工具 Shift 陡坡，A 顶点模式"),
                     tr!("Ctrl+C / X / V：复制 / 剪切 / 粘贴区域；Ctrl+D：克隆选中对象"),
                     tr!("Delete：删除选中对象或当前区域所选数据层"),
                     tr!("Esc / 右键：取消当前绘制或放置；空闲时 Esc 返回选择工具"),
@@ -862,7 +866,7 @@ impl MapView {
                 ui.heading(tr!("文件与试玩"));
                 for text in [
                     tr!("Ctrl+N / O：新建 / 打开地图"),
-                    tr!("Ctrl+S / Ctrl+Shift+S：保存 / 另存为；F5：打开试玩设置"),
+                    tr!("Ctrl+S / Ctrl+Shift+S：保存 / 另存为；地形模式 F5/F6/F7：升高 / 降低 / 平整；其他模式 F5：试玩"),
                     tr!("对象属性、任务参数和光照结束输入后自动生效；撤销可恢复修改"),
                     tr!("编辑文字、下拉菜单和浮动设置窗口时，地图工具快捷键暂停"),
                     tr!("窗口失去焦点时取消未完成的一笔，已完成的修改保留"),

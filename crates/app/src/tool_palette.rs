@@ -21,7 +21,9 @@ impl TerrainPage {
             | TerrainMode::Raise
             | TerrainMode::Lower
             | TerrainMode::Flatten => Self::Ground,
-            TerrainMode::Plateau
+            TerrainMode::HeightFill
+            | TerrainMode::CliffHeightRepair
+            | TerrainMode::Plateau
             | TerrainMode::CliffOutline
             | TerrainMode::CliffFront
             | TerrainMode::CliffBack
@@ -48,6 +50,8 @@ impl TerrainPage {
                 (Flatten, "平整高度"),
             ],
             Self::Cliffs => &[
+                (HeightFill, "填高地"),
+                (CliffHeightRepair, "修正悬崖高度"),
                 (CliffOutline, "围合悬崖 C"),
                 (Plateau, "矩形高台 H"),
                 (CliffFront, "正面悬崖"),
@@ -76,6 +80,9 @@ impl Editor {
         if self.doc.is_none() || self.stroking {
             return;
         }
+        if self.tool != Tool::Terrain || self.terrain_mode != mode {
+            self.picking_height = mode == TerrainMode::HeightFill;
+        }
         if mode == TerrainMode::Fill && (self.tool != Tool::Terrain || self.terrain_mode != mode) {
             self.show_library(0, "", "");
         }
@@ -87,6 +94,7 @@ impl Editor {
         }
         self.activate_tool(Tool::Terrain);
         self.plateau.cancel();
+        self.flatten.cancel();
         self.fill.cancel();
         self.object_brush.cancel();
         self.terrain_mode = mode;
@@ -151,6 +159,7 @@ impl Editor {
                     (TerrainMode::CliffOutline, tr!("围合悬崖 C")),
                     (TerrainMode::CliffFront, tr!("悬崖线")),
                     (TerrainMode::Plateau, tr!("高台 H")),
+                    (TerrainMode::HeightFill, tr!("填高地")),
                     (TerrainMode::RampEntrance, tr!("坡道")),
                     (TerrainMode::WaterOutline, tr!("水域")),
                     (TerrainMode::Road, tr!("道路")),

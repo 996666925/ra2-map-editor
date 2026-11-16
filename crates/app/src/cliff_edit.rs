@@ -19,6 +19,7 @@ struct Gesture {
 #[derive(PartialEq)]
 struct Key {
     document: u64,
+    palette: usize,
     state: u64,
     mode: TerrainMode,
     path: Vec<Cell>,
@@ -49,11 +50,19 @@ impl PlateauEdit {
             g.mode,
             TerrainMode::CliffOutline | TerrainMode::WaterOutline
         ) {
-            path = vec![g.start, at];
+            path = vec![
+                g.start,
+                if g.mode == TerrainMode::HeightFill {
+                    g.start
+                } else {
+                    at
+                },
+            ];
         }
         let key = Key {
             document: doc.id,
-            state: doc.state_id,
+            palette: Arc::as_ptr(&scene.palette) as usize,
+            state: doc.edit_revision(),
             mode: g.mode,
             path,
             base: g.base,
@@ -61,6 +70,19 @@ impl PlateauEdit {
         };
         if self.preview.as_ref().is_none_or(|p| p.key != key) {
             let result = (|| -> Result<Arc<PlateauPlan>> {
+                if key.mode == TerrainMode::CliffHeightRepair {
+                    return Ok(Arc::new(ra2_map_scene::height_tools::repair(
+                        doc,
+                        scene,
+                        &cliff_tools::rectangle(g.start, at),
+                        g.base,
+                    )?));
+                }
+                if key.mode == TerrainMode::HeightFill {
+                    return Ok(Arc::new(ra2_map_scene::height_tools::fill(
+                        doc, scene, g.start, g.base,
+                    )?));
+                }
                 if matches!(key.mode, TerrainMode::Road | TerrainMode::RoadCut) {
                     return Ok(Arc::new(ra2_map_scene::road_tools::plan(
                         doc,
@@ -178,17 +200,23 @@ impl Editor {
                 start: at,
                 path: vec![at],
                 bridge: self.bridge_kind,
-                base: self.template_level.unwrap_or_else(|| {
-                    if self.terrain_mode.joining() {
-                        terrain_tools::value(doc, scene, at).level
-                    } else if self.terrain_mode == TerrainMode::Bridge {
-                        terrain_tools::value(doc, scene, at)
-                            .level
-                            .saturating_sub(if self.bridge_kind.high() { 4 } else { 0 })
-                    } else {
-                        cliff_authoring::infer_base(doc, scene, at)
-                    }
-                }),
+                base: if self.terrain_mode == TerrainMode::HeightFill {
+                    self.flatten_level
+                } else if self.terrain_mode == TerrainMode::CliffHeightRepair {
+                    self.cliff_repair_base
+                } else {
+                    self.template_level.unwrap_or_else(|| {
+                        if self.terrain_mode.joining() {
+                            terrain_tools::value(doc, scene, at).level
+                        } else if self.terrain_mode == TerrainMode::Bridge {
+                            terrain_tools::value(doc, scene, at)
+                                .level
+                                .saturating_sub(if self.bridge_kind.high() { 4 } else { 0 })
+                        } else {
+                            cliff_authoring::infer_base(doc, scene, at)
+                        }
+                    })
+                },
             });
         }
         if let Some(g) = self.plateau.gesture.as_mut() {
@@ -243,7 +271,11 @@ impl Editor {
             painter.text(
                 rect.left_top() + egui::vec2(12., 12.),
                 egui::Align2::LEFT_TOP,
-                self.terrain_mode.name(),
+                if self.picking_height {
+                    tr!("点击崖顶或地面拾取高度；此次点击不会修改地图。")
+                } else {
+                    crate::i18n::text(self.terrain_mode.name())
+                },
                 egui::FontId::proportional(13.),
                 Color32::LIGHT_GREEN,
             );
@@ -313,13 +345,55 @@ impl Editor {
                 }
                 // Filled water and restored ground are part of the ghost too.
                 let stamped: BTreeSet<_> = plan.cliffs.iter().map(|s| (s.tile, s.origin)).collect();
-                for (&at, v) in &plan.edits {
+                let mut preview_cells: Vec<_> = plan.edits.iter().collect();
+                preview_cells.sort_by_key(|(at, _)| (u32::from(at[0]) + u32::from(at[1]), at[0]));
+                for (&at, v) in preview_cells {
                     if self.flat_view || self.framework {
                         continue;
                     }
                     let Some(&tile) = scene.palette.raw_ids.get(&v.tile) else {
                         continue;
                     };
+                    if matches!(
+                        self.plateau.gesture.as_ref().unwrap().mode,
+                        TerrainMode::HeightFill | TerrainMode::CliffHeightRepair
+                    ) {
+                        let key = vera20k_core::map::theater::TileKey {
+                            tile_id: tile,
+                            sub_tile: v.sub,
+                            variant: 0,
+                        };
+                        let Some(image) = scene.palette.images.get(&key) else {
+                            continue;
+                        };
+                        let (x, y) =
+                            vera20k_core::map::terrain::iso_to_screen(at[0], at[1], v.level);
+                        let origin = egui::pos2(
+                            x + image.info.offset[0] as f32,
+                            y + image.info.offset[1] as f32,
+                        );
+                        let target = egui::Rect::from_min_size(
+                            rect.min + (origin - world.min) * camera.zoom,
+                            egui::vec2(image.info.width as f32, image.info.height as f32)
+                                * camera.zoom,
+                        );
+                        if target.intersects(rect)
+                            && let Some(texture) = terrain_ui::subtile_texture(
+                                &mut self.ui_state,
+                                painter.ctx(),
+                                scene,
+                                key,
+                            )
+                        {
+                            painter.image(
+                                texture.id(),
+                                target,
+                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                                Color32::from_white_alpha(180),
+                            );
+                        }
+                        continue;
+                    }
                     let Some(t) = scene.palette.templates.get(&(tile, 0)) else {
                         continue;
                     };
@@ -453,7 +527,11 @@ impl Editor {
                     }
                 }
                 let g = self.plateau.gesture.as_ref().unwrap();
-                let heights = if g.mode.joining() {
+                let heights = if g.mode == TerrainMode::CliffHeightRepair {
+                    tr!("低地基准 {arg0} 层；保留原悬崖子块", arg0 = plan.base)
+                } else if g.mode == TerrainMode::HeightFill {
+                    tr!("目标高度 {arg0} 层；保留原悬崖", arg0 = plan.base)
+                } else if g.mode.joining() {
                     tr!("按原高度连接地形").into()
                 } else if g.mode == TerrainMode::Bridge && !g.bridge.high() {
                     tr!("桥面与地面 {arg0} 层", arg0 = plan.base)
@@ -497,6 +575,7 @@ impl Editor {
                 if matches!(
                     g.mode,
                     TerrainMode::Plateau
+                        | TerrainMode::CliffHeightRepair
                         | TerrainMode::PlateauCut
                         | TerrainMode::Water
                         | TerrainMode::LandFill
@@ -530,6 +609,26 @@ impl Editor {
     }
 
     pub(super) fn plateau_options(&mut self, ui: &mut egui::Ui, scene: &MapScene) {
+        if self.terrain_mode == TerrainMode::CliffHeightRepair {
+            ui.add(egui::Slider::new(&mut self.cliff_repair_base, 0..=123).text(tr!("低地高度")));
+            ui.small(tr!(
+                "拖框选中已有悬崖，按低地基准修正各子块高度；不改变图块、轮廓或内部平地。"
+            ));
+            ui.small(tr!(
+                "零层地面上逐格拼出的悬崖，低地高度设为 0。修正后再用填高地将内部升到 4 层。"
+            ));
+            return;
+        }
+        if self.terrain_mode == TerrainMode::HeightFill {
+            self.height_pick_options(ui);
+            ui.small(tr!(
+                "先点击崖顶或地面拾取高度，再点击围合区域内部；按住预览，松开填高。"
+            ));
+            ui.small(tr!(
+                "只填充同高度的连通平地，保留悬崖和材质；区域通到地图边缘或有对象占用时拒绝修改。"
+            ));
+            return;
+        }
         if self.terrain_mode.joining() {
             let text = match self.terrain_mode {
                 TerrainMode::Water => {

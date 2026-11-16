@@ -25,6 +25,8 @@ pub enum TerrainMode {
     Raise,
     Lower,
     Flatten,
+    HeightFill,
+    CliffHeightRepair,
     Plateau,
     CliffOutline,
     CliffFront,
@@ -41,13 +43,15 @@ pub enum TerrainMode {
     CoastalCliff,
 }
 impl TerrainMode {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 22] = [
         Self::Subtile,
         Self::Template,
         Self::Fill,
         Self::Raise,
         Self::Lower,
         Self::Flatten,
+        Self::HeightFill,
+        Self::CliffHeightRepair,
         Self::Plateau,
         Self::CliffOutline,
         Self::CliffFront,
@@ -71,6 +75,8 @@ impl TerrainMode {
             Self::Raise => "升高",
             Self::Lower => "降低",
             Self::Flatten => "平整",
+            Self::HeightFill => "填高地（保留悬崖）",
+            Self::CliffHeightRepair => "修正悬崖高度（保留子块）",
             Self::Plateau => "矩形高台（自动悬崖）",
             Self::CliffOutline => "围合高台（自动拐角）",
             Self::CliffFront => "悬崖线段（正面）",
@@ -94,7 +100,9 @@ impl TerrainMode {
         self.joining()
             || matches!(
                 self,
-                Self::Plateau
+                Self::HeightFill
+                    | Self::CliffHeightRepair
+                    | Self::Plateau
                     | Self::CliffOutline
                     | Self::CliffFront
                     | Self::CliffBack
@@ -246,6 +254,28 @@ pub fn template_placement(
         || i16::from(value(doc, scene, at).level) - i16::from(selected_height),
         i16::from,
     );
+    let cliff = crate::height_tools::cliff_geometry(
+        scene,
+        TerrainValue {
+            tile: brush.raw,
+            sub: brush.key.sub_tile,
+            level: 0,
+            ice: 0,
+        },
+    )?;
+    // A back-face template may contain only high-side cells. On low ground
+    // its default anchor must not infer a negative cliff base.
+    let base = if base_level.is_none() && cliff.is_some() && base < 0 {
+        i16::from(value(doc, scene, at).level)
+    } else {
+        base
+    };
+    if let Some((_, top)) = cliff {
+        ensure!(
+            base >= 0 && base + i16::from(top) <= 127,
+            "悬崖基准或崖顶高度越过 0～127，请调整放置高度"
+        );
+    }
     // Map format records no visual variant. Geometry must match the
     // pristine template which the engine uses to interpret saved subtiles.
     let pristine_template = scene.palette.templates.get(&(brush.key.tile_id, 0));
@@ -311,14 +341,81 @@ pub fn stamp_at_height(
     } else {
         edits.push((
             at,
-            TerrainValue {
-                tile: brush.raw,
-                sub: brush.key.sub_tile,
-                ..value(doc, scene, at)
-            },
+            subtile_placement_at_height(doc, scene, brush, at, base_level)?,
         ));
     }
     apply(doc, edits)
+}
+
+/// A cliff subtile carries a height relative to its low ground. Keep that
+/// relative height when painting, and recover the old base when repainting.
+pub fn subtile_placement(
+    doc: &MapDocument,
+    scene: &MapScene,
+    brush: &TerrainBrush,
+    at: Cell,
+) -> Result<TerrainValue> {
+    subtile_placement_at_height(doc, scene, brush, at, None)
+}
+
+pub fn subtile_placement_at_height(
+    doc: &MapDocument,
+    scene: &MapScene,
+    brush: &TerrainBrush,
+    at: Cell,
+    base_level: Option<u8>,
+) -> Result<TerrainValue> {
+    doc.check_cell(at)?;
+    let old = value(doc, scene, at);
+    let geometry = template(scene, brush)?
+        .cells
+        .get(usize::from(brush.key.sub_tile))
+        .and_then(|s| *s)
+        .context("所选子块为空")?;
+    ensure!(
+        scene.palette.images.contains_key(&brush.key),
+        "子块资源缺失，未修改地形"
+    );
+    let pristine = scene
+        .palette
+        .templates
+        .get(&(brush.key.tile_id, 0))
+        .and_then(|t| t.cells.get(usize::from(brush.key.sub_tile)))
+        .and_then(|s| *s);
+    ensure!(
+        pristine.is_some_and(|s| s.height == geometry.height && s.slope == geometry.slope),
+        "此变体的几何与基础模板不同，不能保存为地形子块"
+    );
+    let mut next = TerrainValue {
+        tile: brush.raw,
+        sub: brush.key.sub_tile,
+        ..old
+    };
+    if let Some((relative, top)) = crate::height_tools::cliff_geometry(scene, next)? {
+        let base = if let Some(base) = base_level {
+            base
+        } else if let Some((height, _)) = crate::height_tools::cliff_geometry(scene, old)? {
+            old.level
+                .checked_sub(height)
+                .context("原悬崖子块高度无效，请先修正悬崖高度")?
+        } else {
+            old.level
+        };
+        next.level = base
+            .checked_add(relative)
+            .filter(|&level| level <= 127)
+            .context("悬崖子块高度越过 0～127，未修改地形")?;
+        ensure!(
+            u16::from(base) + u16::from(top) <= 127,
+            "悬崖崖顶高度越过 0～127，未修改地形"
+        );
+    } else if let Some(base) = base_level {
+        next.level = base
+            .checked_add(geometry.height)
+            .filter(|&level| level <= 127)
+            .context("子块高度越过 0～127，未修改地形")?;
+    }
+    Ok(next)
 }
 
 fn apply(doc: &mut MapDocument, edits: Vec<(Cell, TerrainValue)>) -> Result<Vec<Cell>> {
@@ -416,8 +513,26 @@ pub fn recalculate(
     apply(doc, edits)
 }
 
-/// Height editing uses the engine's corner grid and slope propagation. The
-/// native morph engine supports 0..12; explicit raw-level mode supports 0..127.
+/// Relative steps or a directional absolute target for raise/lower tools.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeightChange {
+    Step(u8),
+    To(u8),
+}
+impl HeightChange {
+    pub fn target(self, mode: TerrainMode, old: u8) -> u8 {
+        match (self, mode) {
+            (Self::Step(amount), TerrainMode::Raise) => old.saturating_add(amount),
+            (Self::Step(amount), TerrainMode::Lower) => old.saturating_sub(amount),
+            (Self::To(level), TerrainMode::Raise) => old.max(level),
+            (Self::To(level), TerrainMode::Lower) => old.min(level),
+            _ => old,
+        }
+    }
+}
+
+/// Height editing uses the game's corner grid, with smooth levels 0..12 and
+/// raw levels 0..127. This is not FA2's editor slope algorithm.
 pub fn height(
     doc: &mut MapDocument,
     scene: &MapScene,
@@ -426,28 +541,44 @@ pub fn height(
     level: u8,
     smooth: bool,
 ) -> Result<Vec<Cell>> {
+    height_with_change(
+        doc,
+        scene,
+        selected,
+        mode,
+        level,
+        smooth,
+        HeightChange::Step(1),
+    )
+}
+
+pub fn height_with_change(
+    doc: &mut MapDocument,
+    scene: &MapScene,
+    selected: &BTreeSet<Cell>,
+    mode: TerrainMode,
+    level: u8,
+    smooth: bool,
+    change: HeightChange,
+) -> Result<Vec<Cell>> {
     ensure!(mode.edits_height(), "不是高度工具");
+    ensure!(
+        match change {
+            HeightChange::Step(amount) => (1..=127).contains(&amount),
+            HeightChange::To(level) => level <= 127,
+        },
+        "升降层数须为 1～127，目标高度须为 0～127"
+    );
     if selected.is_empty() {
         return Ok(Vec::new());
     }
     let target = |old: u8| match mode {
-        TerrainMode::Raise => old.saturating_add(1),
-        TerrainMode::Lower => old.saturating_sub(1),
+        TerrainMode::Raise | TerrainMode::Lower => change.target(mode, old),
         _ => level,
     };
     if !smooth {
-        let edits = selected
-            .iter()
-            .map(|&at| {
-                let old = value(doc, scene, at);
-                (
-                    at,
-                    TerrainValue {
-                        level: target(old.level).min(127),
-                        ..old
-                    },
-                )
-            })
+        let edits = crate::height_tools::raw(doc, scene, selected, mode, level, change)?
+            .into_iter()
             .collect();
         return apply(doc, edits);
     }
@@ -538,6 +669,9 @@ pub fn height(
         let (x, y) = (i32::from(at[0]), i32::from(at[1]));
         let c = grid.get(x, y).context("格子在 Size 之外")?;
         let goal = target(c.level);
+        if mode != TerrainMode::Flatten && goal == c.level {
+            continue;
+        }
         ensure!(
             goal <= 12,
             "自动坡面支持 0～12 层；可关闭自动坡面编辑到 127 层"
@@ -605,6 +739,25 @@ pub fn height(
                 ..old
             },
         ));
+    }
+    // A later corner adjustment can change an earlier cell, including a
+    // selected high cell that an absolute raise deliberately skipped. Check
+    // every requested goal after finalization, before writing any terrain.
+    if mode != TerrainMode::Flatten {
+        for &at in selected {
+            let expected = target(value(doc, scene, at).level);
+            let actual = grid
+                .get(i32::from(at[0]), i32::from(at[1]))
+                .context("格子在 Size 之外")?
+                .level;
+            ensure!(
+                actual == expected,
+                "{},{} 的目标高度 {} 与邻接坡面冲突；请缩小范围或关闭自动坡面，未修改地形",
+                at[0],
+                at[1],
+                expected
+            );
+        }
     }
     apply(doc, edits)
 }

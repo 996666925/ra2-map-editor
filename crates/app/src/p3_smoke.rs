@@ -150,6 +150,7 @@ pub(super) fn check(
     ensure!(plateau.len() > 15, "没有生成外围坡道");
     undo_redo(&mut editor, scene, before)?;
     editor.terrain_mode = TerrainMode::Flatten;
+    editor.flatten_fixed = true;
     editor.flatten_level = 4;
     let before = editor.doc.as_ref().unwrap().snapshot().bytes()?;
     click(&mut editor, scene, [90, 90])?;

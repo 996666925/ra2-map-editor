@@ -4,6 +4,8 @@ pub mod cliff_authoring;
 pub mod cliff_tools;
 pub mod coastal_cliffs;
 pub mod fill_tools;
+pub mod flatten_tools;
+pub mod height_tools;
 pub mod map;
 pub mod placement;
 pub mod radar;
