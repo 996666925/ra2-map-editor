@@ -10,7 +10,7 @@ fn setup(ctx: &egui::Context) {
     ));
 }
 
-fn view() -> (MapView, PathBuf) {
+pub(super) fn view() -> (MapView, PathBuf) {
     let (editor, ctx, root) = crate::editing::tests::editor();
     let view = MapView {
         workbench: Default::default(),

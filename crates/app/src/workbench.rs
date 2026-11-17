@@ -6,6 +6,7 @@ use crate::ui_theme::{self as theme, Icon};
 use egui::RichText;
 #[derive(Default)]
 pub(super) struct Workbench {
+    pub(super) management: map_management::MapManagement,
     pub(super) flat_view: crate::flat_view::FlatView,
     pub(super) size_guide: crate::map_boundary::SizeGuide,
     pub(super) task_overlay: crate::mission_overlay::MissionOverlay,
@@ -39,7 +40,8 @@ impl MapView {
     /// included in the snapshot. Dialogs with independent files keep ownership.
     pub(crate) fn finish_save(&mut self, ctx: &egui::Context) {
         let requested = self.editor.save_requested.take();
-        if self.pending.is_some()
+        if self.workbench.management.open
+            || self.pending.is_some()
             || self.loading
             || self.editor.structural_refresh
             || self.workbench.new_map
@@ -70,7 +72,8 @@ impl MapView {
         }
     }
     pub(super) fn editing_blocked(&self) -> bool {
-        self.pending.is_some()
+        self.workbench.management.open
+            || self.pending.is_some()
             || self.workbench.new_map
             || self.workbench.random_map
             || self.workbench.settings
@@ -137,6 +140,12 @@ impl MapView {
             if ui.button(tr!("打开地图…   Ctrl+O")).clicked() {
                 self.pick_map(directory);
                 ui.close();
+            }
+            for (label, import) in [(tr!("多地图模式"), false), (tr!("导入地图到当前地图…"), true)] {
+                if ui.add_enabled(self.editor.doc.is_some() && !self.loading && !self.editor.stroking && !self.editing_blocked(), egui::Button::new(label)).clicked() {
+                    self.open_map_management(ui.ctx(), import);
+                    ui.close();
+                }
             }
             if ui
                 .add_enabled(
@@ -409,6 +418,12 @@ impl MapView {
         ui.add_enabled_ui(!self.editing_blocked(), |ui| self.editor.quick_tools(ui));
     }
     pub fn toolbox(&mut self, ui: &mut egui::Ui) {
+        if self.workbench.management.open {
+            egui::ScrollArea::vertical()
+                .id_salt("map-layer-workspace")
+                .show(ui, |ui| self.workbench.management.panel(ui));
+            return;
+        }
         if self.editing_blocked() {
             ui.disable();
         }
@@ -421,6 +436,13 @@ impl MapView {
             .show(ui, |ui| self.editor.toolbox(ui, self.scene.as_ref()));
     }
     pub fn inspector(&mut self, ui: &mut egui::Ui) {
+        if self.workbench.management.open {
+            theme::section(ui, tr!("多地图模式"), "");
+            ui.label(tr!(
+                "在左侧选择地图，在中央大地图上整体拖动。完成后点击“完成并返回编辑”。"
+            ));
+            return;
+        }
         if self.workbench.map_settings.open || self.editor.structural_refresh {
             ui.disable();
         }

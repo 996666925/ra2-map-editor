@@ -168,7 +168,7 @@ impl TerrainPipelines {
                 entry_point: Some("quad_pixel"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: None,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -468,6 +468,27 @@ impl TerrainGpu {
                 options,
                 target,
                 world,
+                transparent: false,
+            },
+        )
+    }
+    /// A resident whole-map layer. Position changes update only the camera
+    /// uniform/visibility; transparent pixels reveal the preceding map layer.
+    pub fn layer_callback(
+        self: &Arc<Self>,
+        rect: egui::Rect,
+        target: Arc<Target>,
+        world: egui::Rect,
+        options: ra2_map_scene::visual::ViewOptions,
+    ) -> egui::PaintCallback {
+        egui_wgpu::Callback::new_paint_callback(
+            rect,
+            Draw {
+                gpu: self.clone(),
+                options,
+                target,
+                world,
+                transparent: true,
             },
         )
     }
@@ -566,6 +587,7 @@ struct Draw {
     gpu: Arc<TerrainGpu>,
     target: Arc<Target>,
     world: egui::Rect,
+    transparent: bool,
 }
 impl egui_wgpu::CallbackTrait for Draw {
     fn prepare(
@@ -576,9 +598,14 @@ impl egui_wgpu::CallbackTrait for Draw {
         encoder: &mut wgpu::CommandEncoder,
         _: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        self.gpu
-            .world
-            .render(encoder, queue, &self.target, self.world, self.options);
+        self.gpu.world.render_layer(
+            encoder,
+            queue,
+            &self.target,
+            self.world,
+            self.options,
+            self.transparent,
+        );
         vec![]
     }
     fn paint(

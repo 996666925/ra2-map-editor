@@ -360,6 +360,27 @@ impl Snapshot {
         let mut additions = Vec::new();
         let mut overlay = None;
         let mut frames = None;
+        // Build physical duplicate-key locations once, on demand. Erasing an
+        // imported forest must not rescan every INI line for every removed tree.
+        let mut physical_keys = None;
+        let mut erase_key = |original: &Record, records: &mut BTreeMap<usize, Option<Vec<u8>>>| {
+            let keys = physical_keys.get_or_insert_with(|| {
+                let mut keys = std::collections::HashMap::<(&str, &str), Vec<usize>>::new();
+                for (index, line) in base.raw.lines.iter().enumerate() {
+                    if let Some(key) = &line.key {
+                        keys.entry((&line.section, key)).or_default().push(index);
+                    }
+                }
+                keys
+            });
+            for &line in keys
+                .get(&(original.section.as_str(), original.key.as_str()))
+                .into_iter()
+                .flatten()
+            {
+                records.insert(line, None);
+            }
+        };
         for (target, value) in &self.changes {
             match target {
                 Target::IniLine(line) => {
@@ -426,13 +447,7 @@ impl Snapshot {
                                 if record.key == original.key {
                                     records.insert(*id as usize, Some(record.value.clone()));
                                 } else {
-                                    for (line, _) in base
-                                        .raw
-                                        .entries(&original.section)
-                                        .filter(|(_, row)| row.key.as_ref() == Some(&original.key))
-                                    {
-                                        records.insert(line, None);
-                                    }
+                                    erase_key(original, &mut records);
                                     append
                                         .entry(record.section.clone())
                                         .or_default()
@@ -442,14 +457,7 @@ impl Snapshot {
                             None => {
                                 // Deleting an effective duplicate must remove its shadow
                                 // copies too, otherwise native reload resurrects it.
-                                for (line, row) in base
-                                    .raw
-                                    .entries(&original.section)
-                                    .filter(|(_, row)| row.key.as_ref() == Some(&original.key))
-                                {
-                                    let _ = row;
-                                    records.insert(line, None);
-                                }
+                                erase_key(original, &mut records);
                             }
                             _ => bail!("记录值类型不匹配"),
                         }
@@ -529,17 +537,45 @@ pub struct MapDocument {
     edit_revision: u64,
 }
 static NEXT_DOC: AtomicU64 = AtomicU64::new(1);
+/// Parsed on a worker, then published without parsing or recompressing on UI.
+pub struct PreparedReplacement {
+    identity: (u64, u64, u64),
+    baseline: Option<Arc<Baseline>>,
+}
+impl PreparedReplacement {
+    pub fn prepare(snapshot: Snapshot, revision: u64, bytes: Vec<u8>) -> Result<Self> {
+        let identity = (snapshot.document_id, snapshot.state_id, revision);
+        if snapshot.bytes()? == bytes {
+            return Ok(Self {
+                identity,
+                baseline: None,
+            });
+        }
+        let _dialect = vera20k_core::rules::ares_switch::read_ares_way(snapshot.base.reads_ares);
+        let map = vera20k_core::map::map_file::load_from_bytes(bytes.clone())?;
+        let baseline = Baseline::parse_with_ares(bytes.into(), &map, snapshot.base.reads_ares)?;
+        Ok(Self {
+            identity,
+            baseline: Some(baseline),
+        })
+    }
+}
 impl MapDocument {
     /// Structural edits retain the old baseline and history as one undo step.
     /// Parse everything before publishing; callers cannot replace a live brush.
     pub fn replace_bytes(&mut self, bytes: Vec<u8>, name: &str) -> Result<bool> {
+        let prepared = PreparedReplacement::prepare(self.snapshot(), self.edit_revision(), bytes)?;
+        self.replace_prepared(prepared, name)
+    }
+    pub fn replace_prepared(&mut self, prepared: PreparedReplacement, name: &str) -> Result<bool> {
         ensure!(self.pending.is_empty(), "请先完成或取消当前编辑事务");
-        if self.snapshot().bytes()? == bytes {
+        ensure!(
+            prepared.identity == (self.id, self.state_id, self.edit_revision()),
+            "地图已改变，请重新准备替换"
+        );
+        let Some(base) = prepared.baseline else {
             return Ok(false);
-        }
-        let _dialect = vera20k_core::rules::ares_switch::read_ares_way(self.base.reads_ares);
-        let map = vera20k_core::map::map_file::load_from_bytes(bytes.clone())?;
-        let base = Baseline::parse_with_ares(bytes.into(), &map, self.base.reads_ares)?;
+        };
         let before = DocumentState {
             base: self.base.clone(),
             changes: self.changes.clone(),
@@ -657,6 +693,72 @@ impl MapDocument {
         self.next_record += 1;
         Ok(id)
     }
+
+    /// Allocate and validate a copied group in one pass. Whole-map imports can
+    /// contain thousands of trees; scanning every existing record for each tree
+    /// or rebuilding the reserved key set for each unit is quadratic.
+    pub fn insert_records(&mut self, records: Vec<Record>) -> Result<Vec<u64>> {
+        self.atomic(|doc| {
+            let mut reserved: BTreeMap<String, HashSet<String>> = BTreeMap::new();
+            for line in &doc.base.raw.lines {
+                if let Some(key) = &line.key {
+                    reserved
+                        .entry(line.section.clone())
+                        .or_default()
+                        .insert(key.clone());
+                }
+            }
+            let mut trees = HashSet::new();
+            for (_, r) in doc.record_iter() {
+                reserved
+                    .entry(r.section.clone())
+                    .or_default()
+                    .insert(r.key.clone());
+                if r.section == "Terrain" {
+                    trees.insert(r.cell());
+                }
+            }
+            let mut next = BTreeMap::new();
+            let mut ids = Vec::with_capacity(records.len());
+            for mut record in records {
+                ensure!(
+                    !record.value.iter().any(|b| matches!(b, b'\r' | b'\n' | 0)),
+                    "记录不能包含换行或 NUL"
+                );
+                let at = record.cell().context("记录坐标无效")?;
+                doc.check_cell(at)?;
+                if record.section == "Terrain" {
+                    ensure!(trees.insert(Some(at)), "该格子已有地形对象");
+                } else {
+                    let keys = reserved.entry(record.section.clone()).or_default();
+                    let index = next.entry(record.section.clone()).or_insert(
+                        if record.section == "Waypoints" {
+                            30u32
+                        } else {
+                            0
+                        },
+                    );
+                    let limit = if record.section == "Waypoints" {
+                        702
+                    } else {
+                        u32::MAX
+                    };
+                    while *index < limit && keys.contains(&index.to_string()) {
+                        *index += 1;
+                    }
+                    ensure!(*index < limit, "没有可用的记录编号");
+                    record.key = index.to_string();
+                    keys.insert(record.key.clone());
+                    *index += 1;
+                }
+                let id = doc.next_record;
+                doc.store_validated(Target::Record(id), Some(Value::Record(record)));
+                doc.next_record += 1;
+                ids.push(id);
+            }
+            Ok(ids)
+        })
+    }
     pub fn new(base: Arc<Baseline>) -> Self {
         let next_record = base.raw.lines.len() as u64;
         Self {
@@ -744,9 +846,13 @@ impl MapDocument {
         if let Target::Terrain(at) | Target::Overlay(at) = &target {
             self.check_cell(*at)?;
         }
+        self.store_validated(target, value);
+        Ok(())
+    }
+    fn store_validated(&mut self, target: Target, value: Option<Value>) {
         let before = self.value(&target);
         if before == value {
-            return Ok(());
+            return;
         }
         self.pending
             .entry(target.clone())
@@ -756,7 +862,6 @@ impl MapDocument {
                 after: value.clone(),
             });
         self.assign(target, value);
-        Ok(())
     }
     pub fn check_cell(&self, at: Cell) -> Result<()> {
         let side = self.base.header.cell_grid().side();

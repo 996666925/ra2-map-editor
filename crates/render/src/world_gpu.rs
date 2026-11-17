@@ -8,6 +8,7 @@ use wgpu::util::DeviceExt;
 struct FrameKey {
     rect: egui::Rect,
     flags: [u32; 4],
+    transparent: bool,
 }
 #[derive(Clone, Copy, Default, serde::Serialize)]
 pub struct ViewportStats {
@@ -480,8 +481,21 @@ impl WorldGpu {
         rect: egui::Rect,
         options: ViewOptions,
     ) {
+        self.render_layer(encoder, queue, target, rect, options, false);
+    }
+
+    pub fn render_layer(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        target: &super::terrain_gpu::Target,
+        rect: egui::Rect,
+        options: ViewOptions,
+        transparent: bool,
+    ) {
         let key = FrameKey {
             rect,
+            transparent,
             flags: [
                 options.overlays as u32,
                 options.objects as u32,
@@ -582,7 +596,9 @@ impl WorldGpu {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: if first {
+                        load: if first && transparent {
+                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                        } else if first {
                             wgpu::LoadOp::Clear(wgpu::Color {
                                 r: 11. / 255.,
                                 g: 15. / 255.,

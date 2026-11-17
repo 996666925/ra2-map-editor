@@ -81,6 +81,73 @@ pub struct PastePlan {
     pub records: Vec<(u64, Record)>,
 }
 impl Clipboard {
+    pub fn capture_map(source: &MapDocument, layers: RegionLayers) -> Result<Self> {
+        let width = source.base.header.width as i32;
+        let height = source.base.header.height as i32;
+        let mut cells = BTreeSet::new();
+        for sum in width + 1..=width + 2 * height {
+            for x in 0..=sum {
+                let y = sum - x;
+                if (x - y).abs() < width {
+                    cells.insert([x as u16, y as u16]);
+                }
+            }
+        }
+        Self::capture(source, &cells, layers)
+    }
+
+    /// Read spatial content using the destination's resources. Mission definitions
+    /// stay in the destination, so imported objects must not bind to its tags.
+    pub fn import_map(source: &MapDocument, destination: &MapDocument) -> Result<Self> {
+        let mut clip = Self::capture_map(
+            source,
+            RegionLayers {
+                waypoints: true,
+                cell_tags: false,
+                ..Default::default()
+            },
+        )?;
+        clip.resource_profile = destination.resource_profile.clone();
+        // Imported tile numbers are interpreted by the destination theater.
+        clip.theater = destination.base.header.theater.clone();
+        let modern = destination
+            .ini_text("Basic", "NewINIFormat")
+            .parse::<i32>()
+            .unwrap_or(0)
+            >= 4;
+        let units: BTreeSet<_> = clip
+            .records
+            .iter()
+            .filter(|(_, r)| r.section == "Units")
+            .map(|(_, r)| r.key.clone())
+            .collect();
+        for (_, record) in &mut clip.records {
+            if record.section == "Terrain" {
+                let at = record.cell().context("地形对象坐标无效")?;
+                record.coordinate_radix = if modern { 1000 } else { 128 };
+                *record = record.moved(at)?;
+            }
+            let tag = match record.section.as_str() {
+                "Structures" => Some(6),
+                "Units" | "Aircraft" => Some(7),
+                "Infantry" => Some(8),
+                _ => None,
+            };
+            let fields = record.fields();
+            if let Some(tag) = tag.filter(|&i| i < fields.len()) {
+                *record = record.patched(&[(tag, "None".into())])?;
+            }
+            if record.section == "Units"
+                && let Some(follows) = fields.get(11)
+                && follows != "-1"
+                && !units.contains(follows)
+            {
+                *record = record.patched(&[(11, "-1".into())])?;
+            }
+        }
+        Ok(clip)
+    }
+
     pub fn capture(
         doc: &MapDocument,
         cells: &BTreeSet<Cell>,
@@ -199,11 +266,20 @@ impl PastePlan {
                     doc.set(Target::Overlay(cell.at), Some(Value::Overlay(id, frame)))?;
                 }
             }
-            let mut ids = Vec::new();
+            let mut ids = if copy {
+                doc.insert_records(
+                    self.records
+                        .iter()
+                        .map(|(_, record)| record.clone())
+                        .collect(),
+                )?
+            } else {
+                Vec::with_capacity(self.records.len())
+            };
             let mut unit_keys = BTreeMap::new();
-            for (id, r) in &self.records {
+            for (index, (id, r)) in self.records.iter().enumerate() {
                 let new = if copy {
-                    doc.insert_record(r.clone())?
+                    ids[index]
                 } else {
                     doc.set(Target::Record(*id), Some(Value::Record(r.clone())))?;
                     *id
@@ -211,7 +287,9 @@ impl PastePlan {
                 if r.section == "Units" {
                     unit_keys.insert(r.key.clone(), new);
                 }
-                ids.push(new);
+                if !copy {
+                    ids.push(new);
+                }
             }
             if copy {
                 let current = doc.records();

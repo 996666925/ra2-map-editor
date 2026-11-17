@@ -11,6 +11,56 @@ use vera20k_core::{
 use crate::test_support::{document, fixture};
 
 #[test]
+fn prepared_replacement_rejects_stale_results_and_preserves_atomic_history() {
+    let mut doc = document();
+    let original = doc.snapshot().bytes().unwrap();
+    let mut bytes = original.clone();
+    bytes.extend_from_slice(b"\r\n[Custom]\r\nX=changed\r\n");
+    let stale =
+        PreparedReplacement::prepare(doc.snapshot(), doc.edit_revision(), bytes.clone()).unwrap();
+    doc.set_ini("Custom", "X", Some(b"newer".to_vec())).unwrap();
+    doc.commit("newer");
+    let edited = doc.snapshot().bytes().unwrap();
+    assert!(doc.replace_prepared(stale, "stale").is_err());
+    assert_eq!(doc.snapshot().bytes().unwrap(), edited);
+    let ready =
+        PreparedReplacement::prepare(doc.snapshot(), doc.edit_revision(), bytes.clone()).unwrap();
+    assert!(doc.replace_prepared(ready, "prepared").unwrap());
+    assert_eq!(doc.snapshot().bytes().unwrap(), bytes);
+    assert!(doc.undo());
+    assert_eq!(doc.snapshot().bytes().unwrap(), edited);
+    assert!(doc.redo());
+    assert_eq!(doc.snapshot().bytes().unwrap(), bytes);
+}
+
+#[test]
+fn bulk_records_allocate_like_single_insert_and_roll_back_duplicate_trees() {
+    let mut source = document();
+    let a = source
+        .add_record("Units", [2, 2], "Neutral", "HTNK")
+        .unwrap();
+    let b = source
+        .add_record("Terrain", [3, 2], "Neutral", "TREE01")
+        .unwrap();
+    let records = vec![
+        source.record(a).unwrap().clone(),
+        source.record(b).unwrap().clone(),
+    ];
+    let mut bulk = document();
+    let mut single = document();
+    let ids = bulk.insert_records(records.clone()).unwrap();
+    for (r, id) in records.into_iter().zip(ids) {
+        let single_id = single.insert_record(r).unwrap();
+        assert_eq!(single.record(single_id), bulk.record(id));
+    }
+    let before = bulk.snapshot().bytes().unwrap();
+    let unit = source.record(a).unwrap().clone();
+    let tree = source.record(b).unwrap().clone();
+    assert!(bulk.insert_records(vec![unit, tree]).is_err());
+    assert_eq!(bulk.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
 fn resource_selected_ares_dialect_survives_edits_history_and_structural_replacement() {
     let mut bytes = crate::new_map::NewMapOptions {
         title: "First".into(),

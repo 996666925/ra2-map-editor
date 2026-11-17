@@ -806,6 +806,12 @@ impl Editor {
         }
     }
     pub(crate) fn structural_changed(&mut self, scene: &MapScene) {
+        self.queue_structural_refresh();
+        self.cache(scene);
+    }
+    /// Structural replacement blocks tools until its new scene is published.
+    /// Let that publication rebuild caches against the matching geometry once.
+    pub(crate) fn queue_structural_refresh(&mut self) {
         self.structural_refresh = true;
         self.region = Default::default();
         self.plateau.cancel();
@@ -813,7 +819,8 @@ impl Editor {
         self.object_brush.cancel();
         self.tunnel_edit = Default::default();
         self.select(None);
-        self.changed(scene, true);
+        self.refresh = true;
+        self.last_edit = Instant::now();
     }
     pub fn commit(&mut self, scene: &MapScene, name: &str) {
         if let Some(doc) = &mut self.doc {

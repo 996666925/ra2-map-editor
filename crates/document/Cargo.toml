@@ -11,4 +11,6 @@ test-support = []
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+flate2 = "1"
 vera20k-core.workspace = true

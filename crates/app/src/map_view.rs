@@ -14,6 +14,8 @@ use std::{
 #[cfg(test)]
 #[path = "layout_tests.rs"]
 mod layout_tests;
+#[path = "map_management.rs"]
+mod map_management;
 #[path = "p2_smoke.rs"]
 mod p2_smoke;
 #[path = "p3_smoke.rs"]
@@ -183,6 +185,7 @@ impl MapView {
         self.load_now(directory, name, None);
     }
     fn load_now(&mut self, directory: PathBuf, name: String, new_map: Option<MapCreation>) {
+        self.workbench.management = Default::default();
         self.workbench.flat_view.invalidate();
         self.workbench.size_guide.invalidate();
         self.workbench.canvas_pan = false;
@@ -225,6 +228,7 @@ impl MapView {
     }
     pub fn poll(&mut self, ctx: &egui::Context) {
         if self.loading
+            && !self.workbench.management.open
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             self.generation += 1;
@@ -234,6 +238,7 @@ impl MapView {
             self.status = tr!("已取消；编辑数据仍保留，可刷新资源重新加载预览。").into();
         }
         self.editor.poll(ctx);
+        self.poll_map_management(ctx);
         if let Some(scene) = &self.scene {
             self.workbench
                 .map_settings
@@ -255,6 +260,7 @@ impl MapView {
             self.workbench.mission.base.cancel_drag();
         }
         if let Some((base, meta, path)) = self.editor.restored.take() {
+            self.workbench.management = Default::default();
             self.workbench.flat_view.invalidate();
             self.workbench.size_guide.invalidate();
             self.directory = meta.directory.clone();
@@ -305,6 +311,7 @@ impl MapView {
             }
         }
         if self.editor.refresh
+            && !self.workbench.management.open
             && !self.editor.stroking
             && let Some(doc) = &self.editor.doc
         {
@@ -345,7 +352,9 @@ impl MapView {
                 self.stage = progress.stage;
             }
         }
-        while let Ok(message) = self.loader.results.try_recv() {
+        while !self.workbench.management.dragging()
+            && let Ok(message) = self.loader.results.try_recv()
+        {
             if message.generation != self.generation {
                 continue;
             }
@@ -363,10 +372,12 @@ impl MapView {
             self.timings = message.timings;
             match message.result {
                 Ok(scene) => {
-                    if self.scene.as_ref().is_some_and(|old| {
-                        old.source.header.width != scene.source.header.width
-                            || old.source.header.height != scene.source.header.height
-                    }) {
+                    if !self.workbench.management.preserve_view
+                        && self.scene.as_ref().is_some_and(|old| {
+                            old.source.header.width != scene.source.header.width
+                                || old.source.header.height != scene.source.header.height
+                        })
+                    {
                         self.selected = None;
                         self.hover = None;
                         self.center = scene.bounds.center();
@@ -438,6 +449,8 @@ impl MapView {
                         }
                     }
                     self.editor.structural_refresh = false;
+                    self.workbench.management.preserve_view = false;
+                    self.workbench.management.published_shift = [0, 0];
                     self.scene = Some(scene);
                 }
                 Err(e) => self.error = Some(format!("{e:#}")),
@@ -528,13 +541,15 @@ impl MapView {
                 | crate::editing::Tool::Terrain
                 | crate::editing::Tool::Pick
                 | crate::editing::Tool::Tunnel
-        ) && !self.workbench.mission.open
+        ) && !self.workbench.management.open
+            && !self.workbench.mission.open
             && !self.workbench.mission.picking();
         if self.editor.flat_view && !flat_supported {
             crate::flat_view::set_enabled(&mut self.editor, scene, &mut self.center, false);
         }
         let mut flat = self.editor.flat_view;
         let mut framework = self.editor.framework;
+        let mut start_management = false;
         if scene.images.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.label(tr!(
@@ -547,7 +562,11 @@ impl MapView {
             .fill(theme::BACKGROUND)
             .inner_margin(egui::Margin::symmetric(12, 7))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if self.workbench.management.open {
+                        self.workbench.management.toolbar(ui);
+                    } else {
+                    start_management = ui.add_enabled(editing && !self.loading && !self.editor.stroking, egui::Button::new(tr!("多地图模式"))).clicked();
                     if ui.available_width() > 600. { theme::badge(ui, &scene.source.header.theater, theme::BLUE); }
                     ui.add_enabled_ui(editing && !self.editor.stroking, |ui| {
                         if ui.toggle_value(&mut framework, tr!("框架"))
@@ -557,6 +576,7 @@ impl MapView {
                             .on_hover_text(tr!("F2：铺平地形以对齐悬崖；开启时关闭框架。对象与区域工具使用立体视图。"))
                             .changed() && flat { framework = false; }
                     });
+                    }
                     if ui.available_width() > 240. {
                         ui.add_sized(
                             [ui.available_width() - 195., 20.],
@@ -589,7 +609,7 @@ impl MapView {
                             .size(11.)
                             .color(theme::MUTED),
                         );
-                        if self.loading {
+                        if self.loading && !self.workbench.management.open {
                             ui.spinner().on_hover_text(self.stage);
                             if ui.available_width() > 180. {
                                 ui.label(self.stage);
@@ -598,15 +618,26 @@ impl MapView {
                     });
                 });
             });
+        if start_management && let Some(doc) = &self.editor.doc {
+            if let Err(error) = self.workbench.management.prepare(doc, self.name.clone()) {
+                self.status = format!("{error:#}");
+            }
+        }
+        if self.workbench.management.presenting_layers() {
+            flat = false;
+            framework = false;
+        }
         let (rect, response) = ui.allocate_exact_size(
             ui.available_size().max(egui::vec2(1., 1.)),
             egui::Sense::click_and_drag(),
         );
         self.workbench.canvas_extent = Some(rect.size());
         self.workbench.canvas_rect = Some(rect);
-        let keyboard =
-            editing && !ui.ctx().text_edit_focused() && !crate::form_edit::popup_open(ui.ctx());
+        let keyboard = (editing || self.workbench.management.open)
+            && !ui.ctx().text_edit_focused()
+            && !crate::form_edit::popup_open(ui.ctx());
         if keyboard
+            && !self.workbench.management.open
             && !self.editor.stroking
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
         {
@@ -616,6 +647,7 @@ impl MapView {
             }
         }
         if keyboard
+            && !self.workbench.management.open
             && !self.editor.stroking
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F2))
         {
@@ -633,7 +665,16 @@ impl MapView {
         crate::flat_view::set_enabled(&mut self.editor, scene, &mut self.center, flat);
         self.editor.set_framework(framework);
         self.workbench.flat_view.prepare(scene);
-        let map_bounds = if self.editor.flat_view {
+        let map_bounds = if self.workbench.management.presenting_layers() {
+            self.workbench
+                .management
+                .world_bounds()
+                .translate(self.workbench.management.presentation_shift())
+                .union(scene.bounds.translate(
+                    -map_management::translation(self.workbench.management.published_shift)
+                        + self.workbench.management.presentation_shift(),
+                ))
+        } else if self.editor.flat_view {
             self.workbench.flat_view.bounds
         } else {
             scene.bounds
@@ -767,13 +808,58 @@ impl MapView {
             center: self.center,
             zoom: self.zoom,
         };
-        let world = camera.world_rect(rect);
+        let world =
+            camera
+                .world_rect(rect)
+                .translate(if self.workbench.management.presenting_layers() {
+                    map_management::translation(self.workbench.management.published_shift)
+                        - self.workbench.management.presentation_shift()
+                } else {
+                    egui::Vec2::ZERO
+                });
         let size = [
             (rect.width() * ui.ctx().pixels_per_point()).round().max(1.) as u32,
             (rect.height() * ui.ctx().pixels_per_point())
                 .round()
                 .max(1.) as u32,
         ];
+        if self.workbench.management.presenting_layers() {
+            if let Some(state) = state {
+                self.workbench.management.bind_gpu(state);
+                if let Err(error) = self
+                    .workbench
+                    .management
+                    .poll_layers(ui.ctx(), &self.directory)
+                {
+                    self.status = format!("{error:#}");
+                }
+            }
+            if self.workbench.management.open {
+                self.workbench
+                    .management
+                    .canvas(ui, scene, rect, &response, &camera, panning);
+            }
+            if self.workbench.management.draw_layers(
+                &ui.painter().with_clip_rect(rect),
+                rect,
+                &camera,
+                size,
+                self.editor.view_options(),
+            ) {
+                // Draw the guide over the resident layers without handling input twice.
+                if self.workbench.management.open {
+                    self.workbench.management.outline(
+                        &ui.painter().with_clip_rect(rect),
+                        rect,
+                        &camera,
+                    );
+                }
+                if primary_release || !primary_down {
+                    self.workbench.canvas_pan = false;
+                }
+                return;
+            }
+        }
         if self.editor.flat_view {
             self.workbench.flat_view.draw(
                 &ui.painter().with_clip_rect(rect),
@@ -792,6 +878,19 @@ impl MapView {
                 world,
                 self.editor.view_options(),
             ));
+        }
+        if self.workbench.management.presenting_layers() {
+            if self.workbench.management.open {
+                self.workbench.management.outline(
+                    &ui.painter().with_clip_rect(rect),
+                    rect,
+                    &camera,
+                );
+            }
+            if primary_release || !primary_down {
+                self.workbench.canvas_pan = false;
+            }
+            return;
         }
         if response.hovered() {
             ui.ctx().set_cursor_icon(if panning {
