@@ -596,3 +596,285 @@ fn paved_approaches_are_valid_and_remain_intact() {
         assert_eq!(doc.terrain(at), Some(v));
     }
 }
+
+fn crossing_setup(axis: usize) -> (MapDocument, MapScene) {
+    let (mut doc, scene) = setup();
+    let rotate = |[x, y]: Cell| if axis == 0 { [x, y] } else { [y, x] };
+    crate::shore_tools::plan(
+        &doc,
+        &scene,
+        cliff_tools::rectangle(rotate([85, 57]), rotate([89, 77])),
+        Some(true),
+    )
+    .unwrap()
+    .apply(&mut doc)
+    .unwrap();
+    doc.commit("water under crossing");
+    for (a, b) in [([60, 60], [79, 74]), ([94, 60], [108, 74])] {
+        cliff_tools::plan(
+            &doc,
+            &scene,
+            cliff_tools::rectangle(rotate(a), rotate(b)),
+            4,
+        )
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+        doc.commit("bank");
+    }
+    (doc, scene)
+}
+
+#[test]
+fn double_bridges_replace_only_the_low_crossing_in_either_order_and_survive_history() {
+    for axis in 0..2 {
+        let (doc, scene) = crossing_setup(axis);
+        let rotate = |[x, y]: Cell| if axis == 0 { [x, y] } else { [y, x] };
+        let high_ends = (rotate([77, 67]), rotate([98, 67]));
+        let low_ends = (rotate([86, 55]), rotate([86, 79]));
+        let crossing = cliff_tools::rectangle(rotate([85, 67]), rotate([87, 67]));
+        let clear = scene.catalog.raw_tiles[&(scene.palette.tile_ids.unwrap().clear as u16)];
+        for high in [BridgeKind::HighConcrete, BridgeKind::HighWood] {
+            let hp = plan(&doc, &scene, high_ends.0, high_ends.1, high).unwrap();
+            for low in [BridgeKind::LowWood, BridgeKind::LowConcrete] {
+                let lp = plan(&doc, &scene, low_ends.0, low_ends.1, low).unwrap();
+                let mut results = Vec::new();
+                for high_first in [false, true] {
+                    let mut edited = doc.fork();
+                    (if high_first { &hp } else { &lp })
+                        .apply(&mut edited)
+                        .unwrap();
+                    edited.commit("first bridge");
+                    let before = edited.snapshot().bytes().unwrap();
+                    let (a, b, kind) = if high_first {
+                        (low_ends.0, low_ends.1, low)
+                    } else {
+                        (high_ends.0, high_ends.1, high)
+                    };
+                    let p = plan(&edited, &scene, a, b, kind).unwrap();
+                    let reverse = plan(&edited, &scene, b, a, kind).unwrap();
+                    assert_eq!(p.edits, reverse.edits);
+                    assert_eq!(p.overlays, reverse.overlays);
+                    assert_eq!(edited.snapshot().bytes().unwrap(), before);
+                    let changed: BTreeSet<_> = p
+                        .edits
+                        .keys()
+                        .filter(|at| !hp.edits.contains_key(*at))
+                        .copied()
+                        .collect();
+                    assert_eq!(changed, crossing);
+                    p.apply(&mut edited).unwrap();
+                    edited.commit("crossing bridge");
+                    for (&at, &v) in &hp.edits {
+                        assert_eq!(edited.terrain(at), Some(v), "keep complete heads");
+                    }
+                    for (&at, &v) in &hp.overlays {
+                        assert_eq!(edited.overlay(at), v, "keep high anchors");
+                    }
+                    for (&at, &v) in &lp.overlays {
+                        if crossing.contains(&at) {
+                            assert_eq!(
+                                edited.terrain(at),
+                                Some(TerrainValue {
+                                    tile: clear,
+                                    sub: 0,
+                                    level: 4,
+                                    ice: 0
+                                })
+                            );
+                            assert_eq!(
+                                edited.overlay(at),
+                                hp.overlays.get(&at).copied().unwrap_or((255, 0))
+                            );
+                        } else {
+                            assert_eq!(edited.overlay(at), v, "keep low bridge outside crossing");
+                            assert_eq!(edited.terrain(at), doc.terrain(at));
+                        }
+                    }
+                    let after = edited.snapshot().bytes().unwrap();
+                    // Repainting either layer must keep the narrow crossing,
+                    // including the existing high anchor in the low span.
+                    for (start, end, repaint) in [
+                        (high_ends.0, high_ends.1, high),
+                        (low_ends.0, low_ends.1, low),
+                    ] {
+                        plan(&edited, &scene, start, end, repaint)
+                            .unwrap()
+                            .apply(&mut edited)
+                            .unwrap();
+                        assert_eq!(edited.snapshot().bytes().unwrap(), after);
+                    }
+                    let (source, _) = ra2_map_document::source::SourceMap::parse(
+                        "crossing.map".into(),
+                        "test".into(),
+                        after.clone(),
+                    )
+                    .unwrap();
+                    let reopened = MapDocument::new(source.edit_base.as_ref().unwrap().clone());
+                    for &at in &crossing {
+                        assert_eq!(reopened.terrain(at), edited.terrain(at));
+                        assert_eq!(reopened.overlay(at), edited.overlay(at));
+                    }
+                    edited.undo();
+                    assert_eq!(edited.snapshot().bytes().unwrap(), before);
+                    edited.redo();
+                    assert_eq!(edited.snapshot().bytes().unwrap(), after);
+                    results.push(after);
+                }
+                assert_eq!(
+                    results[0], results[1],
+                    "placement order must not change the result"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn double_bridge_crossings_still_reject_blockers_and_modified_overlay_ids() {
+    let (mut doc, mut scene) = crossing_setup(0);
+    plan(&doc, &scene, [86, 55], [86, 79], BridgeKind::LowWood)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    doc.commit("low bridge");
+    assert!(plan(&doc, &scene, [86, 55], [86, 79], BridgeKind::LowConcrete).is_ok());
+    let id = doc.overlay([86, 65]).0;
+    let name = scene.catalog.overlays[usize::from(id)].clone();
+    std::sync::Arc::make_mut(&mut scene.catalog).overlays[usize::from(id)] = "MOD_OVERLAY".into();
+    assert!(plan(&doc, &scene, [77, 67], [98, 67], BridgeKind::HighWood).is_err());
+    std::sync::Arc::make_mut(&mut scene.catalog).overlays[usize::from(id)] = name;
+    doc.set(Target::Overlay([86, 65]), Some(Value::Overlay(1, 0)))
+        .unwrap();
+    let before = doc.snapshot().bytes().unwrap();
+    assert!(plan(&doc, &scene, [77, 67], [98, 67], BridgeKind::HighWood).is_err());
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    doc.cancel();
+    doc.undo();
+    plan(&doc, &scene, [77, 67], [98, 67], BridgeKind::HighWood)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    doc.commit("high bridge");
+    assert!(plan(&doc, &scene, [77, 67], [98, 67], BridgeKind::HighConcrete).is_ok());
+    // This cell has no high anchor, but is still in its structural row.
+    doc.set(Target::Overlay([86, 65]), Some(Value::Overlay(1, 0)))
+        .unwrap();
+    let before = doc.snapshot().bytes().unwrap();
+    assert!(plan(&doc, &scene, [86, 55], [86, 79], BridgeKind::LowWood).is_err());
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+fn existing_bridges_can_be_repainted_with_either_material_on_both_axes() {
+    for axis in 0..2 {
+        let (doc, scene) = crossing_setup(axis);
+        let rotate = |[x, y]: Cell| if axis == 0 { [x, y] } else { [y, x] };
+        for (a, b, kinds) in [
+            (
+                [77, 67],
+                [98, 67],
+                [BridgeKind::HighWood, BridgeKind::HighConcrete],
+            ),
+            (
+                [86, 55],
+                [86, 79],
+                [BridgeKind::LowWood, BridgeKind::LowConcrete],
+            ),
+        ] {
+            let (a, b) = (rotate(a), rotate(b));
+            for old in kinds {
+                for new in kinds {
+                    let mut edited = doc.fork();
+                    plan(&edited, &scene, a, b, old)
+                        .unwrap()
+                        .apply(&mut edited)
+                        .unwrap();
+                    edited.commit("old bridge");
+                    let before = edited.snapshot().bytes().unwrap();
+                    let expected = plan(&doc, &scene, a, b, new).unwrap();
+                    let mut endpoints = vec![(a, b), (b, a)];
+                    if new.high() {
+                        // Pick both the road centre and the low foot of each
+                        // saved head, rather than only untouched bank cells.
+                        for offset in [[1, 2], [0, 0]] {
+                            let offset = if axis == 0 {
+                                offset
+                            } else {
+                                [offset[1], offset[0]]
+                            };
+                            let heads: Vec<_> = expected
+                                .cliffs
+                                .iter()
+                                .map(|head| cell(head.origin, offset[0], offset[1]).unwrap())
+                                .collect();
+                            endpoints.extend([(heads[0], heads[1]), (heads[1], heads[0])]);
+                        }
+                    }
+                    for (start, end) in endpoints {
+                        let p = plan(&edited, &scene, start, end, new).unwrap();
+                        assert_eq!(p.edits, expected.edits);
+                        assert_eq!(p.overlays, expected.overlays);
+                    }
+                    let p = plan(&edited, &scene, a, b, new).unwrap();
+                    p.apply(&mut edited).unwrap();
+                    edited.commit("replace bridge");
+                    for (&at, &v) in &expected.edits {
+                        assert_eq!(edited.terrain(at), Some(v));
+                    }
+                    for (&at, &v) in &expected.overlays {
+                        assert_eq!(edited.overlay(at), v);
+                    }
+                    if old != new {
+                        let after = edited.snapshot().bytes().unwrap();
+                        edited.undo();
+                        assert_eq!(edited.snapshot().bytes().unwrap(), before);
+                        edited.redo();
+                        assert_eq!(edited.snapshot().bytes().unwrap(), after);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn partial_low_bridge_overwrite_keeps_old_cells_outside_the_new_span() {
+    for axis in 0..2 {
+        let (mut doc, scene) = setup();
+        let rotate = |[x, y]: Cell| if axis == 0 { [x, y] } else { [y, x] };
+        let old = plan(
+            &doc,
+            &scene,
+            rotate([60, 60]),
+            rotate([72, 60]),
+            BridgeKind::LowWood,
+        )
+        .unwrap();
+        old.apply(&mut doc).unwrap();
+        doc.commit("old bridge");
+        let before = doc.snapshot().bytes().unwrap();
+        let p = plan(
+            &doc,
+            &scene,
+            rotate([65, 60]),
+            rotate([78, 60]),
+            BridgeKind::LowConcrete,
+        )
+        .unwrap();
+        assert!(p.edits.is_empty());
+        p.apply(&mut doc).unwrap();
+        doc.commit("partial overwrite");
+        for (&at, &v) in &old.overlays {
+            assert_eq!(doc.overlay(at), p.overlays.get(&at).copied().unwrap_or(v));
+        }
+        for (&at, &v) in &p.overlays {
+            assert_eq!(doc.overlay(at), v);
+        }
+        let after = doc.snapshot().bytes().unwrap();
+        doc.undo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), before);
+        doc.redo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), after);
+    }
+}

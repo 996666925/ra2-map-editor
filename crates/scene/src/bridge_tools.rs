@@ -6,7 +6,7 @@ use crate::{
     terrain_tools::value,
 };
 use anyhow::{Context, Result, ensure};
-use ra2_map_document::document::{Cell, MapDocument};
+use ra2_map_document::document::{Cell, MapDocument, TerrainValue};
 use std::collections::{BTreeMap, BTreeSet};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 use vera20k_core::rules::terrain_rules::{LandType, tmp_terrain_to_land_type};
@@ -47,13 +47,8 @@ fn cell(a: Cell, x: i32, y: i32) -> Result<Cell> {
     );
     Ok([x as u16, y as u16])
 }
-fn overlay(scene: &MapScene, id: u8, frame: u8) -> Result<()> {
-    let name = scene
-        .catalog
-        .overlays
-        .get(usize::from(id))
-        .context("当前环境缺少桥面覆盖物")?;
-    let expected = match id {
+fn overlay_name(id: u8) -> String {
+    match id {
         24 => "BRIDGE1".into(),
         25 => "BRIDGE2".into(),
         237 => "BRIDGEB1".into(),
@@ -61,9 +56,27 @@ fn overlay(scene: &MapScene, id: u8, frame: u8) -> Result<()> {
         74..=101 => format!("LOBRDG{:02}", id - 73),
         205..=232 => format!("LOBRDB{:02}", id - 204),
         _ => String::new(),
-    };
+    }
+}
+
+fn standard_overlay(scene: &MapScene, id: u8) -> bool {
+    let expected = overlay_name(id);
+    !expected.is_empty()
+        && scene
+            .catalog
+            .overlays
+            .get(usize::from(id))
+            .is_some_and(|name| name.eq_ignore_ascii_case(&expected))
+}
+
+fn overlay(scene: &MapScene, id: u8, frame: u8) -> Result<()> {
+    let name = scene
+        .catalog
+        .overlays
+        .get(usize::from(id))
+        .context("当前环境缺少桥面覆盖物")?;
     ensure!(
-        name.eq_ignore_ascii_case(&expected),
+        standard_overlay(scene, id),
         "覆盖物编号 {id} 已被 Mod 改写，无法安全生成标准桥梁"
     );
     // Some bridge-end cross rows are intentionally empty SHP frames. Their
@@ -77,6 +90,33 @@ fn overlay(scene: &MapScene, id: u8, frame: u8) -> Result<()> {
         "缺少桥面 {name} 的第 {frame} 帧"
     );
     Ok(())
+}
+
+fn low_overlay(scene: &MapScene, id: u8) -> bool {
+    matches!(id, 74..=101 | 205..=232) && standard_overlay(scene, id)
+}
+
+fn high_overlay(scene: &MapScene, id: u8) -> bool {
+    matches!(id, 24 | 25 | 237 | 238) && standard_overlay(scene, id)
+}
+
+fn clear_crossing(doc: &MapDocument, scene: &MapScene, at: Cell) -> Result<TerrainValue> {
+    let id = u16::try_from(scene.palette.tile_ids.context("缺少地形配置")?.clear)?;
+    let tile = *scene.catalog.raw_tiles.get(&id).context("原地形无法识别")?;
+    let sub = scene
+        .palette
+        .templates
+        .get(&(id, 0))
+        .and_then(|t| t.cells.first())
+        .and_then(|s| *s)
+        .context("原地形几何缺失")?;
+    ensure!(sub.height == 0 && sub.slope == 0, "桥梁范围内有坡面");
+    Ok(TerrainValue {
+        tile,
+        sub: 0,
+        level: value(doc, scene, at).level,
+        ice: 0,
+    })
 }
 
 fn land(scene: &MapScene, v: ra2_map_document::document::TerrainValue) -> bool {
@@ -112,7 +152,7 @@ fn bank_level(doc: &MapDocument, scene: &MapScene, at: Cell) -> Result<u8> {
         .raw_ids
         .get(&v.tile)
         .context("落地点地形未知")?;
-    if crate::coastal_cliffs::piece(scene, *id).is_some() {
+    if crate::coastal_cliffs::piece(scene, *id).is_some() || bridge_head(scene, *id) {
         let sub = scene
             .palette
             .templates
@@ -197,6 +237,45 @@ pub(crate) fn head_profile(scene: &MapScene, tile: u16) -> Option<(usize, i32, b
     None
 }
 
+fn bridge_head(scene: &MapScene, tile: u16) -> bool {
+    scene.palette.tile_ids.is_some_and(|ids| {
+        [ids.cliffs.bridge_set, ids.cliffs.wood_bridge_set]
+            .into_iter()
+            .flatten()
+            .any(|base| tile >= base && tile - base < 16)
+    }) && head_profile(scene, tile).is_some()
+}
+
+fn saved_head_end(
+    doc: &MapDocument,
+    scene: &MapScene,
+    at: Cell,
+    axis: usize,
+    direction: i32,
+) -> Option<Cell> {
+    let v = value(doc, scene, at);
+    let id = *scene.palette.raw_ids.get(&v.tile)?;
+    if !bridge_head(scene, id) {
+        return None;
+    }
+    let (head_axis, _, reverse) = head_profile(scene, id)?;
+    if axis != head_axis || reverse != (direction < 0) {
+        return None;
+    }
+    let t = scene.palette.templates.get(&(id, 0))?;
+    let origin = cell(
+        at,
+        -i32::from(u16::from(v.sub) % t.width),
+        -i32::from(u16::from(v.sub) / t.width),
+    )
+    .ok()?;
+    if axis == 0 {
+        cell(origin, 1, 2).ok()
+    } else {
+        cell(origin, 2, 1).ok()
+    }
+}
+
 fn high_end(
     doc: &MapDocument,
     scene: &MapScene,
@@ -206,6 +285,9 @@ fn high_end(
     direction: i32,
     landing: u8,
 ) -> Result<Cell> {
+    if let Some(end) = saved_head_end(doc, scene, at, axis, direction) {
+        return Ok(end);
+    }
     // Only the clicked cliff's own footprint may be searched backwards.
     let v = value(doc, scene, at);
     let id = scene
@@ -237,6 +319,9 @@ fn high_end(
             "两端之间没有可跨越的低地；水面同高桥请选择低桥"
         );
         doc.check_cell(next)?;
+        if let Some(end) = saved_head_end(doc, scene, next, axis, direction) {
+            return Ok(end);
+        }
         if value(doc, scene, next).level != landing {
             // Align the outer cliff shoulders, not the raised centre of the
             // road. Both heads overhang the low ground by one centre cell.
@@ -404,6 +489,7 @@ pub fn plan(
         base,
     };
     let mut footprint = BTreeSet::new();
+    let mut deck = BTreeSet::new();
     if kind.high() {
         let family = if kind == BridgeKind::HighWood {
             ids.cliffs.wood_bridge_set
@@ -490,11 +576,15 @@ pub fn plan(
                     "桥下地面必须比两端低 4 层，且桥面下不能有高度突变"
                 );
                 footprint.insert(at);
+                if !p.edits.contains_key(&at) && under.level == base {
+                    deck.insert(at);
+                }
             }
         }
     } else {
         p.overlays = low_deck(doc, scene, a, b, kind, along_x)?;
         footprint.extend(p.overlays.keys().copied());
+        deck.extend(p.overlays.keys().copied());
         for side in -1..=1 {
             for at in if along_x {
                 [cell(a, -1, side)?, cell(b, 1, side)?]
@@ -511,10 +601,24 @@ pub fn plan(
             }
         }
     }
+    // Only cells sharing an OverlayPack slot need replacement. The high
+    // bridge's wider structural row must keep the low deck and ground intact.
+    let crossings: BTreeSet<_> = deck
+        .iter()
+        .copied()
+        .filter(|&at| {
+            if kind.high() {
+                p.overlays.contains_key(&at) && low_overlay(scene, doc.overlay(at).0)
+            } else {
+                high_overlay(scene, doc.overlay(at).0)
+            }
+        })
+        .collect();
     for &at in &footprint {
         doc.check_cell(at)?;
+        let id = doc.overlay(at).0;
         ensure!(
-            doc.overlay(at).0 == 255,
+            id == 255 || standard_overlay(scene, id),
             "{},{} 已有覆盖物，未放置桥梁",
             at[0],
             at[1]
@@ -529,12 +633,14 @@ pub fn plan(
             .and_then(|s| *s)
             .context("原地形几何缺失")?;
         let land_cliff = crate::coastal_cliffs::piece(scene, *id).is_some();
+        let old_head =
+            bridge_head(scene, *id) && p.edits.get(&at).is_some_and(|new| new.level == v.level);
         let ordinary = land(scene, v)
             || scene.palette.morphable.contains(id)
             || i32::from(*id) == ids.clear
             || ids.is_water_shore_or_waterfall(i32::from(*id));
         ensure!(
-            ordinary || land_cliff && (p.edits.contains_key(&at) || v.level == base),
+            ordinary || old_head || land_cliff && (p.edits.contains_key(&at) || v.level == base),
             "桥梁范围 {},{} 有不能替换的特殊地形 #{}（{}）",
             at[0],
             at[1],
@@ -545,10 +651,10 @@ pub fn plan(
                 .get(id)
                 .map_or("未知", |g| g.name.as_str())
         );
-        ensure!(t.slope == 0, "桥梁范围内有坡面");
+        ensure!(t.slope == 0 || old_head, "桥梁范围内有坡面");
         if kind.high() {
             ensure!(
-                v.level == base || v.level == landing,
+                old_head || v.level == base || v.level == landing,
                 "桥梁范围内高度不匹配"
             );
         } else {
@@ -569,6 +675,13 @@ pub fn plan(
                 scene.catalog.object_name(&r.type_id()),
                 r.type_id()
             );
+        }
+    }
+    for at in crossings {
+        p.edits.insert(at, clear_crossing(doc, scene, at)?);
+        // A new high anchor already replaces the low overlay in this slot.
+        if !kind.high() {
+            p.overlays.remove(&at);
         }
     }
     Ok(p)
