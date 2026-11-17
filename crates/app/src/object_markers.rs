@@ -55,10 +55,12 @@ impl MarkerCache {
                     .get(if record.section == "Infantry" { 7 } else { 5 })
                     .and_then(|s| s.parse::<u8>().ok())
                     .unwrap_or(0);
-                let appearance = scene
-                    .sprites
-                    .objects
-                    .get(&(record.section.clone(), label.clone()));
+                let appearance = scene.object_sprite(
+                    &record.section,
+                    &label,
+                    at,
+                    ra2_map_scene::visual::object_on_bridge(record),
+                );
                 let image = appearance.map(|a| a.image_at(facing, at).clone());
                 let image_rect = appearance.zip(image.as_ref()).map(|(appearance, image)| {
                     let z = terrain_tools::object_world_z(

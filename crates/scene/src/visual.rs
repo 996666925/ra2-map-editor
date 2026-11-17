@@ -394,7 +394,7 @@ impl VisualScene {
                             return;
                         };
                         let Some(appearance) =
-                            scene.sprites.objects.get(&(r.section.clone(), r.type_id()))
+                            scene.object_sprite(&r.section, &r.type_id(), at, object_on_bridge(r))
                         else {
                             return;
                         };

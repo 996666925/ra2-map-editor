@@ -15,6 +15,7 @@ pub struct SpritePalette {
     pub entries: HashMap<(String, String), SpritePreview>,
     pub overlay_frames: HashMap<(String, u8), Arc<DecodedImage>>,
     pub objects: HashMap<(String, String), crate::map_sprites::ObjectSprite>,
+    pub water_objects: HashMap<String, crate::map_sprites::ObjectSprite>,
 }
 pub struct SpritePreview {
     pub image: Option<Arc<DecodedImage>>,
@@ -56,6 +57,7 @@ impl SpritePalette {
                 .insert(("Overlay".into(), id.clone()), entry);
         }
         palette.objects = crate::map_sprites::load(install, catalog, &palette);
+        palette.water_objects = crate::map_sprites::load_water(install, catalog, &palette);
         palette
     }
 }
@@ -120,7 +122,14 @@ fn preview(install: &Install, catalog: &Catalog, section: &str, id: &str) -> Spr
         )
     };
     let loaded = if voxel {
-        voxel_image(install, &image)
+        voxel_image(
+            install,
+            &image,
+            catalog
+                .art
+                .exact_entry(id)
+                .is_some_and(|art| art.use_buffer),
+        )
     } else {
         let selected = candidates
             .iter()
@@ -267,7 +276,7 @@ pub(crate) fn decode_shp_frame(
         rgba,
     })
 }
-fn voxel_image(install: &Install, image: &str) -> Result<DecodedImage> {
-    crate::map_sprites::voxel_frames(install, image, false, false)
+fn voxel_image(install: &Install, image: &str, use_buffer: bool) -> Result<DecodedImage> {
+    crate::map_sprites::voxel_frames(install, image, false, false, 0, use_buffer)
         .map(|frames| (*frames[0]).clone())
 }

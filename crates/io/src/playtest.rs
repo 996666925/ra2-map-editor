@@ -109,6 +109,7 @@ impl PlayOptions {
     }
 
     pub fn spawn_ini(&self, map: &MapFile) -> Result<String> {
+        let ares = ra2_map_assets::assets::ARES_SETTING.ini_value();
         if self.mission {
             ensure!(
                 self.mission_difficulty <= 2
@@ -126,7 +127,7 @@ impl PlayOptions {
                 "任务 Player 未在 [Houses] 中定义：{player}"
             );
             return Ok(format!(
-                "[Settings]\nScenario=spawnmap.ini\nIsSinglePlayer=Yes\nCampaignID=-1\nSide=0\nDifficultyModeHuman={}\nDifficultyModeComputer={}\nGameSpeed={}\nBuildOffAlly=No\n",
+                "[Settings]\nScenario=spawnmap.ini\nAres={ares}\nIsSinglePlayer=Yes\nCampaignID=-1\nSide=0\nDifficultyModeHuman={}\nDifficultyModeComputer={}\nGameSpeed={}\nBuildOffAlly=No\n",
                 self.mission_difficulty,
                 2 - self.mission_difficulty,
                 self.speed
@@ -158,7 +159,7 @@ impl PlayOptions {
         );
         let yes = |v| if v { "Yes" } else { "No" };
         let mut out = format!(
-            "[Settings]\nScenario=spawnmap.ini\nIsSinglePlayer=No\nGameMode=1\nSpecialHouseIsAlly=No\nPlayerCount=1\nAIPlayers={}\nSide={}\nColor={}\nGameSpeed={}\nSeed={}\nCredits={}\nUnitCount={}\nTechLevel={}\nBases={}\nSuperweapons={}\nCrates={}\nShortGame={}\n",
+            "[Settings]\nScenario=spawnmap.ini\nAres={ares}\nIsSinglePlayer=No\nGameMode=1\nSpecialHouseIsAlly=No\nPlayerCount=1\nAIPlayers={}\nSide={}\nColor={}\nGameSpeed={}\nSeed={}\nCredits={}\nUnitCount={}\nTechLevel={}\nBases={}\nSuperweapons={}\nCrates={}\nShortGame={}\n",
             self.ai,
             self.side,
             self.color,
@@ -218,6 +219,14 @@ mod tests {
             let map = vera20k_core::map::map_file::load_from_bytes(bytes).unwrap();
             let text = PlayOptions::default().spawn_ini(&map).unwrap();
             let ini = vera20k_core::rules::ini_parser::IniFile::from_str(&text);
+            assert_eq!(
+                ini.section_or_empty("Settings").read_string("Ares", "", 16),
+                if vera20k_core::rules::ARES_BUILD {
+                    "On"
+                } else {
+                    "Auto"
+                },
+            );
             assert_eq!(
                 ini.section_or_empty("Settings").read_bool("Bases", true),
                 !setting.contains("Bases=no")
@@ -394,6 +403,14 @@ mod tests {
         let ini = vera20k_core::rules::ini_parser::IniFile::from_str(&o.spawn_ini(&map).unwrap());
         let s = ini.section_or_empty("Settings");
         assert!(s.read_bool("IsSinglePlayer", false));
+        assert_eq!(
+            s.read_string("Ares", "", 16),
+            if vera20k_core::rules::ARES_BUILD {
+                "On"
+            } else {
+                "Auto"
+            }
+        );
         assert_eq!(s.read_int("DifficultyModeComputer", -1), 0);
         assert!(!s.is_present("AIPlayers"));
         let fast = PlayOptions {

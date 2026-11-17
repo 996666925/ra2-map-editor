@@ -36,12 +36,14 @@ type PreviewGeometry = (
     Vec<(Cell, u8)>,
     Vec<Record>,
     Vec<(Cell, crate::document::TerrainValue)>,
+    Vec<(Cell, u8)>,
 );
 struct Preview {
     key: String,
     cells: Vec<(Cell, u8)>,
     records: Vec<Record>,
     ground: Vec<(Cell, crate::document::TerrainValue)>,
+    overlays: Vec<(Cell, u8)>,
     error: Option<String>,
 }
 impl RegionEdit {
@@ -480,7 +482,12 @@ impl Editor {
                     ));
                 }
             }
-            return Ok((cells, records, ground.into_iter().collect()));
+            let overlays = plan
+                .cells
+                .iter()
+                .filter_map(|cell| cell.overlay.map(|(id, _)| (cell.at, id)))
+                .collect();
+            return Ok((cells, records, ground.into_iter().collect(), overlays));
         }
         let (record, ignored) = if self.tool == Tool::Place {
             let value = if self.section == "Terrain" {
@@ -535,7 +542,7 @@ impl Editor {
             .into_iter()
             .map(|at| (at, terrain_tools::value(doc, scene, at).level))
             .collect();
-        Ok((cells, vec![record], Vec::new()))
+        Ok((cells, vec![record], Vec::new(), Vec::new()))
     }
     pub fn region_preview(
         &mut self,
@@ -597,11 +604,12 @@ impl Editor {
         );
         if self.region.preview.as_ref().is_none_or(|p| p.key != key) {
             self.region.preview = Some(match self.make_preview(scene, at) {
-                Ok((cells, records, ground)) => Preview {
+                Ok((cells, records, ground, overlays)) => Preview {
                     key,
                     cells,
                     records,
                     ground,
+                    overlays,
                     error: None,
                 },
                 Err(e) => {
@@ -666,6 +674,7 @@ impl Editor {
                         cells,
                         records: Vec::new(),
                         ground: Vec::new(),
+                        overlays: Vec::new(),
                         error: Some(e.to_string()),
                     }
                 }
@@ -759,8 +768,23 @@ impl Editor {
         }
         for r in &preview.records {
             let Some(at) = r.cell() else { continue };
-            let Some(appearance) = scene.sprites.objects.get(&(r.section.clone(), r.type_id()))
-            else {
+            let ground = preview
+                .ground
+                .iter()
+                .find(|(c, _)| *c == at)
+                .map_or_else(|| terrain_tools::value(doc, scene, at), |(_, value)| *value);
+            let overlay = preview
+                .overlays
+                .iter()
+                .find(|(cell, _)| *cell == at)
+                .map_or_else(|| doc.overlay(at).0, |(_, id)| *id);
+            let Some(appearance) = scene.object_sprite_for_terrain(
+                &r.section,
+                &r.type_id(),
+                ground,
+                overlay,
+                ra2_map_scene::visual::object_on_bridge(r),
+            ) else {
                 continue;
             };
             let facing = r
@@ -769,11 +793,6 @@ impl Editor {
                 .and_then(|f| f.parse().ok())
                 .unwrap_or(0);
             let image = appearance.image_at(facing, at);
-            let ground = preview
-                .ground
-                .iter()
-                .find(|(c, _)| *c == at)
-                .map_or_else(|| terrain_tools::value(doc, scene, at), |(_, value)| *value);
             let world_z = terrain_tools::object_world_z(
                 scene,
                 at,

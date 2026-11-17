@@ -13,6 +13,25 @@ use vera20k_core::assets::{
 };
 use vera20k_core::map::theater::{self, TheaterData};
 
+/// Resource loading and isolated playtests share one launch choice. The Ares
+/// build must opt in to mounting installed ares.mix under engine 0.3.5.
+pub const ARES_SETTING: vera20k_core::util::ares_launch::AresSetting =
+    if vera20k_core::rules::ARES_BUILD {
+        vera20k_core::util::ares_launch::AresSetting::On
+    } else {
+        vera20k_core::util::ares_launch::AresSetting::Auto
+    };
+
+fn open_manager(directory: &Path) -> Result<AssetManager> {
+    AssetManager::with_mod_and_ares(
+        directory,
+        None,
+        MediaArchiveMode::STOCK_DIGITAL,
+        ARES_SETTING,
+    )
+    .context("无法打开 YR 资源归档")
+}
+
 /// Read through the engine's selected INI dialect and include traversal.
 pub fn read_ini(
     manager: &AssetManager,
@@ -141,8 +160,7 @@ impl Install {
             "游戏目录不存在：{}",
             directory.display()
         );
-        let mut manager = AssetManager::new(directory, MediaArchiveMode::STOCK_DIGITAL)
-            .context("无法打开 YR 资源归档")?;
+        let mut manager = open_manager(directory)?;
         let theater = theater::load_theater(&mut manager, "TEMPERATE").context(
             "无法加载 TEMPERATE；请检查 temperatmd.ini、isotem.pal、unittem.pal 和对应 MIX",
         )?;
@@ -193,7 +211,7 @@ impl Install {
         if self.theater_name.eq_ignore_ascii_case(name) {
             return Ok(());
         }
-        let mut manager = AssetManager::new(&self.directory, MediaArchiveMode::STOCK_DIGITAL)?;
+        let mut manager = open_manager(&self.directory)?;
         let theater = theater::load_theater(&mut manager, name)
             .with_context(|| format!("无法加载 {name} 环境资源"))?;
         self.catalog = crate::catalog::Catalog::load(&manager, &theater);

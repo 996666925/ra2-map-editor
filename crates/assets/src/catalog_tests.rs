@@ -2,6 +2,107 @@ use super::*;
 use crate::test_support::Fixture;
 
 #[test]
+fn water_vehicle_turret_uses_selected_type_offset_with_aliased_geometry() {
+    let fixture = Fixture::with_water_vehicle();
+    for name in ["watermodel.vxl", "watermodeltur.vxl"] {
+        std::fs::copy(fixture.0.join("water.vxl"), fixture.0.join(name)).unwrap();
+    }
+    let path = fixture.0.join("rulesmd.ini");
+    let rules = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("Image=SAM", "Image=SAM\nWaterImage=WATER")
+        .replace(
+            "[WATER]\nStrength=100",
+            "[WATER]\nStrength=100\nImage=WATERMODEL\nTurret=yes",
+        );
+    std::fs::write(path, rules).unwrap();
+    let path = fixture.0.join("artmd.ini");
+    let art = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        format!("{art}\n[WATERMODEL]\nVoxel=yes\nTurretOffset=999\n"),
+    )
+    .unwrap();
+    let mut install = fixture.install();
+    install.catalog = Catalog::load(&install.manager, &install.theater);
+    let flat = crate::sprites::SpritePalette::load(&install, &install.catalog);
+    std::fs::write(&path, format!("{art}\n[WATER]\nVoxel=yes\nTurretOffset=256\n[WATERMODEL]\nVoxel=yes\nTurretOffset=999\n")).unwrap();
+    // Keep the old installation catalog to detect accidental reads from it.
+    let refreshed = fixture.install();
+    let changed = Catalog::load(&refreshed.manager, &refreshed.theater);
+    let shifted = crate::sprites::SpritePalette::load(&install, &changed);
+    let old = flat.water_objects["ROBO"].image(0);
+    let new = shifted.water_objects["ROBO"].image(0);
+    assert_eq!(new.info.name, "WATERMODEL.vxl");
+    assert!(
+        new.info.width > old.info.width || new.info.height > old.info.height,
+        "an offset turret must extend beyond the identical unshifted hull"
+    );
+}
+
+#[test]
+fn startup_archives_and_ini_dialect_follow_the_editor_build() {
+    use vera20k_core::util::ares_launch::AresSetting;
+    let fixture = Fixture::new();
+    // Valid one-entry old-format MIX; these stand in for startup archives.
+    let mut mix = Vec::new();
+    mix.extend(1u16.to_le_bytes());
+    mix.extend(1u32.to_le_bytes());
+    mix.extend(0i32.to_le_bytes());
+    mix.extend(0u32.to_le_bytes());
+    mix.extend(1u32.to_le_bytes());
+    mix.push(0);
+    for name in [
+        "ra2md.mix",
+        "ra2.mix",
+        "cachemd.mix",
+        "cache.mix",
+        "localmd.mix",
+        "local.mix",
+        "conqmd.mix",
+        "conquer.mix",
+        "cameomd.mix",
+        "cameo.mix",
+        "mapsmd03.mix",
+        "multimd.mix",
+        "movmd03.mix",
+        "ares.mix",
+    ] {
+        std::fs::write(fixture.0.join(name), &mix).unwrap();
+    }
+    std::fs::write(fixture.0.join("rulesmd.ini"), b"[General]\nBuildSpeed=.7\n").unwrap();
+    std::fs::write(fixture.0.join("artmd.ini"), b"[GI]\nFoundation=1x1\n").unwrap();
+    std::fs::write(
+        fixture.0.join("langrule.ini"),
+        b"[General]\nBuildSpeed=.1\n",
+    )
+    .unwrap();
+    std::fs::write(fixture.0.join("custom.ini"), b"[Base]\nX=first\nX=last\n").unwrap();
+    let install = crate::assets::Install::open(&fixture.0).unwrap();
+    let ares = vera20k_core::rules::ARES_BUILD;
+    assert_eq!(
+        install.manager.ares_setting(),
+        if ares {
+            AresSetting::On
+        } else {
+            AresSetting::Auto
+        }
+    );
+    assert_eq!(install.manager.ares_mix_mounted(), ares);
+    let ini = crate::assets::read_ini(&install.manager, "custom.ini").unwrap();
+    assert_eq!(
+        ini.section_or_empty("Base").read_string("X", "", 32),
+        if ares { "last" } else { "first" }
+    );
+    assert!(
+        vera20k_core::rules::retail_sources::RetailRulesSources::select(&install.manager)
+            .unwrap()
+            .langrule
+            .is_none()
+    );
+}
+
+#[test]
 fn shp_vehicle_turret_ring_uses_the_engine_start_and_each_authored_heading() {
     for has_turret in [false, true] {
         let fixture = Fixture::with_shp_turret();

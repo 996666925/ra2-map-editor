@@ -99,6 +99,15 @@ pub struct InfantryAppearance {
     pub sequences: vera20k_core::rules::animation_sequence::SequenceSet,
 }
 
+/// Resolved water geometry and the actual UnitType's native drawer style.
+#[derive(Clone)]
+pub struct WaterAppearance {
+    pub image: String,
+    pub turret: bool,
+    pub turret_offset: i32,
+    pub use_buffer: bool,
+}
+
 /// Registries and appearance data from the same cold/reset Rules owner as game
 /// loading, including LANG, map passes and implicit identities.
 pub struct NativeRegistries {
@@ -106,6 +115,8 @@ pub struct NativeRegistries {
     pub infantry_appearances: BTreeMap<String, InfantryAppearance>,
     pub shp_vehicle_turrets:
         BTreeMap<String, vera20k_core::rules::animation_sequence::ShpVehicleTurret>,
+    /// Ares WaterImage identities resolved by the production Rules owner.
+    pub water_images: BTreeMap<String, WaterAppearance>,
     pub vehicle_templates: BTreeMap<String, BTreeMap<String, String>>,
     pub countries: BTreeMap<String, i32>,
     /// Exact production alias-before-ID lookup, folded only for matching.
@@ -200,6 +211,31 @@ pub fn scenario_registries(
     ));
     Ok(NativeRegistries {
         radar,
+        water_images: rules
+            .all_objects()
+            .filter(|object| {
+                rules.ares()
+                    && object.category == vera20k_core::rules::object_type::ObjectCategory::Vehicle
+            })
+            .filter_map(|object| {
+                let selected = object.water_image()?;
+                Some((
+                    object.id.to_ascii_uppercase(),
+                    WaterAppearance {
+                        image: vera20k_core::rules::voxel_frame_catalog::voxel_image_id(
+                            selected,
+                            Some(&rules),
+                        ),
+                        turret: rules.object(selected)?.has_turret,
+                        turret_offset: rules.art().get(selected).map_or(0, |art| art.turret_offset),
+                        use_buffer: rules
+                            .art()
+                            .exact_entry(&object.id)
+                            .is_some_and(|art| art.use_buffer),
+                    },
+                ))
+            })
+            .collect(),
         shp_vehicle_turrets: rules
             .all_objects()
             .filter_map(|object| {

@@ -2,7 +2,7 @@
 
 ## Ares 任务
 
-使用启用 `ares` feature 的编辑器和 VERA20k 客户端。默认编辑器的 Ares SDK 创作入口仍关闭；游戏目录安装 `ares.mix` 时，默认构建也会按 Ares 语义读取资源和地图。支持的事件、动作、绑定和参数可从能力清单查询，`runtime: "ares"` 表示扩展能力，`enabled` 表示本次编辑器构建已启用它。事件 66 缺少运行时通知，仍不提供 SDK 方法。
+使用启用 `ares` feature 的编辑器和 VERA20k 客户端。该编辑器构建显式使用引擎 0.3.5 的 Ares On，挂载安装目录中的 `ares.mix`，试玩也写入 `Ares=On`。默认编辑器使用 Auto，忽略仅安装在目录中的 `ares.mix`，Ares SDK 创作入口仍关闭。支持的事件、动作、绑定和参数可从能力清单查询，`runtime: "ares"` 表示扩展能力，`enabled` 表示本次编辑器构建已启用它。事件 66 缺少运行时通知，仍不提供 SDK 方法。
 
 ```ts
 import { ares } from './sdk';

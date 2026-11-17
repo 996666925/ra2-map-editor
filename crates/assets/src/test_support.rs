@@ -144,6 +144,26 @@ impl Fixture {
         fixture
     }
 
+    /// A voxel vehicle whose water model uses different palette indices.
+    pub fn with_water_vehicle() -> Self {
+        let fixture = Self::with_voxel_turret();
+        let mut water = std::fs::read(fixture.0.join("sam.vxl")).unwrap();
+        water[848] = 3;
+        water[853] = 3;
+        std::fs::write(fixture.0.join("water.vxl"), water).unwrap();
+        std::fs::write(fixture.0.join("rulesmd.ini"), b"[VehicleTypes]\n0=ROBO\n1=WATER\n[ROBO]\nImage=SAM\nStrength=100\n[WATER]\nStrength=100\n[OverlayTypes]\n0=DECK\n[DECK]\nLand=Road\nNoUseTileLandType=yes\n").unwrap();
+        std::fs::write(fixture.0.join("artmd.ini"), b"[ROBO]\nUseBuffer=yes\n[SAM]\nVoxel=yes\nUseBuffer=no\n[WATER]\nVoxel=yes\nImage=ABSENT\nUseBuffer=no\n").unwrap();
+        let path = fixture.0.join("temperatmd.ini");
+        let theater = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("TilesInSet=1", "TilesInSet=2");
+        std::fs::write(path, theater).unwrap();
+        let mut tile = std::fs::read(fixture.0.join("clear01.tem")).unwrap();
+        tile[20 + 41] = 9;
+        std::fs::write(fixture.0.join("clear02.tem"), tile).unwrap();
+        fixture
+    }
+
     /// Small TMP images with stock CliffSet topology for authoring regressions.
     pub fn with_cliffs() -> Self {
         let fixture = Self::new();

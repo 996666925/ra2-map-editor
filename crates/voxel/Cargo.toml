@@ -11,6 +11,16 @@ publish.workspace = true
 test = false
 doctest = false
 
+# The included renderer sources name the engine's private test groups. Recognize
+# those cfgs without enabling its client-only tests in this adapter.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    "cfg(tests_render_a_r)",
+    "cfg(tests_render_s_z)",
+    "cfg(tests_app_presentation_instances)",
+    "cfg(tests_app_presentation_render)",
+] }
+
 [dependencies]
 vera20k-core.workspace = true
 glam.workspace = true

@@ -165,14 +165,12 @@ fn load_stage_with_options(
     };
     let roots =
         vera20k_core::map::resolved_terrain::scheduler_anim_roots(&rules, &overlay_registry, &[]);
-    rules
-        .bind_scheduler_anim_assets(
-            &roots,
-            &install.manager,
-            install.theater.extension,
-            &map.header.theater,
-        )
-        .map_err(anyhow::Error::msg)?;
+    rules.bind_scheduler_anim_assets(
+        &roots,
+        &install.manager,
+        install.theater.extension,
+        &map.header.theater,
+    );
     let roots = vera20k_core::rules::effect_asset_catalog::tolerant_anim_class_roots(&rules);
     rules.bind_anim_class_assets(
         &roots,

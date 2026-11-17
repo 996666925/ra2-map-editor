@@ -4,8 +4,8 @@
 The editor pins the engine through its Git tree entry, rather than a moving branch.
 Use `git submodule status` for the revision selected by your editor checkout.
 
-The current integration targets VERA20k 0.3.4 at
-`1dec45d6b3d78bcf6b11560b3551eabf267a8bd3` (updated 2026-11-15).
+The current integration targets VERA20k 0.3.5 at
+`5a880675d6bc530154705a2b2f6783a061333092` (updated 2026-11-16).
 The engine mounts `ECACHE*.MIX` and `ELOCAL*.MIX` through the shared asset
 manager. Editor building previews use its RULES slot-9 configuration and
 32-facing frame table for healthy SHP turrets; ART `TurretAnim` is ignored.
@@ -31,14 +31,32 @@ MaxPlayers declaration and all declared waypoints, as in the engine map format
 follow the map header cell grid, including extended maps with overlays below 512.
 
 The editor selects INI syntax, include expansion and supplemental CSF tables
-from the resource manager's `ares_form()`, including a default build that mounts
-`ares.mix`. A document retains that choice for duplicate keys, physical records,
+from the resource manager's `ares_form()`. Engine 0.3.5 opens an installation in
+Auto mode without a selected mod: an installed `ares.mix` is ignored. The
+editor's `ares` build explicitly selects On, mounting that archive and selecting
+Ares syntax and supplemental CSF tables. Theater switches keep this choice;
+both campaign and skirmish spawn files write the same Auto/On setting.
+Neither build selects an engine mod, so optional `LANGRULE.INI` is ignored.
+The resource profile selects a complete resource directory, not a client `Mods`
+overlay or the client's saved Ares option.
+A document retains its selected syntax for duplicate keys, physical records,
 structural edits, scene refresh, save workers and recovery snapshots. Inherited and iterator-key maps remain
 read-only until flattened. The authoring schema and Ares SDK still follow the
 editor's `ares` build feature. The engine also detects some Ares behavior
 from game data in either build, so the default
 editor does not imply that Ares keys in a mod are ignored at runtime. Full Ares
 authoring still requires the editor and client to be built with `ares`.
+Static voxel vehicles use the production Rules owner's Ares `WaterImage`
+reference on water off bridges; the actual type still supplies `UseBuffer`.
+The scene, picking, export, selection and paste ghosts share this choice.
+Water turrets retain the selected type's ART offset independently of its
+voxel filename. Overlay land overrides reach the resolved scene, and paste
+ghosts select art from the terrain and overlays they will write.
+Indexed guns and dynamic unloading, disguise and deployment remain outside
+this static selection path. Scheduler animation binding now follows the
+engine's nonfatal API in both mission audit loaders.
+The renderer adapter declares the engine's private test-group cfg names for
+strict linting without enabling client-only tests.
 
 Both `vera20k-core` and `crates/voxel` use this checkout. The latter compiles
 the engine's shared CPU/GPU voxel renderer sources because those modules currently

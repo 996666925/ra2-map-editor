@@ -46,6 +46,82 @@ pub struct MapScene {
     buckets: HashMap<(i32, i32), Vec<usize>>,
 }
 impl MapScene {
+    /// Static Unit water art follows Ares' cell-land test and OnBridge gate.
+    /// All consumers (canvas, picking, selection and ghosts) share this choice.
+    pub fn object_sprite(
+        &self,
+        section: &str,
+        id: &str,
+        at: [u16; 2],
+        on_bridge: bool,
+    ) -> Option<&ra2_map_assets::map_sprites::ObjectSprite> {
+        use vera20k_core::rules::terrain_rules::LandType;
+        let water = self
+            .resolved
+            .as_ref()
+            .and_then(|terrain| terrain.cell(at[0], at[1]))
+            .is_some_and(|cell| cell.land_type == LandType::Water.as_index());
+        self.object_sprite_on_water(section, id, water, on_bridge)
+    }
+
+    /// Placement and paste operate on provisional terrain and overlays. Use
+    /// cached TMP geometry and the same processed overlay registry as the map.
+    pub fn object_sprite_for_terrain(
+        &self,
+        section: &str,
+        id: &str,
+        terrain: ra2_map_document::document::TerrainValue,
+        overlay: u8,
+        on_bridge: bool,
+    ) -> Option<&ra2_map_assets::map_sprites::ObjectSprite> {
+        use vera20k_core::rules::terrain_rules::{LandType, tmp_terrain_to_land_type};
+        let subtile = self
+            .palette
+            .raw_ids
+            .get(&terrain.tile)
+            .and_then(|tile| self.palette.templates.get(&(*tile, 0)))
+            .and_then(|template| template.cells.get(usize::from(terrain.sub)))
+            .and_then(|subtile| *subtile);
+        let mut land = tmp_terrain_to_land_type(subtile.map_or(0, |subtile| subtile.terrain));
+        if let Some(flags) = self.catalog.radar.overlays.flags(overlay) {
+            let facts = vera20k_core::map::rmg::phases::zones::OverlayZoneFacts::from_flags(flags);
+            // Mirror the retained-overlay projection at the API boundary:
+            // resolved_terrain uses retained_overlay_land before tile land.
+            if facts.early_land
+                || (flags.tiberium && subtile.is_none_or(|subtile| subtile.slope < 5))
+            {
+                land = flags.land;
+            }
+        }
+        self.object_sprite_on_water(section, id, land == LandType::Water, on_bridge)
+    }
+
+    fn object_sprite_on_water(
+        &self,
+        section: &str,
+        id: &str,
+        water: bool,
+        on_bridge: bool,
+    ) -> Option<&ra2_map_assets::map_sprites::ObjectSprite> {
+        if section == "Units"
+            && !on_bridge
+            && water
+            && self
+                .sprites
+                .get(section, id)
+                .is_some_and(|preview| preview.voxel)
+            && self
+                .catalog
+                .water_images
+                .contains_key(&id.to_ascii_uppercase())
+        {
+            return self.sprites.water_objects.get(&id.to_ascii_uppercase());
+        }
+        self.sprites
+            .objects
+            .get(&(section.to_owned(), id.to_owned()))
+    }
+
     /// Legacy terrain GPU buffers can only be retained with unchanged geometry.
     pub fn resolved_terrain_is_shared(&self, other: &Self) -> bool {
         self.resolved
@@ -308,6 +384,7 @@ pub fn load_scene_bytes_controlled(
             catalog.radar = registries.radar;
             catalog.infantry_appearances = registries.infantry_appearances;
             catalog.shp_vehicle_turrets = registries.shp_vehicle_turrets;
+            catalog.water_images = registries.water_images;
             catalog.mission_country_indices = registries.countries;
             catalog.mission_country_names = registries.country_names;
             catalog.mission_type_orders = registries.type_orders;
@@ -317,6 +394,7 @@ pub fn load_scene_bytes_controlled(
             let catalog = Arc::make_mut(&mut catalog);
             catalog.infantry_appearances.clear();
             catalog.shp_vehicle_turrets.clear();
+            catalog.water_images.clear();
             catalog.mission_country_indices.clear();
             catalog.mission_country_names.clear();
             catalog.mission_type_orders.clear();
@@ -399,7 +477,7 @@ impl MapScene {
             Some(&install.theater),
             Some(&install.manager),
             None,
-            None,
+            Some(&self.catalog.radar.overlays),
             None,
             false,
             0,
@@ -530,6 +608,10 @@ impl MapScene {
         self.images = images;
         self.bounds = bounds;
         self.index_pixels();
+        // Terrain-dependent appearances must see this grid during the initial
+        // visual build and after a terrain edit, before the scene is published.
+        let resolved = Arc::new(resolved);
+        self.resolved = Some(resolved.clone());
         self.visual = Arc::new(crate::visual::VisualScene::build_cached(
             self,
             install,
@@ -538,7 +620,6 @@ impl MapScene {
             previous.map(|old| crate::visual::SceneReuse::Terrain(&old.visual)),
             cancelled,
         )?);
-        self.resolved = Some(Arc::new(resolved));
         Ok(())
     }
 }

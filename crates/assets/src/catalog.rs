@@ -50,6 +50,7 @@ pub struct Catalog {
     pub infantry_appearances: BTreeMap<String, crate::mission_resources::InfantryAppearance>,
     pub shp_vehicle_turrets:
         BTreeMap<String, vera20k_core::rules::animation_sequence::ShpVehicleTurret>,
+    pub water_images: BTreeMap<String, crate::mission_resources::WaterAppearance>,
     pub rules: IniFile,
     /// Active installation language table; shared by map-local catalog clones.
     strings: Option<Arc<CsfFile>>,
@@ -78,6 +79,7 @@ impl Default for Catalog {
             radar: Default::default(),
             infantry_appearances: BTreeMap::new(),
             shp_vehicle_turrets: BTreeMap::new(),
+            water_images: BTreeMap::new(),
             rules: IniFile::empty(),
             strings: None,
             object_names: BTreeMap::new(),
@@ -341,6 +343,7 @@ impl Catalog {
         {
             catalog.infantry_appearances = registries.infantry_appearances;
             catalog.shp_vehicle_turrets = registries.shp_vehicle_turrets;
+            catalog.water_images = registries.water_images;
             catalog.mission_country_indices = registries.countries;
             catalog.mission_country_names = registries.country_names;
             catalog.mission_type_orders = registries.type_orders;

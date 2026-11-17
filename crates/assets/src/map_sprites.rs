@@ -145,6 +145,11 @@ pub(crate) fn load(
                         .section_or_empty(id)
                         .read_bool("Turret", false),
                     true,
+                    catalog.art.get(id).map_or(0, |art| art.turret_offset),
+                    catalog
+                        .art
+                        .exact_entry(id)
+                        .is_some_and(|art| art.use_buffer),
                 ) {
                     Ok(frames) => frames,
                     Err(_) => continue,
@@ -399,6 +404,51 @@ pub(crate) fn load(
         }
     }
     result
+}
+
+pub(crate) fn load_water(
+    install: &Install,
+    catalog: &Catalog,
+    library: &SpritePalette,
+) -> HashMap<String, ObjectSprite> {
+    catalog
+        .water_images
+        .iter()
+        .filter_map(|(id, selected)| {
+            // UnitClass dispatches SHP/VXL before Ares' water hook. A WaterImage
+            // is a registered UnitType, resolved by scenario_registries above.
+            let original_id = catalog
+                .object_types
+                .get("Units")?
+                .iter()
+                .find(|name| name.eq_ignore_ascii_case(id))?;
+            let original = library.get("Units", original_id)?;
+            if !original.voxel {
+                return None;
+            }
+            // Techno706F02 reads UseBuffer from the actual type; the water model
+            // supplies geometry and its ordinary base gun pair (Ares73B4A0).
+            let facings = voxel_frames(
+                install,
+                &selected.image,
+                selected.turret,
+                true,
+                selected.turret_offset,
+                selected.use_buffer,
+            )
+            .ok()?;
+            Some((
+                id.clone(),
+                ObjectSprite {
+                    facings,
+                    anchor: [0.; 2],
+                    shadow: None,
+                    shp_turret: None,
+                    voxel_turret: None,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Slot 9 is read from RULES, separately from ART's idle/active animations.
@@ -693,6 +743,8 @@ pub(crate) fn voxel_frames(
     image: &str,
     turret: bool,
     all_facings: bool,
+    turret_offset: i32,
+    use_buffer: bool,
 ) -> Result<Vec<Arc<DecodedImage>>> {
     let name = format!("{image}.vxl");
     let source = install
@@ -730,7 +782,7 @@ pub(crate) fn voxel_frames(
     let params: Vec<_> = (0..if all_facings { 32 } else { 1 })
         .map(|step| VxlRenderParams {
             facing: step * 8,
-            use_buffer: install.catalog.art.use_buffer(image),
+            use_buffer,
             ..Default::default()
         })
         .collect();
@@ -739,11 +791,6 @@ pub(crate) fn voxel_frames(
         .into_iter()
         .map(|body| vec![body])
         .collect();
-    let turret_offset = install
-        .catalog
-        .art
-        .get(image)
-        .map_or(0, |a| a.turret_offset);
     for (model, hva) in &parts {
         let sprites = renderer.render_batch(model, hva.as_ref(), &params, true);
         for ((mut part, params), layers) in sprites.into_iter().zip(&params).zip(&mut layers) {

@@ -803,7 +803,15 @@ cargo run --locked --offline -p ra2-map-io --example mission_sdk_crate_lottery_a
 
 ## 引擎版本管理
 
-当前固定 VERA20k 0.3.3；提交与接入说明见 [vendor/README](../vendor/README.md)。编辑器通过引擎的 `ARES_BUILD` 标志选择解析方言、资源 schema 和创作能力，与 `ares` 构建选项保持一致。引擎另有按游戏数据启用的 Ares 运行时开关，两者作用不同。
+当前固定 VERA20k 0.3.5；提交与接入说明见 [vendor/README](../vendor/README.md)。资源 INI、include 和扩展 CSF 表跟随 `AssetManager::ares_form()`；文档及其后台操作保留这一解析选择。资源 schema 和 Ares SDK 创作入口继续由 `ares` 构建选项决定。
+
+引擎 0.3.5 支持 Auto / On / Off 的 Ares 启动选择。编辑器通过 `AssetManager::with_mod_and_ares` 打开完整资源目录：默认构建使用 Auto，不因安装目录中有 `ares.mix` 而切换 INI 方言；`ares` 构建显式使用 On，挂载归档、读取 Ares 语法和扩展文本表。切换环境沿用同一选择，普通和任务试玩的 `[Settings] Ares=` 也与之相同。两种构建都未选择引擎 Mod，因此均不读取可选 `LANGRULE.INI`。资源 profile 只指定完整资源目录、schema 与试玩程序；不会选择客户端的 `Mods`、读取客户端的 `VERA.INI` 或注入 Mod 的全地图追加 INI。
+
+静态车辆预览支持引擎已解析的 Ares `WaterImage`：水格且非桥上时选择替代体素，SHP 车辆保持原显示分派。体素几何来自替代类型，`UseBuffer` 来自实际类型；画布、像素拾取、导出、选择边界与粘贴提示共享选择。普通地面、桥上与无效引用保留原模型。此路径沿用编辑器已有的静态朝向和普通炮塔范围，不模拟卸矿、伪装、部署或索引炮塔的动态选择。
+
+水面模型的 `TurretOffset` 取自生产 Rules owner 的替代类型 ART 段，文件名仍使用该类型的规则 `Image`。场景重建使用同一份覆盖物注册表，因此低桥等 `Land=Road` 覆盖物会改变模型选择。粘贴提示按即将写入的地形和覆盖物选择模型；水面复制到陆地、陆地复制到水面及同时粘贴桥面都有与提交结果对照的回归。
+
+地图可在原文规则段设置 `SuperWeaponPerBuilding=yes` 与 `BuildLimit`，由共享引擎解析并在试玩中执行；它们是建筑类型规则，不是 `[Basic]` 或多人对话框字段，编辑器不把客户端的数量滑块写进地图。详见引擎[规则说明](../vendor/vera20k/docs/superweapon-limit.md)。
 
 默认 YR 和可选 Ares 两种构建都由 CI 验证。Ares 专项检查使用：
 

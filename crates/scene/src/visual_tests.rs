@@ -1,5 +1,126 @@
 use super::*;
 
+#[test]
+fn water_image_follows_map_rules_cell_land_and_bridge_for_pixels_and_picking() {
+    use ra2_map_document::document::{Target, Value};
+    let fixture = ra2_map_assets::test_support::Fixture::with_water_vehicle();
+    let bytes = ra2_map_document::new_map::NewMapOptions {
+        width: 20,
+        height: 20,
+        ..Default::default()
+    }
+    .bytes()
+    .unwrap();
+    let (source, _) =
+        ra2_map_document::source::SourceMap::parse("water.map".into(), "test".into(), bytes)
+            .unwrap();
+    let mut doc = MapDocument::new(source.edit_base.unwrap());
+    let at = [20, 20];
+    doc.add_record("Units", at, "Neutral", "ROBO").unwrap();
+    let mut value = doc.terrain(at).unwrap();
+    value.tile = 1;
+    doc.set(Target::Terrain(at), Some(Value::Terrain(value)))
+        .unwrap();
+    doc.set_ini("ROBO", "WaterImage", Some(b"WATER".to_vec()))
+        .unwrap();
+    doc.commit("water vehicle");
+    let mut install = fixture.install();
+    install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
+    let scene = crate::map::load_scene_bytes(
+        &mut install,
+        "water.map",
+        "test".into(),
+        doc.snapshot().bytes().unwrap(),
+        std::time::Instant::now(),
+    )
+    .unwrap();
+    let id = MapDocument::new(scene.source.edit_base.as_ref().unwrap().clone())
+        .records()
+        .into_iter()
+        .find(|(_, record)| record.type_id() == "ROBO")
+        .unwrap()
+        .0;
+    let water = scene.object_sprite("Units", "ROBO", at, false).unwrap();
+    assert_eq!(water.image(0).info.name, "WATER.vxl");
+    assert!(
+        scene.catalog.water_images["ROBO"].use_buffer,
+        "the actual type owns the drawer style, independently of Image and WaterImage"
+    );
+    assert_eq!(
+        scene
+            .object_sprite("Units", "ROBO", at, true)
+            .unwrap()
+            .image(0)
+            .info
+            .name,
+        "SAM.vxl"
+    );
+    assert_eq!(
+        scene
+            .object_sprite("Units", "ROBO", [21, 20], false)
+            .unwrap()
+            .image(0)
+            .info
+            .name,
+        "SAM.vxl"
+    );
+    let image = water.image(0);
+    assert!(image.indices.contains(&3));
+    let draw = scene
+        .visual
+        .draws
+        .iter()
+        .find(|draw| draw.owner == Some(id))
+        .unwrap();
+    let surface = &scene.visual.surfaces[draw.surface];
+    assert_eq!(surface.rgba, image.rgba);
+    let pixel = image
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .position(|pixel| pixel[3] != 0)
+        .unwrap();
+    let point = egui::pos2(
+        draw.position[0] + (pixel % image.info.width as usize) as f32 + 0.5,
+        draw.position[1] + (pixel / image.info.width as usize) as f32 + 0.5,
+    );
+    let expected: [u8; 4] = image.rgba[pixel * 4..pixel * 4 + 4].try_into().unwrap();
+    assert_eq!(scene.visual.sample(point, unlit()), (expected, Some(id)));
+    assert_eq!(
+        scene
+            .visual
+            .raster(
+                egui::Rect::from_min_size(point - egui::vec2(0.5, 0.5), egui::vec2(1., 1.)),
+                [1, 1],
+                unlit()
+            )
+            .unwrap(),
+        expected
+    );
+    // A low deck's authoritative Land=Road must also suppress the water art.
+    let mut doc = MapDocument::new(scene.source.edit_base.as_ref().unwrap().clone());
+    doc.set(Target::Overlay(at), Some(Value::Overlay(0, 0)))
+        .unwrap();
+    doc.commit("deck");
+    let deck = crate::map::load_scene_bytes(
+        &mut install,
+        "deck.map",
+        "test".into(),
+        doc.snapshot().bytes().unwrap(),
+        std::time::Instant::now(),
+    )
+    .unwrap();
+    assert_eq!(
+        deck.object_sprite("Units", "ROBO", at, false)
+            .unwrap()
+            .image(0)
+            .info
+            .name,
+        "SAM.vxl"
+    );
+}
+
 fn turret_scene(
     fixture: &ra2_map_assets::test_support::Fixture,
     y_sort: i32,

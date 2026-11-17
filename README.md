@@ -108,7 +108,7 @@ Windows 可执行文件位于 `target/release/ra2-map-editor.exe`。也可通过
 
 ### 可选 Ares 构建
 
-使用 `cargo run --locked --features ares` 编译启用 Ares 的编辑器，试玩时搭配同样启用 Ares 的 VERA20k 客户端。默认构建使用 YR 地图解析和创作能力；引擎 0.3.4 会在游戏目录带有 `ares.mix` 时自动使用 Ares INI 语义和扩展文本表，其他 Ares 行为也会按游戏数据启用，完整 Ares 创作仍需该构建选项。[Ares 资源配置示例](examples/profiles/ares.example.json)使用 `vera20k-pinned-ares-v1`，与默认的 `vera20k-pinned-yr-v1` 分开。
+使用 `cargo run --locked --features ares` 编译启用 Ares 的编辑器，试玩时搭配同样启用 Ares 的 VERA20k 客户端。当前引擎为 0.3.5：默认编辑器按 Auto、未选择引擎 Mod 的方式打开资源目录，忽略仅安装在目录中的 `ares.mix`；`ares` 构建显式使用 On，挂载该归档并使用 Ares INI 语法和扩展文本表。试玩启动文件写入相同的 Auto / On 选择。两种构建的这一资源入口均不读取可选 `LANGRULE.INI`。Ares 专属规则仍可按游戏数据启用已有运行时行为，完整创作使用 `ares` 构建。[Ares 资源配置示例](examples/profiles/ares.example.json)使用 `vera20k-pinned-ares-v1`，与默认的 `vera20k-pinned-yr-v1` 分开。编辑器的资源 profile 指向一套完整资源目录，与引擎客户端的 `Mods` 目录选择不同。
 
 Ares 构建使用引擎的 INI 解析和 include 展开，开放已审计的 Ares 事件、火风暴/辅助电力/驾驶员/EVA/分组动作与脚本 67、68。任务脚本通过 `ares.event`、`ares.action`、`ares.order` 调用，详见[任务脚本说明](examples/missions/README.md#ares-任务)。普通显式键值地图可编辑；含 `[Child]:[Base]` 或 `+` 迭代键的地图可预览和原样导出，修改前需展开为显式键值，以保留引擎实际解析的含义。
 

@@ -2,6 +2,98 @@ use super::*;
 use crate::editing::tests::{editor, terrain_scene};
 
 #[test]
+fn water_vehicle_paste_ghost_uses_the_pasted_terrain_and_overlay() {
+    use ra2_map_assets::{catalog::Catalog, test_support::Fixture};
+    let fixture = Fixture::with_water_vehicle();
+    let mut install = fixture.install();
+    install.catalog = Catalog::load(&install.manager, &install.theater);
+    for (source_tile, target_tile, overlay, expected) in [
+        (1, 0, 255, "WATER.vxl"),
+        (0, 1, 255, "SAM.vxl"),
+        (1, 1, 0, "SAM.vxl"),
+    ] {
+        let bytes = crate::new_map::NewMapOptions {
+            width: 20,
+            height: 20,
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap();
+        let (source, _) =
+            ra2_map_document::source::SourceMap::parse("water.map".into(), "test".into(), bytes)
+                .unwrap();
+        let mut doc = MapDocument::new(source.edit_base.unwrap());
+        for (at, tile) in [([20, 20], source_tile), ([21, 20], target_tile)] {
+            let mut value = doc.terrain(at).unwrap();
+            value.tile = tile;
+            doc.set(Target::Terrain(at), Some(Value::Terrain(value)))
+                .unwrap();
+        }
+        doc.add_record("Units", [20, 20], "Neutral", "ROBO")
+            .unwrap();
+        doc.set_ini("ROBO", "WaterImage", Some(b"WATER".to_vec()))
+            .unwrap();
+        doc.set(Target::Overlay([20, 20]), Some(Value::Overlay(overlay, 0)))
+            .unwrap();
+        doc.commit("setup");
+        let scene = ra2_map_scene::map::load_scene_bytes(
+            &mut install,
+            "water.map",
+            "test".into(),
+            doc.snapshot().bytes().unwrap(),
+            Instant::now(),
+        )
+        .unwrap();
+        let (mut editor, ctx, root) = editor();
+        editor.attach(&scene);
+        editor.auto_lat = false;
+        editor.auto_walls = false;
+        editor.region.cells = BTreeSet::from([[20, 20]]);
+        editor.region_action(&scene, Action::Copy);
+        editor.region_action(&scene, Action::Paste);
+        let at = [21, 20];
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500., 400.));
+        let camera = crate::camera::MapCamera {
+            center: egui::pos2(60., 615.),
+            zoom: 1.,
+        };
+        let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+            editor.region_preview(ui.painter(), &scene, rect, &camera, Some(at));
+        });
+        assert!(editor.region.preview.as_ref().unwrap().error.is_none());
+        editor.pointer(&scene, Some(at), true, false, true, None);
+        let placed = ra2_map_scene::map::load_scene_bytes(
+            &mut install,
+            "placed.map",
+            "test".into(),
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            Instant::now(),
+        )
+        .unwrap();
+        let image = placed
+            .object_sprite("Units", "ROBO", at, false)
+            .unwrap()
+            .image(0);
+        assert_eq!(image.info.name, expected);
+        let ghost = if expected == "WATER.vxl" {
+            scene.sprites.water_objects["ROBO"].image(0)
+        } else {
+            scene.sprites.objects[&("Units".into(), "ROBO".into())].image(0)
+        };
+        assert!(
+            editor
+                .ui_state
+                .map_sprites
+                .contains_key(&(Arc::as_ptr(ghost) as usize)),
+            "ghost must match the committed model for source {source_tile}, target {target_tile}, overlay {overlay}"
+        );
+        assert_eq!(ghost.rgba, image.rgba);
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn startup_owner_property_dropdown_auto_commits_and_undo_restores_graph() {
     use egui_kittest::kittest::Queryable as _;
     use ra2_map_document::{mission, startup_owner};
