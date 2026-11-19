@@ -104,7 +104,13 @@ impl WorldGpu {
         pipelines: std::sync::Arc<[wgpu::RenderPipeline; 3]>,
     ) -> Result<Self> {
         let limit = device.limits().max_texture_dimension_2d.min(8192);
-        let width = 2048.min(limit);
+        let widest = scene
+            .surfaces
+            .iter()
+            .map(|surface| surface.size[0])
+            .max()
+            .unwrap_or(1);
+        let width = widest.max(2048).min(limit);
         let mut placements = Vec::new();
         let (mut x, mut y, mut row, mut page) = (0, 0, 0, 0usize);
         let mut heights = Vec::new();

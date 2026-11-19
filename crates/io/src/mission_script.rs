@@ -414,13 +414,26 @@ pub fn playtest_payload(
     directory: &Path,
     profile: &str,
 ) -> Result<BTreeMap<String, Vec<u8>>> {
+    scoped_playtest_payload(bytes, directory, None, profile)
+}
+
+pub(crate) fn scoped_playtest_payload(
+    bytes: &[u8],
+    directory: &Path,
+    resources: Option<&ra2_map_assets::map_resources::MapResources>,
+    profile: &str,
+) -> Result<BTreeMap<String, Vec<u8>>> {
     let payload = resource_payload(bytes, profile)?;
     let doc = saved_document(bytes)?;
     let texts = ra2_map_mission_script::native::declared_texts(&doc)?;
     if texts.is_empty() && ra2_map_mission_script::native::build_context(&doc)?.is_none() {
         return Ok(payload);
     }
-    let install = ra2_map_assets::assets::Install::open(directory)?;
+    let install = ra2_map_assets::assets::Install::open_with_resources(
+        directory,
+        resources.cloned(),
+        &|| false,
+    )?;
     prepare_playtest_payload(bytes, payload, &install)
 }
 

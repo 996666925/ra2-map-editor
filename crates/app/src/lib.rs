@@ -24,6 +24,7 @@ mod map_view;
 mod mission_overlay;
 mod mission_script_ui;
 mod mission_ui;
+mod resource_settings;
 mod screen_capture;
 mod ui_theme;
 

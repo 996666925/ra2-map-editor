@@ -44,6 +44,41 @@ target/release/ra2-map-editor.exe --profile my-mod.json --map mission.map
 
 配置中的相对路径以 **profile 文件所在目录** 为基准。`version` 和 `schema` 必须使用示例中的受支持值，`name` 不能为空。该配置声明编辑器使用的资源和 schema，不代表支持任意引擎扩展。
 
+### 地图附加素材
+
+在「资源与地图来源 → 地图附加素材」中添加额外目录或 MIX，用上下按钮调整优先级，然后点击「保存资源配置并刷新」。可用「导入资源配置…」复用已有 JSON 配置，导入的相对路径以配置文件所在目录为基准。配置保存在地图旁的 .assets.json 文件，打开、拖入、CLI 校验、导出、试玩均自动读取，仍需选择基础 YR 游戏资源目录。
+
+例如，`Campus.yrm.assets.json` 可以写成：
+
+```json
+{
+  "directories": [
+    { "path": "CustomAssets", "base": "map" },
+    { "path": "SharedAssets", "base": "game" }
+  ],
+  "archives": [
+    { "path": "CustomAssets/custom.mix", "base": "map" }
+  ],
+  "ini": {
+    "rules": "rules-custom.ini",
+    "art": "art-custom.ini"
+  },
+  "ares": "auto"
+}
+```
+
+相对路径以地图所在目录为基准。开启 Ares 模式后，补充 ART 可通过自定义 art 入口配合 #include 引用基础 ART。共享地图时请同时带上该配置文件和素材目录。编辑器内的试玩和高清预览会把同一套素材装配到独立会话目录。
+
+加载顺序：编辑器 resources/overrides → high_priority 目录 → directories → 游戏散文件 → archives → 游戏归档 → low_priority 目录 → 编辑器 resources/fallbacks。同组列表从上到下，第一个同名文件优先。普通素材按文件名搜索，游戏相对路径的子目录（如 Taunts）也会保留；额外归档在 MIX 列表中显式添加，不依赖固定名称。回退目录只补当前地图环境实际已挂载资源中的缺项；切换环境会重新判断。原版游戏归档和地形归档的内部加载规则继续交给 VERA。
+
+路径 base 可为 map（地图所在目录，默认）、game（当前游戏目录）或 editor（当前编辑器目录），也支持绝对路径。ini 支持 rules、art、ai、sound、eva、theme 以及 temperate、snow、urban、newurban、desert、lunar 六种地形 INI 入口；这是完整入口替换，相关 include 文件仍按上述顺序搜索。ares 支持 auto、on、off，解析后的同一模式传递给试玩和高清预览。
+
+新增的自定义 MIX 应显式加入归档列表。保存、另存为、CLI publish 保留素材配置，尽量使用相对输出地图位置的路径（包括同盘兄弟目录）。发布保留引用，不自动复制素材；共享时请同时带上配置和素材目录。
+
+外部资源适配全部位于编辑器工程，引擎源码不作修改。编辑器使用引擎现有的 INI 入口接口选择 rules/art/ai/sound/eva 的真实文件名，原版 INI 仍可被 include 独立引用；试玩通过 config.toml 的 [ini] 传递相同入口。地形入口通过独立后缀文件适配。
+
+资源视图按文件内容、配置顺序和地图环境缓存在系统临时目录；复用前核对实际文件清单、大小和内容，缺文件或损坏会重建。子目录文件与符号链接目标内容也参与版本校验，循环目录链接会报错。缓存持有期间通过共享文件锁保护，回收只处理未被使用的旧视图。试玩散文件使用独立副本，大型只读归档优先硬链接或符号链接，无法链接时复制。资源配置使用本文 JSON 格式，未知字段会报错。
+
 ## 无窗口批处理
 
 `validate`、`export`、`publish` 均无需窗口或 GPU，支持一次处理多张地图。资源通过 `--game-dir`、`--profile` 或 `RA2_DIR` 提供。

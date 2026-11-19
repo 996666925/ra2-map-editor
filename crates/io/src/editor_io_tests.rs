@@ -98,6 +98,7 @@ fn playtest_config_loads_mission_overrides_and_base_assets_without_changing_inst
     let game_dir = prepare_playtest_files(
         &root,
         &fixture.0,
+        None,
         BTreeMap::from([
             ("ra2md.csf".into(), csf),
             ("artmd.ini".into(), b"[Movies]\nINTRO=intro\n".to_vec()),
@@ -157,6 +158,7 @@ fn playtest_without_mission_resources_keeps_the_original_asset_directory() {
     let game_dir = prepare_playtest_files(
         &root,
         &fixture.0,
+        None,
         Default::default(),
         &crate::playtest::PlayOptions::default(),
     )
@@ -221,6 +223,168 @@ fn playtest_window_options_are_written_to_the_isolated_vera_profile() {
     }
     assert!(!root.join("invalid").exists());
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn playtest_checks_map_assets_and_detects_changed_resources() {
+    use ra2_map_assets::{map_resources::MapResources, profile::Revision};
+
+    let fixture = ra2_map_assets::test_support::Fixture::new();
+    let root = root();
+    let assets = root.join("任意素材名");
+    fs::create_dir(&assets).unwrap();
+    fs::write(assets.join("custom.shp"), b"custom sprite").unwrap();
+    let source = root.join("campus.yrm");
+    MapResources {
+        directories: vec![ra2_map_assets::map_resources::ResourcePath::map(&assets)],
+        ..Default::default()
+    }
+    .write(&source)
+    .unwrap();
+    let resources = MapResources::read(&source).unwrap().unwrap();
+    let revision = Revision::scan_with_resources(&fixture.0, Some(&resources), &|| false).unwrap();
+    assert_ne!(revision, Revision::scan(&fixture.0).unwrap());
+    SessionResources::read(&fixture.0, Some(&source), Some(&revision.id())).unwrap();
+    assert!(SessionResources::read(&fixture.0, None, Some(&revision.id())).is_err());
+    fs::write(assets.join("custom.shp"), b"changed sprite").unwrap();
+    assert!(SessionResources::read(&fixture.0, Some(&source), Some(&revision.id())).is_err());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn saved_and_published_maps_carry_ordered_sources_and_failed_saves_restore_sidecars() {
+    use ra2_map_assets::map_resources::{AresMode, MapResources, PathBase, ResourcePath};
+    let root = root();
+    let assets = root.join("custom");
+    fs::create_dir(&assets).unwrap();
+    let source = root.join("source.yrm");
+    let output = root.join("out");
+    fs::create_dir(&output).unwrap();
+    let resources = MapResources {
+        directories: vec![
+            ResourcePath::map(&assets),
+            ResourcePath {
+                path: "shared".into(),
+                base: PathBase::Game,
+            },
+        ],
+        ares: AresMode::Off,
+        ..Default::default()
+    };
+    resources.write(&source).unwrap();
+    let resolved = MapResources::read(&source).unwrap().unwrap();
+    let target = output.join("published.map");
+    replace_map_with_resources(&target, &fixture(), None, Some(&resolved), true).unwrap();
+    assert_eq!(MapResources::read(&target).unwrap(), Some(resolved.clone()));
+    let old_sidecar = fs::read(MapResources::sidecar(&target)).unwrap();
+    let old_map = fs::read(&target).unwrap();
+    assert!(
+        replace_map_with_resources(&target, b"broken", Some(Stamp::bytes(&old_map)), None, true)
+            .is_err()
+    );
+    assert_eq!(fs::read(&target).unwrap(), old_map);
+    assert_eq!(
+        fs::read(MapResources::sidecar(&target)).unwrap(),
+        old_sidecar
+    );
+    let blocked = output.join("blocked.map");
+    fs::create_dir(MapResources::sidecar(&blocked)).unwrap();
+    assert!(replace_map_with_resources(&blocked, &fixture(), None, Some(&resolved), true).is_err());
+    assert!(!blocked.exists());
+    let valid = MapResources::default();
+    replace_map_with_resources(
+        &target,
+        &fixture(),
+        Some(Stamp::bytes(&old_map)),
+        Some(&valid),
+        true,
+    )
+    .unwrap();
+    assert!(MapResources::read(&target).unwrap().unwrap().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn playtest_stages_map_assets_with_case_insensitive_precedence_and_write_isolation() {
+    use std::collections::BTreeMap;
+    use vera20k_core::assets::asset_manager::AssetManager;
+
+    let fixture = ra2_map_assets::test_support::Fixture::new();
+    let root = root();
+    let assets = root.join("custom-resources");
+    fs::create_dir(&assets).unwrap();
+    fs::write(fixture.0.join("expandmd01.mix"), b"base archive").unwrap();
+    fs::write(assets.join("GI.SHP"), b"map sprite").unwrap();
+    fs::write(assets.join("custom.pal"), b"map palette").unwrap();
+    fs::write(assets.join("isotem.pal"), b"map terrain palette").unwrap();
+    fs::write(assets.join("OVERRIDE.SHP"), b"map resource").unwrap();
+    fs::write(assets.join("RA2MD.INI"), b"do not import settings").unwrap();
+    let session = root.join("session");
+    fs::create_dir(&session).unwrap();
+    let game = prepare_playtest_files(
+        &session,
+        &fixture.0,
+        Some(&assets),
+        BTreeMap::from([("override.shp".into(), b"mission override".to_vec())]),
+        &Default::default(),
+    )
+    .unwrap();
+    let manager = AssetManager::from_ini_probe_root(&game).unwrap();
+    assert_eq!(manager.get_ref("gi.shp"), Some(b"map sprite".as_slice()));
+    assert_eq!(
+        manager.get_ref("custom.pal"),
+        Some(b"map palette".as_slice())
+    );
+    assert_eq!(
+        manager.get_ref("isotem.pal"),
+        Some(b"map terrain palette".as_slice())
+    );
+    assert_eq!(
+        manager.get_ref("override.shp"),
+        Some(b"mission override".as_slice())
+    );
+    assert!(manager.get_ref("clear01.tem").is_some());
+    assert_eq!(
+        fs::read(game.join("expandmd01.mix")).unwrap(),
+        b"base archive"
+    );
+    assert!(!game.join("ra2md.ini").exists());
+    fs::write(game.join("gi.shp"), b"session edit").unwrap();
+    assert_eq!(fs::read(assets.join("GI.SHP")).unwrap(), b"map sprite");
+    assert_ne!(fs::read(fixture.0.join("gi.shp")).unwrap(), b"session edit");
+    let second = root.join("no-payload");
+    fs::create_dir(&second).unwrap();
+    let game = prepare_playtest_files(
+        &second,
+        &fixture.0,
+        Some(&assets),
+        BTreeMap::new(),
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(fs::read(game.join("gi.shp")).unwrap(), b"map sprite");
+    drop(manager);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn staged_art_retains_base_definitions_and_merged_properties() {
+    use vera20k_core::rules::ini_parser::IniFile;
+
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(false);
+    let mut art =
+        IniFile::from_bytes(b"[BASE]\nHeight=3\nShadow=yes\n[Shared]\nHeight=1\nShadow=yes\n")
+            .unwrap();
+    art.merge(&IniFile::from_bytes(b"[Shared]\nHeight=7\n[Custom]\nHeight=11\n").unwrap());
+    let decoded = IniFile::from_bytes(&encode_art(&art)).unwrap();
+    assert_eq!(decoded.section_or_empty("BASE").read_int("Height", 0), 3);
+    assert_eq!(decoded.section_or_empty("Shared").read_int("Height", 0), 7);
+    assert!(
+        decoded
+            .section_or_empty("Shared")
+            .read_bool("Shadow", false)
+    );
+    assert_eq!(decoded.section_or_empty("Custom").read_int("Height", 0), 11);
 }
 
 #[test]
@@ -294,6 +458,80 @@ fn retail_engine_hd_preview_exports_the_current_snapshot() {
     assert!(image.pixels().any(|p| p.0 != [0; 3]));
     assert_eq!(fs::read_dir(root.join("map-pictures")).unwrap().count(), 0);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "requires retail RA2_DIR, VERA20K_EXE, RA2_MAP, PLAYTEST_OUTPUT and a desktop"]
+fn retail_map_assets_playtest_uses_the_loaded_profile() {
+    use ra2_map_assets::{assets::Install, map_resources::MapResources};
+    use ra2_map_document::{document::MapDocument, source::SourceMap};
+    use std::time::{Duration, Instant};
+
+    let directory = PathBuf::from(std::env::var_os("RA2_DIR").expect("RA2_DIR required"));
+    let source = PathBuf::from(std::env::var_os("RA2_MAP").expect("RA2_MAP required"));
+    let exe = PathBuf::from(std::env::var_os("VERA20K_EXE").expect("VERA20K_EXE required"));
+    let output =
+        PathBuf::from(std::env::var_os("PLAYTEST_OUTPUT").expect("PLAYTEST_OUTPUT required"));
+    fs::create_dir_all(&output).unwrap();
+    let resources = MapResources::read(&source).unwrap();
+    let install = Install::open_with_resources(&directory, resources, &|| false).unwrap();
+    let bytes = fs::read(&source).unwrap();
+    let (map, _) = SourceMap::parse(source.display().to_string(), "test".into(), bytes).unwrap();
+    let mut doc = MapDocument::new(map.edit_base.unwrap());
+    doc.resource_profile = Some(install.revision.id());
+    let io = EditorIo::new(egui::Context::default(), output.clone()).unwrap();
+    io.send(Job::Play {
+        options: Default::default(),
+        snapshot: doc.snapshot(),
+        exe,
+        directory,
+        source: Some(source),
+        root: output.clone(),
+    })
+    .unwrap();
+    let mut process = loop {
+        let result = io.results.recv_timeout(Duration::from_secs(120)).unwrap();
+        if let Done::Play(result) = result {
+            break result.unwrap();
+        }
+    };
+    let started = Instant::now();
+    let mut status = None;
+    while started.elapsed() < Duration::from_secs(10) {
+        status = process.child.try_wait().unwrap();
+        if status.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let running = status.is_none();
+    if running {
+        process.child.kill().unwrap();
+    }
+    process.child.wait().unwrap();
+    let provenance: serde_json::Value =
+        serde_json::from_slice(&fs::read(process.folder.join("editor-session.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        provenance["resource_profile"],
+        serde_json::to_value(&*install.revision).unwrap()
+    );
+    fs::write(
+        output.join("report.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "passed": running,
+            "running_seconds": started.elapsed().as_secs_f64(),
+            "session": process.folder,
+            "resource_profile": *install.revision,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        running,
+        "playtest exited early: {status:?}, logs: {}",
+        process.folder.display()
+    );
 }
 #[test]
 fn atomic_save_replaces_on_windows_backs_up_original_and_rejects_external_changes() {
@@ -371,5 +609,85 @@ fn recovery_roundtrip_is_independent_and_truncation_is_rejected() {
     bad.truncate(14);
     fs::write(&path, bad).unwrap();
     assert!(read_recovery(&path).is_err());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn session_config_uses_selected_ini_roots_and_keeps_original_art_available() {
+    use ra2_map_assets::map_resources::{AresMode, MapResources, ResourcePath};
+    let game = ra2_map_assets::test_support::Fixture::new();
+    // Empty native archives keep the fixture independent of a retail installation.
+    for name in [
+        "ra2md.mix",
+        "ra2.mix",
+        "cachemd.mix",
+        "cache.mix",
+        "localmd.mix",
+        "local.mix",
+        "conqmd.mix",
+        "conquer.mix",
+        "cameomd.mix",
+        "cameo.mix",
+    ] {
+        fs::write(game.0.join(name), [0u8; 10]).unwrap();
+    }
+    fs::write(game.0.join("artmd.ini"), b"[BASE]\nHeight=3\n").unwrap();
+    let root = root();
+    let extra = root.join("extra");
+    fs::create_dir(&extra).unwrap();
+    fs::write(extra.join("custom.ini"), b"[CUSTOM]\nHeight=7\n").unwrap();
+    let source = root.join("mission.map");
+    MapResources {
+        directories: vec![ResourcePath::map(&extra)],
+        ini: [
+            ("art".into(), "custom.ini".into()),
+            ("temperate".into(), "temperatmd.ini".into()),
+        ]
+        .into(),
+        ares: AresMode::Off,
+        ..Default::default()
+    }
+    .write(&source)
+    .unwrap();
+    let session = root.join("session");
+    fs::create_dir(&session).unwrap();
+    let prepared = SessionResources::read(&game.0, Some(&source), None)
+        .unwrap()
+        .prepare(&fixture(), &session, &Default::default())
+        .unwrap();
+    let text = fs::read_to_string(session.join("config.toml")).unwrap();
+    assert_eq!(text.lines().filter(|s| *s == "[ini]").count(), 1);
+    let loaded =
+        vera20k_core::util::config::GameConfig::load_from(&session, &session.join("vera20k.exe"))
+            .unwrap();
+    assert_eq!(loaded.ini.art.as_deref(), Some("custom.ini"));
+    assert_eq!(loaded.ini.theater_suffix.as_deref(), Some("editorres"));
+    let roots = loaded.ini.resolve(|_| true).unwrap();
+    let manager = vera20k_core::assets::asset_manager::AssetManager::with_mod_and_ares(
+        &prepared.directory,
+        None,
+        vera20k_core::assets::asset_manager::MediaArchiveMode::STOCK_DIGITAL,
+        prepared.ares,
+    )
+    .unwrap()
+    .with_selected_ini_roots(roots);
+    let art = ra2_map_assets::assets::read_ini(&manager, manager.ini_roots().art()).unwrap();
+    assert_eq!(
+        ra2_map_assets::assets::read_ini(&manager, "artmd.ini")
+            .unwrap()
+            .section_or_empty("BASE")
+            .read_int("Height", 0),
+        3
+    );
+    assert_eq!(art.section_or_empty("CUSTOM").read_int("Height", 0), 7);
+    assert_eq!(
+        fs::read(prepared.directory.join("artmd.ini")).unwrap(),
+        b"[BASE]\nHeight=3\n"
+    );
+    assert_eq!(
+        fs::read(prepared.directory.join("custom.ini")).unwrap(),
+        b"[CUSTOM]\nHeight=7\n"
+    );
+    drop(manager);
     fs::remove_dir_all(root).unwrap();
 }

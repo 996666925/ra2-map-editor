@@ -129,6 +129,7 @@ fn main() -> Result<()> {
     let path = output.join("saved.map");
     io.send(editor_io::Job::Save {
         directory: Some(resources.clone()),
+        source: None,
         snapshot: doc.snapshot(),
         path: path.clone(),
         expected: editor_io::Expected::Capture,

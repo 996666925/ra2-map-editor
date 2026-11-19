@@ -109,7 +109,14 @@ impl PlayOptions {
     }
 
     pub fn spawn_ini(&self, map: &MapFile) -> Result<String> {
-        let ares = ra2_map_assets::assets::ARES_SETTING.ini_value();
+        self.spawn_ini_with_ares(map, ra2_map_assets::assets::ARES_SETTING)
+    }
+    pub(crate) fn spawn_ini_with_ares(
+        &self,
+        map: &MapFile,
+        setting: vera20k_core::util::ares_launch::AresSetting,
+    ) -> Result<String> {
+        let ares = setting.ini_value();
         if self.mission {
             ensure!(
                 self.mission_difficulty <= 2

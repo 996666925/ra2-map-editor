@@ -371,12 +371,13 @@ pub fn load_scene_bytes_controlled(
     }
     crate::work::checkpoint(cancelled)?;
     let mut catalog = install.catalog.with_map(source.bytes());
-    match ra2_map_assets::mission_resources::scenario_registries(
+    match ra2_map_assets::mission_resources::scenario_registries_with_art(
         &install.manager,
         &map.ini,
         map.ini
             .section_or_empty("Basic")
             .read_bool("MultiplayerOnly", false),
+        None,
         None,
     ) {
         Ok(registries) => {

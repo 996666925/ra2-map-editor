@@ -3,8 +3,11 @@ pub mod assets;
 pub mod catalog;
 mod chinese;
 pub mod framework;
+pub mod map_resources;
 pub mod map_sprites;
 pub mod radar;
+mod resource_config;
+pub mod resource_view;
 pub mod sprites;
 pub mod terrain_library;
 #[cfg(any(test, feature = "test-support"))]

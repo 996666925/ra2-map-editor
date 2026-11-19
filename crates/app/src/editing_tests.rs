@@ -770,6 +770,7 @@ fn late_save_receipt_does_not_clear_new_edits_and_undo_reaches_saved_state() {
         .io
         .send(Job::Save {
             directory: None,
+            source: None,
             snapshot,
             path: path.clone(),
             expected: Expected::Exact(None),
@@ -867,6 +868,7 @@ fn untouched_new_map_recovers_without_a_target_and_first_save_clears_dirty() {
         .io
         .send(Job::Save {
             directory: None,
+            source: None,
             snapshot: editor.doc.as_ref().unwrap().snapshot(),
             path: path.clone(),
             expected: Expected::Exact(None),

@@ -39,6 +39,7 @@ pub struct MapView {
     loader: MapLoader,
     generation: u64,
     pub loading: bool,
+    map_resources_refresh: bool,
     pub error: Option<String>,
     pub name: String,
     pub scene: Option<MapScene>,
@@ -91,6 +92,7 @@ impl MapView {
             loader: MapLoader::with_gpu(ctx, state)?,
             generation: 0,
             loading: false,
+            map_resources_refresh: false,
             error: None,
             name: String::new(),
             scene: None,
@@ -136,6 +138,12 @@ impl MapView {
         self.open_now(directory, name);
     }
     pub(crate) fn refresh_resources(&mut self, directory: PathBuf) {
+        self.refresh_resources_with_mode(directory, false);
+    }
+    pub(crate) fn refresh_map_resources(&mut self, directory: PathBuf) {
+        self.refresh_resources_with_mode(directory, true);
+    }
+    fn refresh_resources_with_mode(&mut self, directory: PathBuf, map_resources_only: bool) {
         if self.loading
             || self.editor.stroking
             || !self.workbench.map_settings.allow_leave()
@@ -148,7 +156,13 @@ impl MapView {
             self.status = tr!("请先打开或新建地图。").into();
             return;
         }
-        self.loader.invalidate_resources();
+        if map_resources_only {
+            self.loader.invalidate_map_resources();
+            self.map_resources_refresh = true;
+        } else {
+            self.loader.invalidate_resources();
+            self.map_resources_refresh = false;
+        }
         self.directory = directory.clone();
         self.editor.directory = directory;
         self.editor.structural_refresh = true;
@@ -323,14 +337,25 @@ impl MapView {
             // Keep drawing the published scene while the worker prepares its
             // replacement. The worker never mutates callback-bound buffers.
             let preview = self.workbench.map_settings.preview_snapshot(doc);
+            let map_resources_refresh = std::mem::take(&mut self.map_resources_refresh);
             let request = preview.and_then(|(snapshot, profile)| {
-                self.loader.preview_profile(
-                    self.generation,
-                    self.directory.clone(),
-                    self.name.clone(),
-                    snapshot,
-                    profile,
-                )
+                if map_resources_refresh {
+                    self.loader.preview_profile_reusing_base_revision(
+                        self.generation,
+                        self.directory.clone(),
+                        self.name.clone(),
+                        snapshot,
+                        profile,
+                    )
+                } else {
+                    self.loader.preview_profile(
+                        self.generation,
+                        self.directory.clone(),
+                        self.name.clone(),
+                        snapshot,
+                        profile,
+                    )
+                }
             });
             if let Err(e) = request {
                 self.loading = false;
@@ -618,10 +643,11 @@ impl MapView {
                     });
                 });
             });
-        if start_management && let Some(doc) = &self.editor.doc {
-            if let Err(error) = self.workbench.management.prepare(doc, self.name.clone()) {
-                self.status = format!("{error:#}");
-            }
+        if start_management
+            && let Some(doc) = &self.editor.doc
+            && let Err(error) = self.workbench.management.prepare(doc, self.name.clone())
+        {
+            self.status = format!("{error:#}");
         }
         if self.workbench.management.presenting_layers() {
             flat = false;

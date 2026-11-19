@@ -412,6 +412,7 @@ impl MapView {
                 let path = output.join("edited.map");
                 self.editor.io.send(Job::Save {
                     directory: Some(self.directory.clone()),
+                    source: self.editor.target.clone(),
                     snapshot: doc.snapshot(),
                     path,
                     expected: Expected::Capture,
@@ -454,6 +455,7 @@ impl MapView {
                     self.editor.io.send(Job::Export {
                         snapshot: doc.snapshot(),
                         directory: self.directory.clone(),
+                        source: self.editor.target.clone(),
                         path: output.join("full-map.png"),
                         max_edge: 4096,
                         options: Default::default(),

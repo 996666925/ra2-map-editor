@@ -239,3 +239,81 @@ fn terrain_refreshes_reuse_worker_resources_and_rebuild_geometry_across_history(
         );
     }
 }
+
+#[test]
+fn map_resource_refresh_reuses_base_revision_instead_of_rescanning_game_archives() {
+    use ra2_map_assets::map_resources::{MapResources, ResourcePath};
+    use ra2_map_document::{document::MapDocument, new_map::NewMapOptions};
+    use std::time::Instant;
+
+    let game = crate::test_support::map_loader_fixture();
+    let map_path = game.0.join("refresh.map");
+    let bytes = NewMapOptions {
+        width: 20,
+        height: 20,
+        ..Default::default()
+    }
+    .bytes()
+    .unwrap();
+    std::fs::write(&map_path, &bytes).unwrap();
+    let first = game.0.join("first-resource-set");
+    let second = game.0.join("second-resource-set");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    std::fs::write(first.join("first.shp"), b"first").unwrap();
+    std::fs::write(second.join("second.shp"), b"second").unwrap();
+    let mut resources = MapResources {
+        directories: vec![ResourcePath::map(&first)],
+        ..Default::default()
+    };
+    resources.write(&map_path).unwrap();
+
+    let loader = MapLoader::new(egui::Context::default()).unwrap();
+    let name = map_path.to_string_lossy().into_owned();
+    loader.request(1, game.0.clone(), name.clone()).unwrap();
+    let initial = loader
+        .results
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap();
+    let initial = initial.result.unwrap();
+    let base_revision = initial.revision.clone();
+    let doc = MapDocument::new(initial.source.edit_base.as_ref().unwrap().clone());
+
+    resources.directories.push(ResourcePath::map(&second));
+    resources.write(&map_path).unwrap();
+    loader.invalidate_map_resources();
+    loader
+        .preview_profile_reusing_base_revision(
+            2,
+            game.0.clone(),
+            name,
+            doc.snapshot(),
+            Default::default(),
+        )
+        .unwrap();
+    let started = Instant::now();
+    let refreshed = loader
+        .results
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap();
+    let elapsed = started.elapsed();
+    let timings = refreshed.timings.clone();
+    eprintln!(
+        "map-resource-only refresh: {:.2} ms resource phase, {:.2} ms end-to-end",
+        timings.resources_ms,
+        elapsed.as_secs_f64() * 1000.
+    );
+    let refreshed = refreshed.result.unwrap();
+    assert_ne!(refreshed.revision.resources, base_revision.resources);
+    assert_eq!(refreshed.revision.schema, base_revision.schema);
+    assert!(
+        timings.resources_ms < 2_000.,
+        "resource refresh took {:.1}s despite unchanged game resources",
+        timings.resources_ms / 1000.
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "refresh took {elapsed:?}"
+    );
+    std::fs::remove_dir_all(game.0.clone()).unwrap();
+}

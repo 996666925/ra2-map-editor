@@ -136,6 +136,16 @@ pub fn scenario_registries(
     multiplayer: bool,
     mode: Option<&IniFile>,
 ) -> Result<NativeRegistries, String> {
+    scenario_registries_with_art(manager, map, multiplayer, mode, None)
+}
+
+pub fn scenario_registries_with_art(
+    manager: &AssetManager,
+    map: &IniFile,
+    multiplayer: bool,
+    mode: Option<&IniFile>,
+    extra_art: Option<&str>,
+) -> Result<NativeRegistries, String> {
     use std::sync::Arc;
     use vera20k_core::rules::{
         process_owner::NativeScenarioRulesPrefix,
@@ -149,8 +159,14 @@ pub fn scenario_registries(
     };
     let sounds = SoundRegistry::from_ini(&audio(manager.ini_roots().sound())?);
     let eva = EvaRegistry::from_ini(&audio(manager.ini_roots().eva())?);
-    let mut owner =
-        RetailRulesSources::select(manager)?.into_owner(Arc::new(sounds), Arc::new(eva))?;
+    let mut sources = RetailRulesSources::select(manager)?;
+    if let Some(extra_art) = extra_art {
+        sources
+            .artmd
+            .ini
+            .merge(&select_ini(manager, extra_art)?.ini);
+    }
+    let mut owner = sources.into_owner(Arc::new(sounds), Arc::new(eva))?;
     let (mut rules, processed_ini, art, _) = owner
         .load_scenario(
             if multiplayer {

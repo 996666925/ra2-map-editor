@@ -1,5 +1,6 @@
 //! Disk and process work stays off the UI thread. Authoring snapshots are immutable.
 use anyhow::{Context, Result, ensure};
+use ra2_map_assets::map_resources::MapResources;
 use ra2_map_document::document::{Baseline, Snapshot};
 
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,7 @@ pub struct RecoveryEntry {
 pub enum Job {
     Save {
         directory: Option<PathBuf>,
+        source: Option<PathBuf>,
         snapshot: Snapshot,
         path: PathBuf,
         expected: Expected,
@@ -77,12 +79,14 @@ pub enum Job {
     ExportHdPreview {
         snapshot: Snapshot,
         directory: PathBuf,
+        source: Option<PathBuf>,
         exe: PathBuf,
         path: PathBuf,
     },
     Export {
         snapshot: Snapshot,
         directory: PathBuf,
+        source: Option<PathBuf>,
         path: PathBuf,
         max_edge: u32,
         options: ra2_map_scene::visual::ViewOptions,
@@ -92,6 +96,7 @@ pub enum Job {
         snapshot: Snapshot,
         exe: PathBuf,
         directory: PathBuf,
+        source: Option<PathBuf>,
         root: PathBuf,
     },
 }
@@ -148,6 +153,7 @@ impl EditorIo {
                     let done = match job {
                         Job::Save {
                             directory,
+                            source,
                             snapshot,
                             path,
                             expected,
@@ -163,21 +169,48 @@ impl EditorIo {
                                     Expected::Capture => Stamp::file(&path)?,
                                 };
                                 let bytes = snapshot.bytes()?;
+                                let resources = source
+                                    .as_deref()
+                                    .map(MapResources::read)
+                                    .transpose()?
+                                    .flatten();
+                                let save_as = source.as_deref() != Some(path.as_path());
+                                if save_as && MapResources::sidecar(&path).is_file() {
+                                    ensure!(
+                                        MapResources::read(&path)? == resources,
+                                        "目标地图已有不同的素材配置：{}",
+                                        path.display()
+                                    );
+                                }
                                 let revision = directory
                                     .as_ref()
                                     .map(|d| {
-                                        publisher
-                                            .check_profile(d, snapshot.resource_profile.as_deref())
+                                        publisher.check_profile_with_resources(
+                                            d,
+                                            resources.as_ref(),
+                                            snapshot.resource_profile.as_deref(),
+                                        )
                                     })
                                     .transpose()?;
                                 let bytes = if let Some(directory) = directory {
-                                    publisher.map_bytes(bytes, &directory)?
+                                    let scene = publisher.scene_with_resources(
+                                        bytes,
+                                        &directory,
+                                        resources.clone(),
+                                    )?;
+                                    crate::publication::embed_scene_preview(&scene)?
                                 } else {
                                     bytes
                                 };
                                 validate(&bytes)?;
-                                let stamp = replace_map(&path, &bytes, expected)?;
-                                let warning = if let Some(revision) = revision {
+                                let stamp = replace_map_with_resources(
+                                    &path,
+                                    &bytes,
+                                    expected,
+                                    resources.as_ref(),
+                                    save_as,
+                                )?;
+                                let provenance_warning = if let Some(revision) = revision {
                                     crate::provenance::write(
                                         &crate::provenance::sidecar(&path),
                                         &bytes,
@@ -189,7 +222,14 @@ impl EditorIo {
                                 } else {
                                     None
                                 };
-                                Ok(Saved { stamp, warning })
+                                let warning = [provenance_warning]
+                                    .into_iter()
+                                    .flatten()
+                                    .collect::<Vec<_>>();
+                                Ok(Saved {
+                                    stamp,
+                                    warning: (!warning.is_empty()).then(|| warning.join(" / ")),
+                                })
                             })(),
                             path,
                         },
@@ -238,18 +278,20 @@ impl EditorIo {
                         Job::ExportHdPreview {
                             snapshot,
                             directory,
+                            source,
                             exe,
                             path,
                         } => Done::Export {
                             result: (|| {
-                                publisher.check_profile(
+                                let resources = SessionResources::read(
                                     &directory,
+                                    source.as_deref(),
                                     snapshot.resource_profile.as_deref(),
                                 )?;
-                                crate::map_picture::export(
+                                crate::map_picture::export_with_resources(
                                     &snapshot.bytes()?,
                                     &exe,
-                                    &directory,
+                                    &resources,
                                     &work_root,
                                     &path,
                                 )
@@ -259,22 +301,28 @@ impl EditorIo {
                         Job::Export {
                             snapshot,
                             directory,
+                            source,
                             path,
                             max_edge,
                             options,
                         } => Done::Export {
                             result: (|| {
-                                publisher.check_profile(
+                                let resources = source
+                                    .as_deref()
+                                    .map(MapResources::read)
+                                    .transpose()?
+                                    .flatten();
+                                publisher.check_profile_with_resources(
                                     &directory,
+                                    resources.as_ref(),
                                     snapshot.resource_profile.as_deref(),
                                 )?;
-                                publisher.png(
+                                let scene = publisher.scene_with_resources(
                                     snapshot.bytes()?,
                                     &directory,
-                                    &path,
-                                    max_edge,
-                                    options,
-                                )
+                                    resources,
+                                )?;
+                                crate::publication::scene_png(&scene, &path, max_edge, options)
                             })(),
                             path,
                         },
@@ -283,12 +331,16 @@ impl EditorIo {
                             snapshot,
                             exe,
                             directory,
+                            source,
                             root,
                         } => Done::Play((|| {
-                            ra2_map_assets::profile::Revision::scan(&directory)?
-                                .check(snapshot.resource_profile.as_deref())?;
+                            let resources = SessionResources::read(
+                                &directory,
+                                source.as_deref(),
+                                snapshot.resource_profile.as_deref(),
+                            )?;
                             let bytes = snapshot.bytes()?;
-                            launch(&bytes, &exe, &directory, &root, &options)
+                            launch_with_resources(&bytes, &exe, &resources, &root, &options)
                         })()),
                     };
                     if tx.send(done).is_err() {
@@ -335,6 +387,49 @@ pub fn validate(bytes: &[u8]) -> Result<vera20k_core::map::map_file::MapFile> {
     vera20k_core::map::map_file::load_from_bytes(bytes.to_vec()).context("写入前重开校验失败")
 }
 /// A failed replacement leaves the original and the complete temporary file intact.
+pub fn replace_map_with_resources(
+    path: &Path,
+    bytes: &[u8],
+    expected: Option<Stamp>,
+    resources: Option<&MapResources>,
+    carry: bool,
+) -> Result<Stamp> {
+    if !carry {
+        return replace_map(path, bytes, expected);
+    }
+    validate(bytes)?;
+    ensure!(Stamp::file(path)? == expected, "地图已被外部修改");
+    let sidecar = MapResources::sidecar(path);
+    let previous = match fs::read(&sidecar) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e.into()),
+    };
+    if let Some(resources) = resources {
+        resources.write(path)?;
+    } else {
+        MapResources::remove(path)?;
+    }
+    match replace_map(path, bytes, expected) {
+        Ok(stamp) => Ok(stamp),
+        Err(error) => {
+            let rollback = if let Some(bytes) = previous {
+                let temp = sidecar.with_extension(format!("{}.rollback", unique()));
+                fs::write(&temp, bytes).and_then(|_| fs::rename(temp, &sidecar))
+            } else {
+                fs::remove_file(&sidecar).or_else(|e| {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        Ok(())
+                    } else {
+                        Err(e)
+                    }
+                })
+            };
+            rollback.context(format!("地图保存失败且素材配置回滚失败：{error:#}"))?;
+            Err(error)
+        }
+    }
+}
 pub fn replace_map(path: &Path, bytes: &[u8], expected: Option<Stamp>) -> Result<Stamp> {
     ensure!(
         Stamp::file(path)? == expected,
@@ -487,22 +582,30 @@ pub fn launch(
     root: &Path,
     options: &crate::playtest::PlayOptions,
 ) -> Result<PlayProcess> {
+    let resources = SessionResources::read(directory, None, None)?;
+    launch_with_resources(bytes, exe, &resources, root, options)
+}
+
+fn launch_with_resources(
+    bytes: &[u8],
+    exe: &Path,
+    resources: &SessionResources,
+    root: &Path,
+    options: &crate::playtest::PlayOptions,
+) -> Result<PlayProcess> {
     let map = validate(bytes)?;
-    let spawn = options.spawn_ini(&map)?;
     let exe = fs::canonicalize(exe).context("VERA20k 可执行文件不存在")?;
-    let directory = fs::canonicalize(directory).context("游戏资源目录不存在")?;
-    let revision = ra2_map_assets::profile::Revision::scan(&directory)?;
-    let resources = crate::mission_script::playtest_payload(bytes, &directory, &revision.id())?;
     let folder = root.join("playtest").join(unique());
     fs::create_dir_all(&folder)?;
     let folder = fs::canonicalize(folder)?;
-    let game_dir = prepare_playtest_files(&folder, &directory, resources, options)?;
+    let game_dir = resources.prepare(bytes, &folder, options)?;
+    let spawn = options.spawn_ini_with_ares(&map, game_dir.ares)?;
     fs::write(folder.join("spawnmap.ini"), bytes)?;
     fs::write(folder.join("spawn.ini"), spawn)?;
     crate::provenance::write(
         &folder.join("editor-session.json"),
         bytes,
-        &revision,
+        &resources.revision,
         Some(&exe),
     )?;
     let out = fs::File::create(folder.join("stdout.log"))?;
@@ -511,7 +614,7 @@ pub fn launch(
     command
         .arg("-SPAWN")
         .current_dir(&folder)
-        .env("RA2_DIR", game_dir)
+        .env("RA2_DIR", game_dir.directory)
         .stdin(Stdio::null())
         .stdout(out)
         .stderr(err);
@@ -524,73 +627,167 @@ pub fn launch(
     Ok(PlayProcess { child, folder })
 }
 
+pub(crate) struct SessionResources {
+    directory: PathBuf,
+    map: Option<MapResources>,
+    base_revision: ra2_map_assets::profile::Revision,
+    revision: ra2_map_assets::profile::Revision,
+}
+pub(crate) struct PreparedSession {
+    pub directory: PathBuf,
+    pub ares: vera20k_core::util::ares_launch::AresSetting,
+}
+
+impl SessionResources {
+    pub(crate) fn read(
+        directory: &Path,
+        source: Option<&Path>,
+        expected: Option<&str>,
+    ) -> Result<Self> {
+        let directory = fs::canonicalize(directory).context("游戏资源目录不存在")?;
+        let map = source.map(MapResources::read).transpose()?.flatten();
+        let base_revision =
+            ra2_map_assets::profile::Revision::scan_controlled(&directory, &|| false)?;
+        let revision = ra2_map_assets::profile::Revision::scan_with_resources_from_base(
+            &directory,
+            map.as_ref(),
+            base_revision.clone(),
+            &|| false,
+        )?;
+        revision.check(expected)?;
+        Ok(Self {
+            directory,
+            map,
+            base_revision,
+            revision,
+        })
+    }
+
+    pub(crate) fn prepare(
+        &self,
+        bytes: &[u8],
+        folder: &Path,
+        options: &crate::playtest::PlayOptions,
+    ) -> Result<PreparedSession> {
+        let view = ra2_map_assets::resource_view::ResourceView::with_revisions(
+            &self.directory,
+            self.map.as_ref(),
+            self.base_revision.clone(),
+            self.revision.clone(),
+            &|| false,
+        )?;
+        let map = validate(bytes)?;
+        let root = view.materialize(&map.header.theater, &|| false)?;
+        let mut payload = crate::mission_script::scoped_playtest_payload(
+            bytes,
+            &self.directory,
+            self.map.as_ref(),
+            &self.revision.id(),
+        )?;
+        if let Some(override_art) = payload.get("artmd.ini") {
+            let manager = view.manager_for_theater(&map.header.theater)?;
+            let name = manager.ini_roots().art();
+            let mut art = ra2_map_assets::assets::read_ini(&manager, name)?;
+            art.merge(&vera20k_core::rules::ini_parser::IniFile::from_bytes(
+                override_art,
+            )?);
+            let name = name.to_ascii_lowercase();
+            if name != "artmd.ini" {
+                payload.remove("artmd.ini");
+            }
+            payload.insert(name, encode_art(&art));
+        }
+        let directory = prepare_playtest_files(
+            folder,
+            &self.directory,
+            (root != self.directory).then_some(root.as_path()),
+            payload,
+            options,
+        )?;
+        let settings = folder.join("settings/VERA.INI");
+        let mut text = fs::read_to_string(&settings)?;
+        use std::fmt::Write as _;
+        writeln!(text, "Ares={}", view.ares.ini_value())?;
+        fs::write(settings, text)?;
+        let ini = view.ini_config();
+        let config = folder.join("config.toml");
+        let mut text = fs::read_to_string(&config)?;
+        use vera20k_core::util::ini_roots::IniProfile;
+        writeln!(text, "[ini]")?;
+        writeln!(
+            text,
+            "profile = {}",
+            serde_json::to_string(if ini.profile == IniProfile::Custom {
+                "custom"
+            } else {
+                "yr"
+            })?
+        )?;
+        for (key, value) in [
+            ("rules", ini.rules),
+            ("art", ini.art),
+            ("ai", ini.ai),
+            ("sound", ini.sound),
+            ("eva", ini.eva),
+            ("theater_suffix", ini.theater_suffix),
+        ] {
+            if let Some(value) = value {
+                writeln!(text, "{key} = {}", serde_json::to_string(&value)?)?;
+            }
+        }
+        fs::write(config, text)?;
+        Ok(PreparedSession {
+            directory,
+            ares: view.ares,
+        })
+    }
+}
+
+pub(super) fn encode_art(art: &vera20k_core::rules::ini_parser::IniFile) -> Vec<u8> {
+    use std::fmt::Write as _;
+    let mut text = String::new();
+    let mut written = std::collections::HashSet::new();
+    for name in art.section_names() {
+        if written.insert(name) {
+            let _ = writeln!(text, "[{name}]");
+            for (key, value) in art.section_or_empty(name).raw_entries() {
+                let _ = writeln!(text, "{key}={value}");
+            }
+        }
+    }
+    vera20k_core::util::native_string::narrow_widened(&text)
+}
+
 pub(crate) fn prepare_playtest_files(
     folder: &Path,
     directory: &Path,
+    additional: Option<&Path>,
     resources: std::collections::BTreeMap<String, Vec<u8>>,
     options: &crate::playtest::PlayOptions,
 ) -> Result<PathBuf> {
-    let game_dir = if resources.is_empty() {
+    let game_dir = if resources.is_empty() && additional.is_none() {
         directory.to_path_buf()
     } else {
         let assets = folder.join("assets");
         fs::create_dir(&assets)?;
         // AssetManager reads loose files only under ra2_dir, not cwd. Keep the
         // original resources alongside mission overrides in this session's root.
-        for entry in fs::read_dir(directory)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_file() {
-                continue;
-            }
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-            let extension = path
-                .extension()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_ascii_lowercase();
-            if !matches!(
-                extension.as_str(),
-                "mix"
-                    | "ini"
-                    | "pal"
-                    | "shp"
-                    | "tmp"
-                    | "tem"
-                    | "sno"
-                    | "urb"
-                    | "ubn"
-                    | "des"
-                    | "lun"
-                    | "vxl"
-                    | "hva"
-                    | "vpl"
-                    | "csf"
-                    | "wav"
-                    | "aud"
-                    | "bik"
-                    | "vqa"
-                    | "bag"
-                    | "idx"
-                    | "pcx"
-                    | "fnt"
-                    | "pkt"
-                    | "wma"
-                    | "ogg"
-            ) || matches!(
-                name.as_str(),
-                "spawn.ini" | "spawnmap.ini" | "ra2.ini" | "ra2md.ini" | "ddraw.ini" | "vera.ini"
-            ) || resources.contains_key(&name)
-            {
+        let mut files = std::collections::BTreeMap::new();
+        for root in [Some(directory), additional].into_iter().flatten() {
+            collect_session_assets(root, &mut files)?;
+        }
+        for (name, source) in files {
+            if resources.contains_key(&name) {
                 continue;
             }
             let target = assets.join(&name);
-            // Only immutable bulk data shares storage. Loose files are copied,
-            // and overridden names are skipped before linking or writing.
-            if matches!(extension.as_str(), "mix" | "bag") {
-                fs::hard_link(&path, &target).or_else(|_| fs::copy(&path, &target).map(|_| ()))?;
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            if name.ends_with(".mix") || name.ends_with(".bag") {
+                ra2_map_assets::resource_view::stage_file(&source, &target)?;
             } else {
-                fs::copy(&path, &target)?;
+                fs::copy(&source, &target)?;
             }
         }
         for (name, value) in resources {
@@ -598,8 +795,6 @@ pub(crate) fn prepare_playtest_files(
         }
         assets
     };
-    // Interactive VERA reads cwd/config.toml; RA2_DIR is chiefly a tool/test
-    // convention. Keep both assets and user settings explicit for this process.
     let config =
         vera20k_core::util::config::set_paths_key("", "ra2_dir", &game_dir.to_string_lossy());
     let config = vera20k_core::util::config::set_paths_key(
@@ -610,4 +805,21 @@ pub(crate) fn prepare_playtest_files(
     fs::write(folder.join("config.toml"), config)?;
     options.write_settings(&folder.join("settings"))?;
     Ok(game_dir)
+}
+
+fn collect_session_assets(
+    directory: &Path,
+    files: &mut std::collections::BTreeMap<String, PathBuf>,
+) -> Result<()> {
+    let mut collected = std::collections::BTreeMap::new();
+    ra2_map_assets::resource_view::collect_tree(
+        directory,
+        Path::new(""),
+        &mut collected,
+        true,
+        &mut Vec::new(),
+        &|| false,
+    )?;
+    files.extend(collected);
+    Ok(())
 }

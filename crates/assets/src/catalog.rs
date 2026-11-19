@@ -319,12 +319,22 @@ impl Catalog {
         })
     }
     pub fn load(manager: &AssetManager, theater: &TheaterData) -> Arc<Self> {
+        Self::load_with_art(manager, theater, None).expect("no additional ART to load")
+    }
+    pub(crate) fn load_with_art(
+        manager: &AssetManager,
+        theater: &TheaterData,
+        extra_art: Option<&str>,
+    ) -> anyhow::Result<Arc<Self>> {
         let rules = crate::assets::read_ini(manager, manager.ini_roots().rules())
             .ok()
             .unwrap_or_else(IniFile::empty);
-        let art = crate::assets::read_ini(manager, manager.ini_roots().art())
+        let mut art = crate::assets::read_ini(manager, manager.ini_roots().art())
             .ok()
             .unwrap_or_else(IniFile::empty);
+        if let Some(extra_art) = extra_art {
+            art.merge(&crate::assets::read_ini(manager, extra_art)?);
+        }
         let mut catalog = Self {
             rules,
             strings: CsfFile::load_active(manager.ares_form(), |name| manager.get_ref(name))
@@ -338,9 +348,9 @@ impl Catalog {
             .find(|(_, extension)| *extension == theater.extension)
             .map_or("TEMPERATE", |(name, _)| name);
         let map = IniFile::from_str(&format!("[Map]\nTheater={theater_name}\n"));
-        if let Ok(registries) =
-            crate::mission_resources::scenario_registries(manager, &map, false, None)
-        {
+        if let Ok(registries) = crate::mission_resources::scenario_registries_with_art(
+            manager, &map, false, None, extra_art,
+        ) {
             catalog.infantry_appearances = registries.infantry_appearances;
             catalog.shp_vehicle_turrets = registries.shp_vehicle_turrets;
             catalog.water_images = registries.water_images;
@@ -377,7 +387,7 @@ impl Catalog {
                 });
             }
         }
-        Arc::new(catalog)
+        Ok(Arc::new(catalog))
     }
     fn read_registries(&mut self) {
         for registry in ["Countries", "SuperWeaponTypes", "Warheads", "VoxelAnims"] {

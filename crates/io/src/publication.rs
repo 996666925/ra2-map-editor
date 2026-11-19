@@ -1,6 +1,7 @@
 //! Publication uses the same immutable static scene as the interactive renderer.
 use anyhow::{Context, Result, ensure};
 use ra2_map_assets::assets::Install;
+use ra2_map_assets::map_resources::MapResources;
 use ra2_map_scene::{
     map::{MapScene, load_scene_bytes},
     visual::ViewOptions,
@@ -20,7 +21,18 @@ impl Publisher {
         directory: &Path,
         expected: Option<&str>,
     ) -> Result<ra2_map_assets::profile::Revision> {
-        let revision = ra2_map_assets::profile::Revision::scan(directory)?;
+        self.check_profile_with_resources(directory, None, expected)
+    }
+    pub(crate) fn check_profile_with_resources(
+        &mut self,
+        directory: &Path,
+        resources: Option<&MapResources>,
+        expected: Option<&str>,
+    ) -> Result<ra2_map_assets::profile::Revision> {
+        let revision =
+            ra2_map_assets::profile::Revision::scan_with_resources(directory, resources, &|| {
+                false
+            })?;
         revision.check(expected)?;
         if self
             .cached
@@ -32,12 +44,19 @@ impl Publisher {
         Ok(revision)
     }
     pub fn scene(&mut self, bytes: Vec<u8>, directory: &Path) -> Result<MapScene> {
-        if self
-            .cached
-            .as_ref()
-            .is_none_or(|(path, _)| path != directory)
-        {
-            self.cached = Some((directory.to_owned(), Install::open(directory)?));
+        self.scene_with_resources(bytes, directory, None)
+    }
+    pub(crate) fn scene_with_resources(
+        &mut self,
+        bytes: Vec<u8>,
+        directory: &Path,
+        resources: Option<MapResources>,
+    ) -> Result<MapScene> {
+        if self.cached.as_ref().is_none_or(|(path, install)| {
+            path != directory || install.map_resources() != resources.as_ref()
+        }) {
+            let install = Install::open_with_resources(directory, resources, &|| false)?;
+            self.cached = Some((directory.to_owned(), install));
         }
         let scene = load_scene_bytes(
             &mut self.cached.as_mut().unwrap().1,
@@ -62,17 +81,26 @@ impl Publisher {
         options: ViewOptions,
     ) -> Result<[u32; 2]> {
         let scene = self.scene(bytes, directory)?;
-        let rect = scene.visual.bounds.unwrap_or(scene.bounds);
-        let size = if max_edge == 0 {
-            [rect.width().ceil() as u32, rect.height().ceil() as u32]
-        } else {
-            fit(rect, max_edge)
-        };
-        let rgba = scene.visual.raster(rect, size, options)?;
-        let img = image::RgbaImage::from_raw(size[0], size[1], rgba).context("导出图像尺寸无效")?;
-        write_png(&img, path)?;
-        Ok(size)
+        scene_png(&scene, path, max_edge, options)
     }
+}
+
+pub(crate) fn scene_png(
+    scene: &MapScene,
+    path: &Path,
+    max_edge: u32,
+    options: ViewOptions,
+) -> Result<[u32; 2]> {
+    let rect = scene.visual.bounds.unwrap_or(scene.bounds);
+    let size = if max_edge == 0 {
+        [rect.width().ceil() as u32, rect.height().ceil() as u32]
+    } else {
+        fit(rect, max_edge)
+    };
+    let rgba = scene.visual.raster(rect, size, options)?;
+    let img = image::RgbaImage::from_raw(size[0], size[1], rgba).context("导出图像尺寸无效")?;
+    write_png(&img, path)?;
+    Ok(size)
 }
 
 /// Generate the complete engine terrain preview used by the navigator.

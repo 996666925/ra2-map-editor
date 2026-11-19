@@ -1,16 +1,13 @@
 //! Read-only P0 adapter. Format parsing and palette semantics belong to core.
 
+use crate::map_resources::MapResources;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use anyhow::{Context, Result, bail, ensure};
 
 use serde::{Deserialize, Serialize};
-use vera20k_core::assets::{
-    asset_manager::{AssetManager, MediaArchiveMode},
-    shp_file::ShpFile,
-    tmp_file::TmpFile,
-};
+use vera20k_core::assets::{asset_manager::AssetManager, shp_file::ShpFile, tmp_file::TmpFile};
 use vera20k_core::map::theater::{self, TheaterData};
 
 /// Resource loading and isolated playtests share one launch choice. The Ares
@@ -22,14 +19,8 @@ pub const ARES_SETTING: vera20k_core::util::ares_launch::AresSetting =
         vera20k_core::util::ares_launch::AresSetting::Auto
     };
 
-fn open_manager(directory: &Path) -> Result<AssetManager> {
-    AssetManager::with_mod_and_ares(
-        directory,
-        None,
-        MediaArchiveMode::STOCK_DIGITAL,
-        ARES_SETTING,
-    )
-    .context("无法打开 YR 资源归档")
+pub fn open_manager(directory: &Path, resources: Option<&MapResources>) -> Result<AssetManager> {
+    crate::resource_view::ResourceView::open(directory, resources, &|| false)?.manager()
 }
 
 /// Read through the engine's selected INI dialect and include traversal.
@@ -115,7 +106,10 @@ pub struct PreviewAssets {
 
 pub struct Install {
     pub revision: std::sync::Arc<crate::profile::Revision>,
+    base_revision: crate::profile::Revision,
     directory: PathBuf,
+    resources: Option<MapResources>,
+    view: Option<std::sync::Arc<crate::resource_view::ResourceView>>,
     pub manager: AssetManager,
     pub theater: TheaterData,
     pub theater_name: String,
@@ -136,9 +130,13 @@ impl Install {
             AssetManager::from_ini_probe_root(directory).context("无法打开合成资源目录")?;
         let theater =
             theater::load_theater(&mut manager, "TEMPERATE").context("合成目录缺少温带资源")?;
+        let revision = crate::profile::Revision::scan(directory)?;
         Ok(Self {
-            revision: std::sync::Arc::new(crate::profile::Revision::scan(directory)?),
+            revision: std::sync::Arc::new(revision.clone()),
+            base_revision: revision,
             directory: directory.to_owned(),
+            resources: None,
+            view: None,
             manager,
             theater,
             theater_name: "TEMPERATE".into(),
@@ -154,23 +152,70 @@ impl Install {
         Self::open_controlled(directory, &|| false)
     }
     pub fn open_controlled(directory: &Path, cancelled: &dyn Fn() -> bool) -> Result<Self> {
+        Self::open_with_resources(directory, None, cancelled)
+    }
+    pub fn open_with_resources(
+        directory: &Path,
+        resources: Option<MapResources>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self> {
+        Self::open_with_resource_view(directory, resources, None, None, cancelled)
+    }
+
+    /// Rebuild a map-specific resource view while reusing the already verified
+    /// installation fingerprint. This is used when the map sidecar changes;
+    /// it avoids rereading every stock archive before the new view is built.
+    pub fn open_with_resources_from_revision(
+        directory: &Path,
+        resources: Option<MapResources>,
+        base_revision: crate::profile::Revision,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self> {
+        Self::open_with_resource_view(directory, resources, Some(base_revision), None, cancelled)
+    }
+
+    fn open_with_resource_view(
+        directory: &Path,
+        resources: Option<MapResources>,
+        base_revision: Option<crate::profile::Revision>,
+        reuse: Option<&Self>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self> {
         ensure!(!cancelled(), "resource load cancelled");
         ensure!(
             directory.is_dir(),
             "游戏目录不存在：{}",
             directory.display()
         );
-        let mut manager = open_manager(directory)?;
-        let theater = theater::load_theater(&mut manager, "TEMPERATE").context(
-            "无法加载 TEMPERATE；请检查 temperatmd.ini、isotem.pal、unittem.pal 和对应 MIX",
-        )?;
+        let view = std::sync::Arc::new(if let Some(base_revision) = base_revision {
+            crate::resource_view::ResourceView::with_base_revision(
+                directory,
+                resources.as_ref(),
+                base_revision,
+                cancelled,
+            )?
+        } else {
+            crate::resource_view::ResourceView::open(directory, resources.as_ref(), cancelled)?
+        });
+        let (manager, theater) = view.manager_and_theater("TEMPERATE").map_err(|error| {
+            error.context(
+                "无法加载 TEMPERATE；请检查 temperatmd.ini、isotem.pal、unittem.pal 和对应 MIX",
+            )
+        })?;
         ensure!(!cancelled(), "resource load cancelled");
-        let catalog = crate::catalog::Catalog::load(&manager, &theater);
+        let reusable =
+            reuse.filter(|old| catalog_inputs_equal(&old.manager, &manager, &old.theater_name));
+        let catalog = if let Some(old) = reusable {
+            old.catalog.clone()
+        } else {
+            crate::catalog::Catalog::load_with_art(&manager, &theater, None)?
+        };
         Ok(Self {
-            revision: std::sync::Arc::new(crate::profile::Revision::scan_controlled(
-                directory, cancelled,
-            )?),
+            revision: std::sync::Arc::new(view.revision.clone()),
+            base_revision: view.base_revision.clone(),
             directory: directory.to_owned(),
+            resources,
+            view: Some(view),
             manager,
             theater,
             theater_name: "TEMPERATE".into(),
@@ -180,6 +225,43 @@ impl Install {
             mission_resources: Default::default(),
             fixed_teams: Default::default(),
         })
+    }
+    pub fn map_resources(&self) -> Option<&MapResources> {
+        self.resources.as_ref()
+    }
+    pub fn base_revision(&self) -> &crate::profile::Revision {
+        &self.base_revision
+    }
+    pub fn reconfigure_map_resources(
+        &self,
+        resources: Option<MapResources>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self> {
+        let base_revision = crate::profile::Revision::scan_controlled(&self.directory, cancelled)?;
+        Self::open_with_resource_view(
+            &self.directory,
+            resources,
+            Some(base_revision),
+            Some(self),
+            cancelled,
+        )
+    }
+    /// Reconfigure only the map-local source selection. The caller already
+    /// owns the current installation revision, so avoid rescanning the game
+    /// directory; a full resource refresh remains available above when the
+    /// installation itself may have changed.
+    pub fn reconfigure_map_resources_reusing_base_revision(
+        &self,
+        resources: Option<MapResources>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self> {
+        Self::open_with_resource_view(
+            &self.directory,
+            resources,
+            Some(self.base_revision.clone()),
+            Some(self),
+            cancelled,
+        )
     }
     pub fn mission_resources(&self) -> std::sync::Arc<crate::mission_resources::MissionResources> {
         self.mission_resources
@@ -211,12 +293,18 @@ impl Install {
         if self.theater_name.eq_ignore_ascii_case(name) {
             return Ok(());
         }
-        let mut manager = open_manager(&self.directory)?;
-        let theater = theater::load_theater(&mut manager, name)
-            .with_context(|| format!("无法加载 {name} 环境资源"))?;
-        self.catalog = crate::catalog::Catalog::load(&manager, &theater);
+        let (manager, theater) = if let Some(view) = &self.view {
+            view.manager_and_theater(name)?
+        } else {
+            let mut manager = open_manager(&self.directory, self.resources.as_ref())?;
+            let theater = theater::load_theater(&mut manager, name)
+                .with_context(|| format!("无法加载 {name} 环境资源"))?;
+            (manager, theater)
+        };
+        self.catalog = crate::catalog::Catalog::load_with_art(&manager, &theater, None)?;
         self.manager = manager;
         self.fixed_teams = Default::default();
+        self.mission_resources.take();
         self.theater = theater;
         self.theater_name = name.to_ascii_uppercase();
         self.palette.take();
@@ -318,6 +406,45 @@ impl Install {
             tileset_slots: self.theater.lookup.len(),
         })
     }
+}
+
+fn catalog_inputs_equal(old: &AssetManager, new: &AssetManager, theater_name: &str) -> bool {
+    if old.ini_roots() != new.ini_roots() || old.ares_form() != new.ares_form() {
+        return false;
+    }
+    let names = [
+        old.ini_roots().rules(),
+        old.ini_roots().art(),
+        old.ini_roots().ai(),
+        old.ini_roots().sound(),
+        old.ini_roots().eva(),
+        "ra2md.csf",
+    ];
+    let control = match theater_name.to_ascii_uppercase().as_str() {
+        "TEMPERATE" => "temperat",
+        "SNOW" => "snow",
+        "URBAN" => "urban",
+        "NEWURBAN" => "urbann",
+        "DESERT" => "desert",
+        "LUNAR" => "lunar",
+        _ => return false,
+    };
+    let theater_ini = old.ini_roots().theater_ini(control);
+    let palettes = match control {
+        "temperat" => ["isotem.pal", "unittem.pal", "temperat.pal"],
+        "snow" => ["isosno.pal", "unitsno.pal", "snow.pal"],
+        "urban" => ["isourb.pal", "uniturb.pal", "urban.pal"],
+        "urbann" => ["isoubn.pal", "unitubn.pal", "urbann.pal"],
+        "desert" => ["isodes.pal", "unitdes.pal", "desert.pal"],
+        _ => ["isolun.pal", "unitlun.pal", "lunar.pal"],
+    };
+    names
+        .iter()
+        .all(|name| old.get_ref(name) == new.get_ref(name))
+        && old.get_ref(&theater_ini) == new.get_ref(&theater_ini)
+        && palettes
+            .iter()
+            .all(|name| old.get_ref(name) == new.get_ref(name))
 }
 
 pub struct LoadResult {

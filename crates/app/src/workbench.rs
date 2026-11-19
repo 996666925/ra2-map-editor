@@ -12,6 +12,10 @@ pub(super) struct Workbench {
     pub(super) task_overlay: crate::mission_overlay::MissionOverlay,
     pub(super) map_settings: crate::map_settings_ui::MapSettingsUi,
     pub(super) settings: bool,
+    resource_map: String,
+    resource_map_loaded: String,
+    resource_config: ra2_map_assets::map_resources::MapResources,
+    resource_error: String,
     pub(super) playtest: bool,
     pub(super) mission: crate::mission_ui::MissionUi,
     pub(super) mission_script: crate::mission_script_ui::ScriptUi,
@@ -94,6 +98,10 @@ impl MapView {
         self.workbench.overview_revision = None;
     }
     pub fn show_project_settings(&mut self) {
+        self.workbench.resource_map = self.name.clone();
+        self.workbench.resource_map_loaded.clear();
+        self.workbench.resource_config = Default::default();
+        self.workbench.resource_error.clear();
         self.workbench.settings = true;
     }
     pub fn show_new_map(&mut self) {
@@ -295,7 +303,7 @@ impl MapView {
                 ui.close();
             }
             if ui.button(tr!("游戏资源与地图来源…")).clicked() {
-                self.workbench.settings = true;
+                self.show_project_settings();
                 ui.close();
             }
             if ui.button(tr!("试玩配置…")).clicked() {
@@ -337,7 +345,7 @@ impl MapView {
                 .on_hover_text(tr!("发现可恢复的地图快照"))
                 .clicked()
         {
-            self.workbench.settings = true;
+            self.show_project_settings();
         }
         ui.separator();
         if theme::button(ui, Icon::Folder, tr!("打开"), 73., false)
@@ -801,6 +809,88 @@ impl MapView {
             };
         }
     }
+    fn map_resource_settings(&mut self, ui: &mut egui::Ui, directory: &str) {
+        use ra2_map_assets::map_resources::MapResources;
+
+        let workbench = &mut self.workbench;
+        ui.add(
+            egui::TextEdit::singleline(&mut workbench.resource_map)
+                .desired_width(f32::INFINITY)
+                .hint_text(tr!("例如 XMP03T4.MAP，或本地文件路径")),
+        );
+        let mut browse_map = false;
+        let mut load_map = false;
+        ui.horizontal(|ui| {
+            browse_map = ui.button(tr!("浏览地图…")).clicked();
+            load_map = ui
+                .add_enabled(
+                    !workbench.resource_map.trim().is_empty() && !directory.trim().is_empty(),
+                    theme::primary(tr!("加载地图")),
+                )
+                .clicked();
+        });
+        if browse_map
+            && let Some(path) = rfd::FileDialog::new()
+                .add_filter(tr!("YR 地图"), &["map", "mpr", "yrm", "mmx", "yro"])
+                .pick_file()
+        {
+            workbench.resource_map = path.display().to_string();
+        }
+        let name = workbench.resource_map.trim().to_owned();
+        let map = std::path::Path::new(&name);
+        let local_map = map.is_file();
+        let mut refresh = false;
+        if workbench.resource_map_loaded != name {
+            workbench.resource_map_loaded = name.clone();
+            workbench.resource_config = Default::default();
+            workbench.resource_error.clear();
+            if local_map {
+                match MapResources::read(map) {
+                    Ok(Some(resources)) => workbench.resource_config = resources,
+                    Ok(None) => {}
+                    Err(error) => workbench.resource_error = format!("{error:#}"),
+                }
+            }
+        }
+        if local_map {
+            theme::section(ui, tr!("地图附加素材"), "");
+            if ui.button(tr!("保存资源配置并刷新")).clicked() {
+                let result = if workbench.resource_config.is_empty() {
+                    MapResources::remove(map)
+                } else {
+                    workbench.resource_config.for_map(map).and_then(|config| {
+                        config.paths(std::path::Path::new(directory.trim()))?;
+                        config.write(map)
+                    })
+                };
+                match result {
+                    Ok(()) => {
+                        workbench.resource_error.clear();
+                        self.status = tr!("已保存地图素材路径。").into();
+                        refresh = map == std::path::Path::new(&self.name);
+                    }
+                    Err(error) => workbench.resource_error = format!("{error:#}"),
+                }
+            }
+            if let Err(error) = crate::resource_settings::show(ui, &mut workbench.resource_config) {
+                workbench.resource_error = format!("{error:#}");
+            }
+            if !workbench.resource_error.is_empty() {
+                ui.label(&workbench.resource_error);
+            }
+        }
+        if refresh {
+            let directory = PathBuf::from(directory.trim());
+            if self.editor.doc.is_some() {
+                self.refresh_map_resources(directory);
+            } else if !directory.as_os_str().is_empty() {
+                self.open(directory, name.clone());
+            }
+        }
+        if load_map {
+            self.open(PathBuf::from(directory.trim()), name);
+        }
+    }
     pub fn settings_windows(
         &mut self,
         ctx: &egui::Context,
@@ -977,56 +1067,54 @@ impl MapView {
                 ctx,
                 tr!("资源与地图来源"),
                 "project-settings",
-                egui::vec2(490., 420.),
+                egui::vec2(820., 660.),
             )
             .open(&mut open)
+            .min_size(egui::vec2(640., 420.).min(
+                (ctx.content_rect().size() - egui::vec2(50., 78.))
+                    .max(egui::vec2(240., 160.)),
+            ))
             .vscroll(true)
             .show(ctx, |ui| {
-                theme::section(ui, tr!("游戏资源目录"), "");
-                if let Some(scene)=&self.scene { ui.label(tr!("数据结构版本：{arg0}", arg0 = scene.revision.schema));ui.label(tr!("资源版本：{arg0} · {arg1} 文件", arg0 = scene.revision.resources, arg1 = scene.revision.files)); }
-                ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(!self.loading && self.editor.doc.is_some(),egui::Button::new(tr!("刷新当前资源（保留地图）"))).clicked() { self.refresh_resources(PathBuf::from(directory.trim())); }
-                    if ui.button(tr!("载入模组配置…")).clicked() && let Some(path)=rfd::FileDialog::new().add_filter(tr!("模组配置"), &["json"]).pick_file() {
-                        match ra2_map_assets::profile::Profile::read(&path) {
-                            Ok(p)=>{*directory=p.game_dir.display().to_string();if let Some(exe)=p.playtest_exe{self.editor.executable=exe.display().to_string();}self.refresh_resources(p.game_dir);},
-                            Err(e)=>self.status=format!("{e:#}"),
-                        }
-                    }
-                });
-                ui.small(tr!("刷新重读归档、类型与任务资源；同环境跨模组剪贴板会按版本检查。保存和试玩记录资源与数据结构版本。"));
-
+                ui.label(tr!("游戏资源目录"));
                 if theme::path_entry(ui, directory, tr!("包含 ra2.mix 与 ra2md.mix 的目录"), tr!("浏览…"))
                     && let Some(path) = rfd::FileDialog::new().pick_folder()
                 {
                     *directory = path.display().to_string();
                 }
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(
-                            !self.name.trim().is_empty() && !directory.trim().is_empty(),
-                            egui::Button::new(tr!("应用并重载")),
-                        )
-                        .clicked()
-                    {
-                        self.open(PathBuf::from(directory.trim()), self.name.clone());
+                if ui.add_enabled(
+                    !self.name.trim().is_empty() && !directory.trim().is_empty(),
+                    egui::Button::new(tr!("应用并重载")),
+                ).clicked() {
+                    self.open(PathBuf::from(directory.trim()), self.name.clone());
+                }
+                ui.collapsing(tr!("游戏资源维护"), |ui| {
+                    if let Some(scene) = &self.scene {
+                        ui.label(tr!("数据结构版本：{arg0}", arg0 = scene.revision.schema));
+                        ui.label(tr!("资源版本：{arg0} · {arg1} 文件", arg0 = scene.revision.resources, arg1 = scene.revision.files));
                     }
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.add_enabled(!self.loading && self.editor.doc.is_some(), egui::Button::new(tr!("刷新当前资源（保留地图）"))).clicked() {
+                            self.refresh_resources(PathBuf::from(directory.trim()));
+                        }
+                        if ui.button(tr!("载入模组配置…")).clicked()
+                            && let Some(path) = rfd::FileDialog::new().add_filter(tr!("模组配置"), &["json"]).pick_file()
+                        {
+                            match ra2_map_assets::profile::Profile::read(&path) {
+                                Ok(p) => {
+                                    *directory = p.game_dir.display().to_string();
+                                    if let Some(exe) = p.playtest_exe { self.editor.executable = exe.display().to_string(); }
+                                    self.refresh_resources(p.game_dir);
+                                }
+                                Err(e) => self.status = format!("{e:#}"),
+                            }
+                        }
+                    });
+                    ui.small(tr!("刷新重读归档、类型与任务资源；同环境跨模组剪贴板会按版本检查。保存和试玩记录资源与数据结构版本。"));
                 });
                 ui.separator();
                 theme::section(ui, tr!("地图路径或归档名称"), "");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.name)
-                        .desired_width(f32::INFINITY)
-                        .hint_text(tr!("例如 XMP03T4.MAP，或本地文件路径")),
-                );
-                if ui
-                    .add_enabled(
-                        !self.name.trim().is_empty() && !directory.trim().is_empty(),
-                        theme::primary(tr!("加载地图")),
-                    )
-                    .clicked()
-                {
-                    self.open(PathBuf::from(directory.trim()), self.name.clone());
-                }
+                self.map_resource_settings(ui, directory);
                 if !self.editor.recoveries.is_empty() {
                     ui.separator();
                     theme::section(ui, tr!("恢复未保存地图"), "");

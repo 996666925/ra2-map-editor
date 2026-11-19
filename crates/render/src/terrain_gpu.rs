@@ -41,6 +41,34 @@ fn pack_pixels(
     Ok((rgba, depth))
 }
 
+fn atlas_layout(
+    images: &HashMap<TileKey, TileImage>,
+    keys: &[TileKey],
+    width: u32,
+    limit: u32,
+) -> Option<(HashMap<TileKey, [u32; 2]>, u32)> {
+    let mut placements = HashMap::with_capacity(keys.len());
+    let (mut column, mut top, mut row) = (0, 0, 0);
+    for &key in keys {
+        let image = &images[&key];
+        if image.width > width || image.height > limit {
+            return None;
+        }
+        if column + image.width > width {
+            column = 0;
+            top += row;
+            row = 0;
+        }
+        if top + image.height > limit {
+            return None;
+        }
+        placements.insert(key, [column, top]);
+        column += image.width;
+        row = row.max(image.height);
+    }
+    Some((placements, (top + row).max(1)))
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Instance {
@@ -209,33 +237,17 @@ impl TerrainGpu {
             .get_or_insert_with(|| Arc::new(TerrainPipelines::new(device, format)))
             .clone();
         let limit = device.limits().max_texture_dimension_2d.min(8192);
-        let width = limit.min(2048);
-        let mut x = 0;
-        let mut y = 0;
-        let mut row = 0;
-        let mut placements = std::collections::HashMap::new();
         let mut keys: Vec<_> = scene.images.keys().copied().collect();
         keys.sort_by_key(|k| (k.tile_id, k.sub_tile, k.variant));
-        for key in keys {
-            let image = &scene.images[&key];
-            ensure!(
-                image.width <= width && image.height <= limit,
-                "TMP 超过图集尺寸"
-            );
-            if x + image.width > width {
-                x = 0;
-                y += row;
-                row = 0;
-            }
-            ensure!(
-                y + image.height <= limit,
-                "地形图集超过 {width}×{limit} 预算"
-            );
-            placements.insert(key, [x, y]);
-            x += image.width;
-            row = row.max(image.height);
-        }
-        let height = (y + row).max(1);
+        let (width, placements, height) = [2048, 4096, 8192]
+            .into_iter()
+            .filter(|&width| width <= limit)
+            .chain(std::iter::once(limit))
+            .find_map(|width| {
+                atlas_layout(&scene.images, &keys, width, limit)
+                    .map(|(placements, height)| (width, placements, height))
+            })
+            .ok_or_else(|| anyhow::anyhow!("地形图集超过 {limit}×{limit} 预算"))?;
         let texture = |label, format| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),

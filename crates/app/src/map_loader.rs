@@ -2,6 +2,7 @@
 use anyhow::{Context, Result};
 use eframe::{egui, egui_wgpu};
 use ra2_map_assets::assets::Install;
+use ra2_map_assets::map_resources::MapResources;
 use ra2_map_render::terrain_gpu::{TerrainGpu, TerrainPipelines};
 use ra2_map_scene::map::{MapScene, load_scene_bytes_controlled, load_scene_controlled};
 use serde::Serialize;
@@ -9,7 +10,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU8, AtomicU64, Ordering},
         mpsc,
     },
     time::Instant,
@@ -54,7 +55,7 @@ pub struct LoadProgress {
     pub stage: &'static str,
 }
 pub struct MapLoader {
-    refresh: Arc<std::sync::atomic::AtomicBool>,
+    refresh: Arc<AtomicU8>,
     requests: mpsc::Sender<MapRequest>,
     pub results: mpsc::Receiver<MapResult>,
     pub progress: mpsc::Receiver<LoadProgress>,
@@ -67,6 +68,7 @@ struct MapRequest {
     snapshot: Option<crate::document::Snapshot>,
     new_map: Option<MapCreation>,
     profile: ra2_map_document::lighting::Profile,
+    reuse_base_revision: bool,
 }
 impl MapLoader {
     #[cfg(test)]
@@ -82,7 +84,7 @@ impl MapLoader {
         let (progress_tx, progress) = mpsc::channel();
         let latest = Arc::new(AtomicU64::new(0));
         let current = latest.clone();
-        let refresh = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let refresh = Arc::new(AtomicU8::new(0));
         let refresh_worker = refresh.clone();
         std::thread::Builder::new()
             .name("map-loader".into())
@@ -95,7 +97,7 @@ impl MapLoader {
                     for newer in rx.try_iter() {
                         request = newer;
                     }
-                    let MapRequest {generation, directory, name, snapshot, new_map,profile} = request;
+                    let MapRequest {generation, directory, name, snapshot, new_map,profile,reuse_base_revision} = request;
                     let created = new_map.is_some();
                     let saved_snapshot = snapshot.clone();
                     let cancelled=||current.load(Ordering::Acquire)!=generation;
@@ -109,10 +111,34 @@ impl MapLoader {
                     };
                     stage("读取游戏资源…");
                     let result = (|| {
-                        if refresh_worker.swap(false, Ordering::AcqRel) { cached = None; previous=None; previous_gpu=None; }
+                        let invalidation = refresh_worker.swap(0, Ordering::AcqRel);
+                        if invalidation == 2 { cached = None; previous=None; previous_gpu=None; }
+                        let resources = if new_map.is_none() {
+                            MapResources::read(std::path::Path::new(&name))?
+                        } else {
+                            None
+                        };
                         if cached.as_ref().is_none_or(|(path, _)| path != &directory) {
                             cached = None; previous=None; previous_gpu=None;
-                            cached = Some((directory.clone(), Install::open_controlled(&directory,&cancelled)?));
+                            let install = Install::open_with_resources(&directory, resources, &cancelled)?;
+                            cached = Some((directory.clone(), install));
+                        } else if invalidation == 1 && cached.as_ref().is_some_and(|(_, install)| {
+                            install.map_resources() == resources.as_ref()
+                        }) {
+                            // The save button may be pressed without changing
+                            // the sidecar. Keep the current install and scene.
+                        } else if invalidation == 1 || cached.as_ref().is_some_and(|(_, install)| {
+                            install.map_resources() != resources.as_ref()
+                        }) {
+                            let install = if reuse_base_revision {
+                                cached.as_ref().unwrap().1.reconfigure_map_resources_reusing_base_revision(resources, &cancelled)?
+                            } else if invalidation == 1 {
+                                cached.as_ref().unwrap().1.reconfigure_map_resources(resources, &cancelled)?
+                            } else {
+                                Install::open_with_resources(&directory, resources, &cancelled)?
+                            };
+                            cached = Some((directory.clone(), install));
+                            previous=None; previous_gpu=None;
                         }
                         timings.resources_ms = started.elapsed().as_secs_f64()*1000.;
                         stage("解析地图与地形图像…");
@@ -188,7 +214,10 @@ impl MapLoader {
         })
     }
     pub fn invalidate_resources(&self) {
-        self.refresh.store(true, Ordering::Release);
+        self.refresh.store(2, Ordering::Release);
+    }
+    pub fn invalidate_map_resources(&self) {
+        self.refresh.fetch_max(1, Ordering::AcqRel);
     }
     pub fn cancel(&self, generation: u64) {
         self.latest.store(generation, Ordering::Release);
@@ -203,6 +232,7 @@ impl MapLoader {
                 snapshot: None,
                 new_map: None,
                 profile: Default::default(),
+                reuse_base_revision: false,
             })
             .context("地图线程已退出")
     }
@@ -214,6 +244,27 @@ impl MapLoader {
         snapshot: crate::document::Snapshot,
         profile: ra2_map_document::lighting::Profile,
     ) -> Result<()> {
+        self.preview_profile_inner(generation, directory, name, snapshot, profile, false)
+    }
+    pub fn preview_profile_reusing_base_revision(
+        &self,
+        generation: u64,
+        directory: PathBuf,
+        name: String,
+        snapshot: crate::document::Snapshot,
+        profile: ra2_map_document::lighting::Profile,
+    ) -> Result<()> {
+        self.preview_profile_inner(generation, directory, name, snapshot, profile, true)
+    }
+    fn preview_profile_inner(
+        &self,
+        generation: u64,
+        directory: PathBuf,
+        name: String,
+        snapshot: crate::document::Snapshot,
+        profile: ra2_map_document::lighting::Profile,
+        reuse_base_revision: bool,
+    ) -> Result<()> {
         self.latest.store(generation, Ordering::Release);
         self.requests
             .send(MapRequest {
@@ -223,6 +274,7 @@ impl MapLoader {
                 snapshot: Some(snapshot),
                 new_map: None,
                 profile,
+                reuse_base_revision,
             })
             .context("地图线程已退出")
     }
@@ -237,6 +289,7 @@ impl MapLoader {
                 snapshot: None,
                 new_map: Some(options),
                 profile: Default::default(),
+                reuse_base_revision: false,
             })
             .context("地图线程已退出")
     }

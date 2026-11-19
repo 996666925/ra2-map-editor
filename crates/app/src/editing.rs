@@ -622,6 +622,7 @@ impl Editor {
             };
             match self.io.send(Job::Save {
                 directory: Some(self.directory.clone()),
+                source: self.target.clone(),
                 snapshot: doc.snapshot(),
                 path,
                 expected,
@@ -648,6 +649,7 @@ impl Editor {
                 snapshot: doc.snapshot(),
                 exe: PathBuf::from(&self.executable),
                 directory: self.directory.clone(),
+                source: self.target.clone(),
                 root: self.io.root.clone(),
             }) {
                 Ok(()) => self.launching = true,
@@ -886,6 +888,7 @@ impl Editor {
             match self.io.send(Job::ExportHdPreview {
                 snapshot: doc.snapshot(),
                 directory: self.directory.clone(),
+                source: self.target.clone(),
                 path,
                 exe: PathBuf::from(&self.executable),
             }) {

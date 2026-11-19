@@ -1,4 +1,5 @@
 //! Run VERA's tactical map-picture renderer on an isolated authoring snapshot.
+use crate::editor_io::SessionResources;
 use anyhow::{Context, Result, ensure};
 use std::{
     fs,
@@ -14,22 +15,25 @@ pub fn export(
     root: &Path,
     path: &Path,
 ) -> Result<[u32; 2]> {
+    let resources = SessionResources::read(directory, None, None)?;
+    export_with_resources(bytes, exe, &resources, root, path)
+}
+
+pub(crate) fn export_with_resources(
+    bytes: &[u8],
+    exe: &Path,
+    resources: &SessionResources,
+    root: &Path,
+    path: &Path,
+) -> Result<[u32; 2]> {
     crate::editor_io::validate(bytes)?;
     let exe = fs::canonicalize(exe)
         .context("VERA20k 可执行文件不存在；请在试玩设置中选择支持 --map-picture 的版本")?;
-    let directory = fs::canonicalize(directory).context("游戏资源目录不存在")?;
-    let revision = ra2_map_assets::profile::Revision::scan(&directory)?;
-    let resources = crate::mission_script::playtest_payload(bytes, &directory, &revision.id())?;
     let folder = root.join("map-pictures").join(crate::editor_io::unique());
     fs::create_dir_all(&folder)?;
     let folder = fs::canonicalize(folder)?;
     let result = (|| {
-        let game_dir = crate::editor_io::prepare_playtest_files(
-            &folder,
-            &directory,
-            resources,
-            &Default::default(),
-        )?;
+        let game_dir = resources.prepare(bytes, &folder, &Default::default())?;
         let map = folder.join("snapshot.map");
         let output = folder.join("picture.png");
         fs::write(&map, bytes)?;
@@ -46,7 +50,7 @@ pub fn export(
             .arg("--max-size")
             .arg("4096x4096")
             .current_dir(&folder)
-            .env("RA2_DIR", game_dir)
+            .env("RA2_DIR", game_dir.directory)
             .stdin(Stdio::null())
             .stdout(fs::File::create(folder.join("stdout.log"))?)
             .stderr(fs::File::create(folder.join("stderr.log"))?);

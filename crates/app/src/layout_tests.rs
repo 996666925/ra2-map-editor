@@ -24,6 +24,7 @@ pub(super) fn view() -> (MapView, PathBuf) {
         loader: MapLoader::new(ctx).unwrap(),
         generation: 0,
         loading: false,
+        map_resources_refresh: false,
         error: None,
         name: String::new(),
         scene: None,
@@ -2040,4 +2041,75 @@ fn all_workbench_panel_layouts_fit_desktop_and_compact_viewports() {
         drop(view);
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+#[test]
+fn resource_settings_window_keeps_path_rows_wide_after_viewport_resize() {
+    use ra2_map_assets::map_resources::{MapResources, ResourcePath};
+    let (mut view, root) = view();
+    let map = root.join("resource-layout.map");
+    std::fs::write(&map, b"[Map]\n").unwrap();
+    MapResources {
+        directories: vec![ResourcePath::map(root.canonicalize().unwrap())],
+        ..Default::default()
+    }
+    .write(&map)
+    .unwrap();
+    view.name = map.display().to_string();
+    view.show_project_settings();
+    let mut directory = String::from("D:/YR");
+    let mut harness = crate::test_support::harness()
+        .with_context_setup(setup)
+        .with_size([1280., 800.])
+        .build_ui(|ui| view.settings_dialogs(ui.ctx(), &mut directory));
+    for size in [[1280., 800.], [900., 600.], [1280., 800.]] {
+        harness.set_size(size.into());
+        harness.run();
+        let dialog = harness
+            .ctx
+            .memory(|m| m.area_rect(egui::Id::unique("project-settings")))
+            .unwrap();
+        let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, size.into());
+        assert!(
+            bounds.contains_rect(dialog),
+            "settings outside viewport: {dialog:?}"
+        );
+        assert!(
+            dialog.width() >= 640.,
+            "remembered settings width is too small: {dialog:?}"
+        );
+        let add = harness
+            .get_by_label(crate::i18n::text("导入资源配置…"))
+            .rect();
+        assert!(
+            dialog.contains_rect(add),
+            "resource actions outside dialog: {add:?}"
+        );
+        let path = harness
+            .get(
+                egui_kittest::kittest::By::new()
+                    .role(egui::accesskit::Role::TextInput)
+                    .value(&root.canonicalize().unwrap().display().to_string()),
+            )
+            .rect();
+        assert!(path.width() > 570., "path row squeezed: {path:?}");
+        assert!(
+            dialog.contains_rect(path),
+            "path field outside dialog: {path:?}"
+        );
+        #[cfg(feature = "ui-test-video")]
+        {
+            let output =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/resource-settings-layout");
+            std::fs::create_dir_all(&output).unwrap();
+            harness
+                .render()
+                .unwrap()
+                .save(output.join(format!("settings-{}.png", size[0])))
+                .unwrap();
+        }
+    }
+    drop(harness);
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
 }

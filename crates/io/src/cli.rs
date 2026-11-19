@@ -220,6 +220,9 @@ fn check_paths(args: &Args) -> Result<()> {
     let mut inputs = Vec::new();
     for name in &args.maps {
         inputs.push(path_identity(Path::new(name))?);
+        inputs.push(path_identity(
+            &ra2_map_assets::map_resources::MapResources::sidecar(Path::new(name)),
+        )?);
         if Path::new(name).components().count() == 1 {
             inputs.push(path_identity(
                 &args.preset.game_dir.as_ref().unwrap().join(name),
@@ -252,6 +255,9 @@ fn check_paths(args: &Args) -> Result<()> {
             let path = output_path(args, name)?;
             check(&path)?;
             check(&crate::provenance::sidecar(&path))?;
+            if args.command == "publish" {
+                check(&ra2_map_assets::map_resources::MapResources::sidecar(&path))?;
+            }
             if args.command == "export" {
                 check(&path.with_extension("png.tmp"))?;
             }
@@ -352,7 +358,11 @@ fn run_map(args: &Args, install: &mut Install, name: &str) -> Result<MapReport> 
         ensure!(!scene.images.is_empty(), "no renderable terrain");
         let path = output_path(args, name)?;
         ensure!(
-            args.overwrite || (!path.exists() && !crate::provenance::sidecar(&path).exists()),
+            args.overwrite
+                || (!path.exists()
+                    && !crate::provenance::sidecar(&path).exists()
+                    && (args.command != "publish"
+                        || !ra2_map_assets::map_resources::MapResources::sidecar(&path).exists())),
             "output already exists: {}",
             path.display()
         );
@@ -388,7 +398,13 @@ fn run_map(args: &Args, install: &mut Install, name: &str) -> Result<MapReport> 
         } else {
             let bytes = crate::publication::embed_scene_preview(&scene)?;
             crate::editor_io::validate(&bytes)?;
-            crate::editor_io::replace_map(&path, &bytes, crate::editor_io::Stamp::file(&path)?)?;
+            crate::editor_io::replace_map_with_resources(
+                &path,
+                &bytes,
+                crate::editor_io::Stamp::file(&path)?,
+                install.map_resources(),
+                true,
+            )?;
             crate::provenance::write(
                 &crate::provenance::sidecar(&path),
                 &bytes,
@@ -476,7 +492,20 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<Option<i32>>
         let mut install = Install::open(args.preset.game_dir.as_ref().unwrap())?;
         report.profile = Some((*install.revision).clone());
         for name in &args.maps {
-            report.maps.push(match run_map(&args, &mut install, name) {
+            let result = (|| {
+                use ra2_map_assets::map_resources::MapResources;
+                if let Some(resources) = MapResources::read(Path::new(name))? {
+                    let mut scoped = Install::open_with_resources(
+                        args.preset.game_dir.as_ref().unwrap(),
+                        Some(resources),
+                        &|| false,
+                    )?;
+                    run_map(&args, &mut scoped, name)
+                } else {
+                    run_map(&args, &mut install, name)
+                }
+            })();
+            report.maps.push(match result {
                 Ok(map) => map,
                 Err(e) => MapReport {
                     input: name.clone(),
