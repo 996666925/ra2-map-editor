@@ -4,6 +4,7 @@ use crate::i18n::tr;
 use crate::new_map::{MAX_MAP_DIMENSION, MAX_MAP_SPAN, MAX_PLAYERS, MIN_MAP_DIMENSION};
 use crate::ui_theme::{self as theme, Icon};
 use egui::RichText;
+use ra2_map_document::document::{Snapshot, Target, Value};
 #[derive(Default)]
 pub(super) struct Workbench {
     pub(super) management: map_management::MapManagement,
@@ -29,9 +30,78 @@ pub(super) struct Workbench {
     overview: Option<egui::TextureHandle>,
     pub(super) overview_bounds: Option<egui::Rect>,
     overview_revision: Option<u64>,
+    overview_snapshot: Option<Snapshot>,
     pub(super) canvas_extent: Option<egui::Vec2>,
     pub(super) canvas_rect: Option<egui::Rect>,
     pub(super) overview_rect: Option<egui::Rect>,
+}
+
+impl Workbench {
+    pub(super) fn overview_scene_changed(&mut self, previous: Option<&MapScene>, next: &MapScene) {
+        if previous.is_none_or(|previous| !ra2_map_scene::radar::shares_terrain(previous, next)) {
+            self.overview = None;
+            self.overview_bounds = None;
+            self.overview_revision = None;
+            self.overview_snapshot = None;
+        }
+    }
+
+    fn update_overview(
+        &mut self,
+        ctx: &egui::Context,
+        scene: &MapScene,
+        editor: &crate::editing::Editor,
+    ) -> Result<()> {
+        if self.overview_revision == Some(editor.visual_revision) {
+            return Ok(());
+        }
+        let snapshot = editor.doc.as_ref().map(|doc| doc.snapshot());
+        let reuse = self
+            .overview_snapshot
+            .as_ref()
+            .zip(snapshot.as_ref())
+            .is_some_and(|(previous, next)| same_overview_inputs(previous, next));
+        if !reuse {
+            let radar = ra2_map_scene::radar::render(scene, editor.doc.as_ref())?;
+            self.overview_bounds = Some(radar.bounds);
+            self.overview =
+                Some(ctx.load_texture("map-navigator", radar.image, egui::TextureOptions::NEAREST));
+        }
+        self.overview_revision = Some(editor.visual_revision);
+        self.overview_snapshot = snapshot;
+        Ok(())
+    }
+}
+
+fn same_overview_inputs(previous: &Snapshot, next: &Snapshot) -> bool {
+    fn ignored(snapshot: &Snapshot, target: &Target, id: u64) -> bool {
+        let original = snapshot.base.records.get(&id);
+        let record = match snapshot.changes.get(target) {
+            Some(Some(Value::Record(record))) => Some(record),
+            Some(None) => None,
+            Some(Some(_)) => return false,
+            None => original,
+        };
+        record.is_none_or(|record| {
+            matches!(
+                record.section.as_str(),
+                "Units" | "Infantry" | "Aircraft" | "Structures" | "Smudge"
+            ) && original.map_or_else(
+                || !record.key.is_empty() && record.key.bytes().all(|byte| byte.is_ascii_digit()),
+                |original| original.section == record.section && original.key == record.key,
+            )
+        })
+    }
+
+    previous.document_id == next.document_id
+        && next
+            .changed_targets_since(previous)
+            .is_some_and(|mut targets| {
+                targets.all(|target| {
+                    matches!(target, Target::Record(id)
+                    if ignored(previous, target, *id) && ignored(next, target, *id))
+                })
+            })
 }
 
 fn navigator_point(bounds: egui::Rect, rect: egui::Rect, pointer: egui::Pos2) -> egui::Pos2 {
@@ -91,11 +161,6 @@ impl MapView {
     }
     pub(super) fn overview_texture_id(&self) -> Option<egui::TextureId> {
         self.workbench.overview.as_ref().map(|texture| texture.id())
-    }
-    pub(super) fn reset_overview(&mut self) {
-        self.workbench.overview = None;
-        self.workbench.overview_bounds = None;
-        self.workbench.overview_revision = None;
     }
     pub fn show_project_settings(&mut self) {
         self.workbench.resource_map = self.name.clone();
@@ -626,23 +691,12 @@ impl MapView {
     fn overview(&mut self, ui: &mut egui::Ui) {
         let Some(scene) = &self.scene else { return };
         theme::section(ui, tr!("地图导航"), "");
-        if self.workbench.overview.is_none()
-            || self.workbench.overview_revision != Some(self.editor.visual_revision)
+        if let Err(error) = self
+            .workbench
+            .update_overview(ui.ctx(), scene, &self.editor)
         {
-            let radar = match ra2_map_scene::radar::render(scene, self.editor.doc.as_ref()) {
-                Ok(radar) => radar,
-                Err(error) => {
-                    ui.small(error.to_string());
-                    return;
-                }
-            };
-            self.workbench.overview_revision = Some(self.editor.visual_revision);
-            self.workbench.overview_bounds = Some(radar.bounds);
-            self.workbench.overview = Some(ui.ctx().load_texture(
-                "map-navigator",
-                radar.image,
-                egui::TextureOptions::NEAREST,
-            ));
+            ui.small(error.to_string());
+            return;
         }
         let bounds = self.workbench.overview_bounds.unwrap_or(scene.bounds);
         let width = ui.available_width();
@@ -1202,8 +1256,235 @@ impl MapView {
 
 #[cfg(test)]
 mod tests {
-    use super::navigator_point;
+    use super::{Workbench, navigator_point, same_overview_inputs};
+    use crate::document::{Target, Value};
     use eframe::egui;
+
+    #[test]
+    fn navigator_reuses_the_texture_across_unit_edits_and_scene_publication() {
+        use ra2_map_assets::test_support::Fixture;
+        use ra2_map_document::lighting::Profile;
+        use ra2_map_scene::{map::load_scene_bytes, radar, work::update_records};
+        use std::{sync::Arc, time::Instant};
+
+        let fixture = Fixture::new();
+        let mut install = fixture.install();
+        let mut scene = load_scene_bytes(
+            &mut install,
+            "navigator.map",
+            "fixture".into(),
+            crate::new_map::NewMapOptions {
+                width: 20,
+                height: 20,
+                ..Default::default()
+            }
+            .bytes()
+            .unwrap(),
+            Instant::now(),
+        )
+        .unwrap();
+        let (mut editor, ctx, root) = crate::editing::tests::editor();
+        editor.attach(&scene);
+        let mut workbench = Workbench::default();
+        workbench.update_overview(&ctx, &scene, &editor).unwrap();
+        let mut published = editor.doc.as_ref().unwrap().snapshot();
+        let publish = |workbench: &mut Workbench,
+                       editor: &mut crate::editing::Editor,
+                       scene: &mut super::MapScene,
+                       install: &mut crate::assets::Install,
+                       published: &mut crate::document::Snapshot| {
+            let next = editor.doc.as_ref().unwrap().snapshot();
+            let updated =
+                update_records(scene, published, &next, install, Profile::Normal, &|| false)
+                    .unwrap()
+                    .unwrap();
+            assert!(!Arc::ptr_eq(&scene.visual, &updated.visual));
+            editor.cache(&updated);
+            workbench.overview_scene_changed(Some(scene), &updated);
+            workbench.update_overview(&ctx, &updated, editor).unwrap();
+            *scene = updated;
+            *published = next;
+        };
+        let texture = workbench.overview.as_ref().unwrap().id();
+        let before = radar::render(&scene, editor.doc.as_ref()).unwrap();
+        let doc = editor.doc.as_mut().unwrap();
+        let id = doc
+            .add_record("Units", [20, 20], "Neutral", "HTNK")
+            .unwrap();
+        editor.commit(&scene, "place unit");
+        workbench.update_overview(&ctx, &scene, &editor).unwrap();
+        assert_eq!(workbench.overview.as_ref().unwrap().id(), texture);
+        publish(
+            &mut workbench,
+            &mut editor,
+            &mut scene,
+            &mut install,
+            &mut published,
+        );
+        let doc = editor.doc.as_mut().unwrap();
+        let moved = doc.record(id).unwrap().moved([21, 20]).unwrap();
+        doc.set(Target::Record(id), Some(Value::Record(moved)))
+            .unwrap();
+        editor.commit(&scene, "move unit");
+        workbench.update_overview(&ctx, &scene, &editor).unwrap();
+        assert_eq!(workbench.overview.as_ref().unwrap().id(), texture);
+        publish(
+            &mut workbench,
+            &mut editor,
+            &mut scene,
+            &mut install,
+            &mut published,
+        );
+        for redo in [false, true] {
+            editor.history(redo, &scene);
+            publish(
+                &mut workbench,
+                &mut editor,
+                &mut scene,
+                &mut install,
+                &mut published,
+            );
+            assert_eq!(workbench.overview.as_ref().unwrap().id(), texture);
+        }
+        let after = radar::render(&scene, editor.doc.as_ref()).unwrap();
+        assert_eq!(before.image, after.image);
+        assert_eq!(before.bounds, after.bounds);
+
+        let doc = editor.doc.as_mut().unwrap();
+        let (waypoint_id, mut waypoint) = doc
+            .record_iter()
+            .find(|(_, record)| record.section == "Waypoints" && record.key == "0")
+            .map(|(id, record)| (id, record.clone()))
+            .unwrap();
+        let old_cell = waypoint.cell().unwrap();
+        waypoint = waypoint.moved([old_cell[0] + 2, old_cell[1]]).unwrap();
+        doc.set(Target::Record(waypoint_id), Some(Value::Record(waypoint)))
+            .unwrap();
+        editor.commit(&scene, "move start");
+        workbench.update_overview(&ctx, &scene, &editor).unwrap();
+        let waypoint_texture = workbench.overview.as_ref().unwrap().id();
+        assert_ne!(waypoint_texture, texture);
+        let after = radar::render(&scene, editor.doc.as_ref()).unwrap();
+        assert_ne!(before.image, after.image);
+        publish(
+            &mut workbench,
+            &mut editor,
+            &mut scene,
+            &mut install,
+            &mut published,
+        );
+        assert_eq!(workbench.overview.as_ref().unwrap().id(), waypoint_texture);
+
+        let doc = editor.doc.as_mut().unwrap();
+        doc.set(Target::Overlay([20, 20]), Some(Value::Overlay(0, 1)))
+            .unwrap();
+        editor.commit(&scene, "overlay");
+        workbench.update_overview(&ctx, &scene, &editor).unwrap();
+        let overlay_texture = workbench.overview.as_ref().unwrap().id();
+        assert_ne!(overlay_texture, waypoint_texture);
+        publish(
+            &mut workbench,
+            &mut editor,
+            &mut scene,
+            &mut install,
+            &mut published,
+        );
+        assert_ne!(workbench.overview.as_ref().unwrap().id(), overlay_texture);
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn navigator_rebuilds_for_terrain_records_unknown_edits_and_document_replacement() {
+        let scene = crate::editing::tests::terrain_scene();
+        let base = scene.source.edit_base.as_ref().unwrap();
+        let mut doc = crate::document::MapDocument::new(base.clone());
+        let before = doc.snapshot();
+        assert!(!same_overview_inputs(
+            &before,
+            &crate::document::MapDocument::new(base.clone()).snapshot()
+        ));
+        doc.add_record("Terrain", [20, 20], "Neutral", "TREE01")
+            .unwrap();
+        let with_tree = doc.snapshot();
+        assert!(!same_overview_inputs(&before, &with_tree));
+        assert!(!same_overview_inputs(&with_tree, &before));
+        doc.set_ini("Events", "TRIGGER", Some(b"1,13,0,2".to_vec()))
+            .unwrap();
+        assert!(!same_overview_inputs(&with_tree, &doc.snapshot()));
+    }
+
+    #[test]
+    #[ignore = "requires RA2_MAP_UI_PROFILE_MAP and local game assets"]
+    fn real_map_navigator_edit_profile() {
+        use std::{path::PathBuf, time::Instant};
+
+        let map = std::env::var("RA2_MAP_UI_PROFILE_MAP").unwrap();
+        let directory = PathBuf::from(std::env::var_os("RA2_MAP_UI_PROFILE_GAME").unwrap());
+        let output = PathBuf::from(std::env::var_os("RA2_MAP_UI_PROFILE_OUTPUT").unwrap());
+        let mut install = crate::assets::Install::open(&directory).unwrap();
+        let scene = ra2_map_scene::map::load_scene(&mut install, &map).unwrap();
+        let (mut editor, ctx, root) = crate::editing::tests::editor();
+        editor.attach(&scene);
+        let doc = editor.doc.as_mut().unwrap();
+        let (first, second) = scene
+            .cells
+            .iter()
+            .filter(|cell| scene.is_playable(cell))
+            .find_map(|cell| {
+                let first = [cell.rx, cell.ry];
+                let second = [cell.rx + 1, cell.ry];
+                doc.terrain(first)?;
+                doc.terrain(second)?;
+                Some((first, second))
+            })
+            .expect("two adjacent terrain cells");
+        let id = doc.add_record("Units", first, "Neutral", "HTNK").unwrap();
+        let record = doc.record(id).unwrap().clone();
+        editor.commit(&scene, "place unit");
+        let mut workbench = Workbench::default();
+        let started = Instant::now();
+        workbench.update_overview(&ctx, &scene, &editor).unwrap();
+        let initial_ms = started.elapsed().as_secs_f64() * 1000.;
+        let mut edits_ms = Vec::new();
+        let mut texture_rebuilds = 0;
+        for index in 0..7 {
+            let at = if index % 2 == 0 { second } else { first };
+            editor
+                .doc
+                .as_mut()
+                .unwrap()
+                .set(
+                    Target::Record(id),
+                    Some(Value::Record(record.moved(at).unwrap())),
+                )
+                .unwrap();
+            editor.commit(&scene, "move unit");
+            assert_eq!(
+                editor.doc.as_ref().unwrap().record(id).unwrap().cell(),
+                Some(at)
+            );
+            let previous = workbench.overview.as_ref().unwrap().id();
+            let started = Instant::now();
+            workbench.update_overview(&ctx, &scene, &editor).unwrap();
+            edits_ms.push(started.elapsed().as_secs_f64() * 1000.);
+            texture_rebuilds += usize::from(workbench.overview.as_ref().unwrap().id() != previous);
+            ctx.tex_manager().write().take_delta().clear();
+        }
+        let mut sorted = edits_ms.clone();
+        sorted.sort_unstable_by(f64::total_cmp);
+        let report = serde_json::json!({
+            "map": map,
+            "initial_ms": initial_ms,
+            "edit_median_ms": sorted[sorted.len() / 2],
+            "edits_ms": edits_ms,
+            "texture_rebuilds": texture_rebuilds,
+        });
+        std::fs::write(output, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        println!("{report}");
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn navigator_positions_use_the_cropped_world_bounds_and_clamp_dragging() {

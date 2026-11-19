@@ -9,6 +9,17 @@ pub struct RadarImage {
     pub bounds: Rect,
 }
 
+pub fn shares_terrain(previous: &MapScene, next: &MapScene) -> bool {
+    use std::sync::Arc;
+
+    previous
+        .resolved
+        .as_ref()
+        .zip(next.resolved.as_ref())
+        .is_some_and(|(previous, next)| Arc::ptr_eq(previous, next))
+        && Arc::ptr_eq(&previous.catalog.radar, &next.catalog.radar)
+}
+
 /// Radar geography is flat: elevation changes colours, never the map frame.
 pub fn terrain(scene: &MapScene) -> Result<RadarImage> {
     render(scene, None)

@@ -412,9 +412,6 @@ impl MapView {
                         .scene
                         .as_ref()
                         .is_some_and(|old| Arc::ptr_eq(&old.visual, &scene.visual));
-                    if !visual_reused {
-                        self.reset_overview();
-                    }
                     match message.gpu {
                         Some(Ok(gpu)) => {
                             // Rebind when atlases/instances change. Mission-only
@@ -476,6 +473,8 @@ impl MapView {
                     self.editor.structural_refresh = false;
                     self.workbench.management.preserve_view = false;
                     self.workbench.management.published_shift = [0, 0];
+                    self.workbench
+                        .overview_scene_changed(self.scene.as_ref(), &scene);
                     self.scene = Some(scene);
                 }
                 Err(e) => self.error = Some(format!("{e:#}")),
