@@ -102,7 +102,9 @@ fn reordered_wooden_heads_match_both_banks_and_survive_later_cliff_edits() {
         .apply(&mut reopened)
         .unwrap();
         for (&at, &v) in &p.edits {
-            assert_eq!(reopened.terrain(at), Some(v));
+            if bridge_head(&scene, scene.palette.raw_ids[&v.tile]) {
+                assert_eq!(reopened.terrain(at), Some(v));
+            }
         }
         for (&at, &v) in &p.overlays {
             assert_eq!(reopened.overlay(at), v);
@@ -268,12 +270,21 @@ fn high_bridges_both_materials_and_axes_write_heads_and_canonical_overlay_data()
             assert_eq!(p.edits, reversed.edits);
             assert_eq!(p.overlays, reversed.overlays);
             assert_eq!(doc.snapshot().bytes().unwrap(), before);
-            assert_eq!(p.cliffs.len(), 2);
+            let heads: Vec<_> = p
+                .cliffs
+                .iter()
+                .filter(|s| bridge_head(&scene, s.tile))
+                .collect();
+            assert_eq!(heads.len(), 2);
+            assert!(
+                p.cliffs.len() > heads.len(),
+                "this crossing splits a wide cliff"
+            );
             let axis = usize::from(!along_x);
             // The road overhangs the ravine, but the two outer shoulder rows
             // must keep the existing cliff profile. Aligning the road's raised
             // centre instead shifts both cliff joins inward by one cell (#6).
-            for head in &p.cliffs {
+            for head in &heads {
                 let t = &scene.palette.templates[&(head.tile, 0)];
                 let across = if along_x { t.height } else { t.width };
                 for (sub, s) in t.cells.iter().enumerate() {
@@ -294,7 +305,7 @@ fn high_bridges_both_materials_and_axes_write_heads_and_canonical_overlay_data()
                     }
                 }
             }
-            let distance = p.cliffs[1].origin[axis] - p.cliffs[0].origin[axis];
+            let distance = heads[1].origin[axis] - heads[0].origin[axis];
             assert_eq!(p.overlays.len(), usize::from(distance - 2));
             let obstructed = if along_x { [86, 65] } else { [65, 81] };
             let mut blocked = doc.fork();
@@ -312,6 +323,12 @@ fn high_bridges_both_materials_and_axes_write_heads_and_canonical_overlay_data()
                 _ => (238, 9),
             };
             assert!(p.overlays.values().all(|&v| v == expected));
+            for s in p.cliffs.iter().filter(|s| !bridge_head(&scene, s.tile)) {
+                for (at, v) in stamp(&doc, &scene, s.tile, s.origin, s.base).unwrap() {
+                    assert_eq!(p.edits[&at], v);
+                    assert_eq!(v.level, value(&doc, &scene, at).level);
+                }
+            }
             for &(id, _) in p.overlays.values() {
                 let (_, direction) =
                     vera20k_core::map::bridge_facts::high_bridge_stamp_for_overlay(id).unwrap();
@@ -338,11 +355,13 @@ fn high_bridges_both_materials_and_axes_write_heads_and_canonical_overlay_data()
                 .apply(&mut scratch)
                 .unwrap();
             for (&at, &v) in &p.edits {
-                assert_eq!(
-                    scratch.terrain(at),
-                    Some(v),
-                    "expansion must preserve bridgeheads"
-                );
+                if bridge_head(&scene, scene.palette.raw_ids[&v.tile]) {
+                    assert_eq!(
+                        scratch.terrain(at),
+                        Some(v),
+                        "expansion must preserve bridgeheads"
+                    );
+                }
             }
             for (&at, &v) in &p.overlays {
                 assert_eq!(scratch.overlay(at), v);
@@ -572,7 +591,13 @@ fn high_bridges_fit_short_ravines_only_when_aligned_heads_have_room() {
                     continue;
                 }
                 let p = result.unwrap();
-                assert_eq!(p.cliffs.len(), 2);
+                assert_eq!(
+                    p.cliffs
+                        .iter()
+                        .filter(|s| bridge_head(&scene, s.tile))
+                        .count(),
+                    2
+                );
                 assert!(!p.overlays.is_empty());
             }
         }
@@ -806,6 +831,7 @@ fn existing_bridges_can_be_repainted_with_either_material_on_both_axes() {
                             let heads: Vec<_> = expected
                                 .cliffs
                                 .iter()
+                                .filter(|head| bridge_head(&scene, head.tile))
                                 .map(|head| cell(head.origin, offset[0], offset[1]).unwrap())
                                 .collect();
                             endpoints.extend([(heads[0], heads[1]), (heads[1], heads[0])]);
@@ -813,7 +839,19 @@ fn existing_bridges_can_be_repainted_with_either_material_on_both_axes() {
                     }
                     for (start, end) in endpoints {
                         let p = plan(&edited, &scene, start, end, new).unwrap();
-                        assert_eq!(p.edits, expected.edits);
+                        let expected_changes: BTreeMap<_, _> = expected
+                            .edits
+                            .iter()
+                            .filter(|&(&at, &v)| value(&edited, &scene, at) != v)
+                            .map(|(&at, &v)| (at, v))
+                            .collect();
+                        let actual_changes: BTreeMap<_, _> = p
+                            .edits
+                            .iter()
+                            .filter(|&(&at, &v)| value(&edited, &scene, at) != v)
+                            .map(|(&at, &v)| (at, v))
+                            .collect();
+                        assert_eq!(actual_changes, expected_changes);
                         assert_eq!(p.overlays, expected.overlays);
                     }
                     let p = plan(&edited, &scene, a, b, new).unwrap();

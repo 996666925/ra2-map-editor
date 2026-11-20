@@ -196,6 +196,7 @@ pub fn plan(
 ) -> Result<PlateauPlan> {
     let mut result = geometry(doc, scene, interior, base)?;
     crate::coastal_cliffs::adapt(doc, scene, &mut result)?;
+    crate::cliff_variants::apply(doc, scene, &mut result);
     validate(doc, scene, &result.edits, base, false)?;
     Ok(result)
 }
@@ -336,6 +337,10 @@ fn geometry_impl(
         let tile = cliff_base
             .checked_add(selected - 1)
             .context("悬崖编号溢出")?;
+        ensure!(
+            crate::coastal_cliffs::same_tileset(scene, cliff_base, tile),
+            "当前 CliffSet 缺少自动围合所需的第 {selected} 块悬崖"
+        );
         let t = scene
             .palette
             .templates

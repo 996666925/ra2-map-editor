@@ -716,3 +716,40 @@ fn raised_bridges_replace_complete_water_cliffs_at_coastal_landings() {
     undoable(&mut d, &p);
     complete(&d, &s, &p);
 }
+
+#[test]
+fn wide_coastal_cliff_splits_when_only_one_half_touches_water() {
+    let (doc, scene) = setup();
+    let ids = scene.palette.tile_ids.unwrap();
+    let land = ids.cliffs.cliff_set.unwrap();
+    let water = ids.cliffs.water_cliffs.unwrap();
+    let raw_water = scene.catalog.raw_tiles[&((ids.water_base + 8) as u16)];
+    for initial in [land + 4, water + 4] {
+        let mut doc = doc.fork();
+        for (at, v) in cliff_authoring::stamp(&doc, &scene, initial, [60, 60], 4).unwrap() {
+            doc.set(Target::Terrain(at), Some(Value::Terrain(v)))
+                .unwrap();
+        }
+        let at = [60, 62];
+        doc.set(
+            Target::Terrain(at),
+            Some(Value::Terrain(TerrainValue {
+                tile: raw_water,
+                ..value(&doc, &scene, at)
+            })),
+        )
+        .unwrap();
+        doc.commit("mixed shoreline");
+        let p = coastal_cliffs::plan(&doc, &scene, BTreeSet::from([[61, 60]])).unwrap();
+        assert_eq!(
+            p.cliffs
+                .iter()
+                .map(|s| (s.origin, s.tile))
+                .collect::<Vec<_>>(),
+            vec![([60, 60], water + 7), ([61, 60], land + 7)]
+        );
+        undoable(&mut doc, &p);
+        complete(&doc, &scene, &p);
+        assert_eq!(value(&doc, &scene, at).tile, raw_water);
+    }
+}

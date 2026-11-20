@@ -34,9 +34,20 @@ fn verify(
     let before = doc.snapshot().bytes()?;
     // Bridgeheads include raised road cells beyond the cliff. Their outside
     // shoulders must retain the bank profile, or the cliff/bridge seam opens.
-    if p.cliffs.len() == 2 {
-        let axis = usize::from(p.cliffs[0].origin[0] == p.cliffs[1].origin[0]);
-        for head in &p.cliffs {
+    let ids = scene.palette.tile_ids.context("missing theater tile IDs")?;
+    let heads: Vec<_> = p
+        .cliffs
+        .iter()
+        .filter(|s| {
+            [ids.cliffs.bridge_set, ids.cliffs.wood_bridge_set]
+                .into_iter()
+                .flatten()
+                .any(|start| (start..start + 16).contains(&s.tile))
+        })
+        .collect();
+    if let [first, last] = heads.as_slice() {
+        let axis = usize::from(first.origin[0] == last.origin[0]);
+        for head in &heads {
             let t = &scene.palette.templates[&(head.tile, 0)];
             let across = if axis == 0 { t.height } else { t.width };
             for (sub, s) in t.cells.iter().enumerate() {
@@ -137,7 +148,7 @@ fn verify(
         )?;
     }
     Ok(
-        serde_json::json!({"case":name,"terrain_cells":p.edits.len(),"overlay_cells":p.overlays.len(),"engine_reload":true,"undo_redo":true,"cliff_profile_preserved":(p.cliffs.len() == 2).then_some(true)}),
+        serde_json::json!({"case":name,"terrain_cells":p.edits.len(),"overlay_cells":p.overlays.len(),"engine_reload":true,"undo_redo":true,"cliff_profile_preserved":(heads.len() == 2).then_some(true)}),
     )
 }
 fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json::Value> {

@@ -2,6 +2,7 @@
 pub mod bridge_tools;
 pub mod cliff_authoring;
 pub mod cliff_tools;
+mod cliff_variants;
 pub mod coastal_cliffs;
 pub mod fill_tools;
 pub mod flatten_tools;

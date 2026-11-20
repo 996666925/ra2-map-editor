@@ -339,7 +339,7 @@ pub(super) fn finish(
         touched |= cliff(scene, value(doc, scene, at), at).is_some();
     }
     ensure!(touched, "请放置在悬崖边界或已有坡道入口");
-    complete_replacement(doc, scene, &p.edits)?;
+    complete_replacement(doc, scene, &mut p)?;
     // Admit only complete same-height endpoint TMPs for replacement here;
     // generic plateau authoring still protects existing entrances.
     let mut validation = doc.fork();

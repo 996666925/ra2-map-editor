@@ -2,28 +2,39 @@
 use crate::{
     cliff_authoring,
     cliff_tools::{CliffStamp, PlateauPlan},
+    cliff_variants,
     map::MapScene,
     shore_tools::{id, offset, protect, wet},
     terrain_tools::value,
 };
 use anyhow::{Context, Result, ensure};
-use ra2_map_document::document::{Cell, MapDocument};
+use ra2_map_document::document::{Cell, MapDocument, TerrainValue};
 use std::collections::{BTreeMap, BTreeSet};
+
+pub(crate) fn same_tileset(scene: &MapScene, a: u16, b: u16) -> bool {
+    scene
+        .palette
+        .groups
+        .get(&a)
+        .zip(scene.palette.groups.get(&b))
+        .is_some_and(|(a, b)| a.id == b.id)
+}
 
 /// WaterCliffs only shares the first 22 orientations with CliffSet. Later
 /// entries are caves/shore joins, not the land set's back faces.
 pub(crate) fn piece(scene: &MapScene, tile: u16) -> Option<(u16, bool)> {
     let ids = scene.palette.tile_ids?;
-    if let Some(b) = ids.cliffs.cliff_set
-        && (b..b + 40).contains(&tile)
+    if let Some(base) = ids.cliffs.cliff_set
+        && let Some(index) = tile.checked_sub(base).filter(|&index| index < 40)
+        && same_tileset(scene, base, tile)
     {
-        return Some((tile - b, false));
+        return Some((index, false));
     }
-    if let Some(b) = ids.cliffs.water_cliffs
-        && (b..b + 22).contains(&tile)
-        && supports(scene, tile - b)
+    if let Some(base) = ids.cliffs.water_cliffs
+        && let Some(index) = tile.checked_sub(base).filter(|&index| index < 22)
+        && supports(scene, index)
     {
-        return Some((tile - b, true));
+        return Some((index, true));
     }
     None
 }
@@ -38,9 +49,16 @@ pub fn supports(scene: &MapScene, index: u16) -> bool {
     let (Some(land), Some(water)) = (ids.cliffs.cliff_set, ids.cliffs.water_cliffs) else {
         return false;
     };
+    let (Some(land_tile), Some(water_tile)) = (land.checked_add(index), water.checked_add(index))
+    else {
+        return false;
+    };
+    if !same_tileset(scene, land, land_tile) || !same_tileset(scene, water, water_tile) {
+        return false;
+    }
     let (Some(a), Some(b)) = (
-        scene.palette.templates.get(&(land + index, 0)),
-        scene.palette.templates.get(&(water + index, 0)),
+        scene.palette.templates.get(&(land_tile, 0)),
+        scene.palette.templates.get(&(water_tile, 0)),
     ) else {
         return false;
     };
@@ -64,80 +82,107 @@ fn adapt_inner(
 ) -> Result<()> {
     let ids = scene.palette.tile_ids.context("缺少地形配置")?;
     let land = ids.cliffs.cliff_set.context("缺少陆地悬崖")?;
-    for s in &mut p.cliffs {
-        let Some((index, _)) = piece(scene, s.tile) else {
+    let target = |index, water| {
+        if water {
+            ids.cliffs
+                .water_cliffs
+                .and_then(|base| base.checked_add(index))
+                .filter(|_| supports(scene, index))
+        } else {
+            land.checked_add(index)
+        }
+    };
+    let mut cliffs = Vec::with_capacity(p.cliffs.len());
+    for s in &p.cliffs {
+        let Some((index, _)) = piece(scene, s.tile).filter(|(index, _)| *index < 22) else {
+            cliffs.push(s.clone());
             continue;
         };
-        if index >= 22 {
-            continue;
-        }
-        let original = &scene.palette.templates[&(s.tile, 0)];
-        let mut water = false;
-        for (sub, meta) in original.cells.iter().enumerate() {
-            if meta.is_none_or(|m| m.height != 0) {
+        if let Some(mut halves) = cliff_variants::narrow_halves(scene, s) {
+            let [first, second] = [
+                touches_water(doc, scene, &p.edits, &halves[0])?,
+                touches_water(doc, scene, &p.edits, &halves[1])?,
+            ];
+            if first != second {
+                // At a shoreline boundary, converting the wide tile as a
+                // whole would also repaint the half whose foot stays dry.
+                let narrow_index = halves[0].tile - (s.tile - index);
+                let targets = [first, second].map(|water| {
+                    target(narrow_index, water)
+                        .filter(|&tile| cliff_variants::available(scene, tile))
+                });
+                if let [Some(a), Some(b)] = targets {
+                    for (half, tile) in halves.iter_mut().zip([a, b]) {
+                        half.tile = tile;
+                        p.edits.extend(cliff_authoring::stamp(
+                            doc,
+                            scene,
+                            tile,
+                            half.origin,
+                            half.base,
+                        )?);
+                    }
+                    cliffs.extend(halves);
+                    continue;
+                }
+                ensure!(!strict, "当前环境缺少拆分临水悬崖所需的窄模板");
+                cliffs.push(s.clone());
                 continue;
             }
-            let at = offset(
-                s.origin,
-                sub as i32 % i32::from(original.width),
-                sub as i32 / i32::from(original.width),
-            )
-            .context("悬崖越界")?;
-            for n in std::iter::once(at).chain(crate::terrain_tools::neighbors(at)) {
-                let v = p
-                    .edits
-                    .get(&n)
-                    .copied()
-                    .unwrap_or_else(|| value(doc, scene, n));
-                if doc.check_cell(n).is_ok() && v.level == s.base && wet(scene, v) {
-                    water = true;
-                }
-            }
         }
-        if water && !supports(scene, index) {
+        let water = touches_water(doc, scene, &p.edits, s)?;
+        let Some(tile) = target(index, water) else {
             ensure!(
                 !strict,
                 "当前环境缺少与第 {} 块悬崖兼容的水悬崖模板",
                 index + 1
             );
+            cliffs.push(s.clone());
             continue;
-        }
-        let target = if water {
-            ids.cliffs
-                .water_cliffs
-                .context("临水悬崖缺少 WaterCliffs 资源")?
-                + index
-        } else {
-            land + index
         };
-        if target == s.tile {
+        if tile != s.tile {
+            p.edits
+                .extend(cliff_authoring::stamp(doc, scene, tile, s.origin, s.base)?);
+        }
+        cliffs.push(CliffStamp { tile, ..*s });
+    }
+    p.cliffs = cliffs;
+    Ok(())
+}
+
+fn touches_water(
+    doc: &MapDocument,
+    scene: &MapScene,
+    edits: &BTreeMap<Cell, TerrainValue>,
+    s: &CliffStamp,
+) -> Result<bool> {
+    let template = &scene.palette.templates[&(s.tile, 0)];
+    for (sub, meta) in template.cells.iter().enumerate() {
+        if meta.is_none_or(|m| m.height != 0) {
             continue;
         }
-        let t = scene
-            .palette
-            .templates
-            .get(&(target, 0))
-            .context("缺少临水悬崖对应方向模板")?;
-        ensure!(
-            t.width == original.width
-                && t.height == original.height
-                && t.cells.len() == original.cells.len()
-                && t.cells
-                    .iter()
-                    .zip(&original.cells)
-                    .all(|(a, b)| match (a, b) {
-                        (Some(a), Some(b)) => a.height == b.height && a.slope == b.slope,
-                        (None, None) => true,
-                        _ => false,
-                    }),
-            "水悬崖与陆地悬崖几何不同，无法完整替换"
-        );
-        p.edits.extend(cliff_authoring::stamp(
-            doc, scene, target, s.origin, s.base,
-        )?);
-        s.tile = target;
+        let at = offset(
+            s.origin,
+            sub as i32 % i32::from(template.width),
+            sub as i32 / i32::from(template.width),
+        )
+        .context("悬崖越界")?;
+        if std::iter::once(at)
+            .chain(crate::terrain_tools::neighbors(at))
+            .any(|n| {
+                doc.check_cell(n).is_ok() && {
+                    let v = edits
+                        .get(&n)
+                        .copied()
+                        .unwrap_or_else(|| value(doc, scene, n));
+                    v.level == s.base && wet(scene, v)
+                }
+            })
+        {
+            return Ok(true);
+        }
     }
-    Ok(())
+    Ok(false)
 }
 pub(crate) fn gather(
     doc: &MapDocument,

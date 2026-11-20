@@ -115,11 +115,11 @@ fn existing(
                 old.insert(p);
             }
         }
-        let dirs: &[(i32, i32)] = match crate::coastal_cliffs::piece(scene, id)
+        let piece = crate::coastal_cliffs::piece(scene, id)
             .context("无法识别已有悬崖")?
             .0
-            + 1
-        {
+            + 1;
+        let dirs: &[(i32, i32)] = match piece {
             1 | 3..=4 | 35..=38 => &[(1, 0)],
             2 => &[(1, -1)],
             5..=8 => &[(0, -1)],
@@ -128,18 +128,27 @@ fn existing(
             15..=18 => &[(-1, 0)],
             19..=21 | 23..=26 => &[(0, 1)],
             22 => &[(-1, 1)],
-            27..=29 => &[(1, 1)],
-            30..=33 => &[(1, 0), (0, 1)],
+            27..=30 => &[(1, 1)],
+            31..=33 => &[(1, 0), (0, 1)],
             39 => &[(1, 0), (0, -1)],
             40 => &[(-1, 0), (0, 1)],
             _ => &[],
         };
-        for &(dx, dy) in dirs {
-            if let Some(p) = offset(origin, dx, dy)
-                && doc.check_cell(p).is_ok()
-                && value(doc, scene, p).level == base + 4
-            {
-                core.insert(p);
+        let stamp = cliff_tools::CliffStamp {
+            tile: id,
+            origin,
+            base,
+        };
+        let second =
+            crate::cliff_variants::narrow_halves(scene, &stamp).map(|halves| halves[1].origin);
+        for anchor in std::iter::once(origin).chain(second) {
+            for &(dx, dy) in dirs {
+                if let Some(p) = offset(anchor, dx, dy)
+                    && doc.check_cell(p).is_ok()
+                    && value(doc, scene, p).level == base + 4
+                {
+                    core.insert(p);
+                }
             }
         }
     }
@@ -393,6 +402,8 @@ pub fn reshape(
     let mut p = finish(doc, scene, p, old)?;
     preserve_portals(doc, scene, &mut p, &protected);
     crate::coastal_cliffs::adapt(doc, scene, &mut p)?;
+    crate::cliff_variants::apply(doc, scene, &mut p);
+    p.edits.retain(|&at, v| *v != value(doc, scene, at));
     cliff_tools::validate(doc, scene, &p.edits, base, true)?;
     Ok(p)
 }
@@ -580,6 +591,7 @@ pub fn polyline(
         cliff_tools::open_geometry(doc, scene, high, base, &edge)?
     };
     crate::coastal_cliffs::adapt(doc, scene, &mut p)?;
+    crate::cliff_variants::apply(doc, scene, &mut p);
     if closed {
         cliff_tools::validate_polyline(doc, scene, &p.edits, p.base)?;
     } else {
@@ -692,15 +704,17 @@ pub(crate) fn stamp(
     Ok(edits)
 }
 
-/// Refuse a partial replacement of any old multi-cell special template.
+/// Preserve complete special terrain templates at the edge of ramps and bridges.
+/// A compatible straight double-length cliff can keep one half as a narrow piece.
 pub(crate) fn complete_replacement(
     doc: &MapDocument,
     scene: &MapScene,
-    edits: &BTreeMap<Cell, TerrainValue>,
+    plan: &mut PlateauPlan,
 ) -> Result<()> {
     let ids = scene.palette.tile_ids.context("缺少地形配置")?;
     let mut seen = BTreeSet::new();
-    for &at in edits.keys() {
+    let mut remainders = Vec::new();
+    for &at in plan.edits.keys() {
         let v = value(doc, scene, at);
         let Some(id) = tile(scene, v.tile) else {
             continue;
@@ -722,6 +736,7 @@ pub(crate) fn complete_replacement(
         if !seen.insert((id, origin)) {
             continue;
         }
+        let mut missing = None;
         for (sub, c) in t.cells.iter().enumerate() {
             if c.is_some() {
                 let p = offset(
@@ -730,12 +745,9 @@ pub(crate) fn complete_replacement(
                     sub as i32 / i32::from(t.width),
                 )
                 .context("原模板越界")?;
-                ensure!(
-                    edits.contains_key(&p),
-                    "请避开拐角或加宽区域：操作将切断 {},{} 的完整模板",
-                    p[0],
-                    p[1]
-                );
+                if !plan.edits.contains_key(&p) {
+                    missing = Some(p);
+                }
                 let old = value(doc, scene, p);
                 ensure!(
                     old.tile == v.tile && old.sub == sub as u8,
@@ -743,6 +755,25 @@ pub(crate) fn complete_replacement(
                 );
             }
         }
+        if let Some(p) = missing {
+            let remainder = cliff(scene, v, at)
+                .map(|(tile, origin, base)| cliff_tools::CliffStamp { tile, origin, base })
+                .map(|stamp| crate::cliff_variants::split_remainder(doc, scene, stamp, &plan.edits))
+                .transpose()?
+                .flatten()
+                .with_context(|| {
+                    format!(
+                        "请避开拐角或加宽区域：操作将切断 {},{} 的完整模板",
+                        p[0], p[1]
+                    )
+                })?;
+            remainders.push(remainder);
+        }
+    }
+    for s in remainders {
+        plan.edits
+            .extend(stamp(doc, scene, s.tile, s.origin, s.base)?);
+        plan.cliffs.push(s);
     }
     Ok(())
 }
@@ -794,7 +825,7 @@ fn ramp_corner(doc: &MapDocument, scene: &MapScene, start: Cell, base: u8) -> Op
             1..=4 => ([-1, 1], offset(origin, 1, 0)?),
             12..=14 => ([1, 1], offset(origin, -1, -1)?),
             19..=22 => ([1, -1], offset(origin, 0, 1)?),
-            27..=29 => ([-1, -1], offset(origin, 1, 1)?),
+            27..=30 => ([-1, -1], offset(origin, 1, 1)?),
             _ => continue,
         };
         return Some(RampCorner { center, outward });

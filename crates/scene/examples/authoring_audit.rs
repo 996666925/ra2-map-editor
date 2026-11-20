@@ -1260,6 +1260,7 @@ fn audit_polyline(install: &mut Install, theater: &str, out: &Path) -> Result<se
                 let reference =
                     cliff_authoring::polyline(&doc, &scene, &reference_path, 4, high_left)?;
                 let p = cliff_authoring::polyline(&doc, &scene, &path, 4, high_left)?;
+                let cliff_base = scene.palette.tile_ids.unwrap().cliffs.cliff_set.unwrap();
                 let corners: Vec<_> = reference
                     .cliffs
                     .iter()
@@ -1267,6 +1268,7 @@ fn audit_polyline(install: &mut Install, theater: &str, out: &Path) -> Result<se
                         let dx = i32::from(s.origin[0]) - 80;
                         let dy = i32::from(s.origin[1]) - 80;
                         dx * dx + dy * dy <= 16
+                            && !matches!(s.tile - cliff_base + 1, 5..=8 | 15..=18 | 23..=26 | 35..=38)
                     })
                     .collect();
                 ensure!(!corners.is_empty(), "missing native reference corner");

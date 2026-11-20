@@ -522,7 +522,8 @@ pub fn plan(
             }
             p.cliffs.push(CliffStamp { tile, origin, base });
         }
-        complete_replacement(doc, scene, &p.edits)?;
+        complete_replacement(doc, scene, &mut p)?;
+        footprint.extend(p.edits.keys().copied());
         // Landing strips outside both complete heads remain untouched and must
         // meet their full width, rather than checking just the clicked cells.
         for side in -2..=2 {

@@ -78,6 +78,7 @@ fn polyline_internal_vertex_keeps_native_corners_for_both_sides_and_all_rotation
                     .unwrap()
                     .edits
             );
+            let cliff_base = scene.palette.tile_ids.unwrap().cliffs.cliff_set.unwrap();
             let corners: Vec<_> = reference
                 .cliffs
                 .iter()
@@ -85,6 +86,7 @@ fn polyline_internal_vertex_keeps_native_corners_for_both_sides_and_all_rotation
                     let dx = i32::from(s.origin[0]) - 60;
                     let dy = i32::from(s.origin[1]) - 60;
                     dx * dx + dy * dy <= 4
+                        && !matches!(s.tile - cliff_base + 1, 5..=8 | 15..=18 | 23..=26 | 35..=38)
                 })
                 .collect();
             assert!(!corners.is_empty());
@@ -128,6 +130,7 @@ fn polyline_oblique_joint_matches_the_same_corner_when_closed() {
                     .unwrap()
                     .edits
             );
+            let cliff_base = scene.palette.tile_ids.unwrap().cliffs.cliff_set.unwrap();
             let corners: Vec<_> = reference
                 .cliffs
                 .iter()
@@ -135,6 +138,7 @@ fn polyline_oblique_joint_matches_the_same_corner_when_closed() {
                     let dx = i32::from(s.origin[0]) - 80;
                     let dy = i32::from(s.origin[1]) - 80;
                     dx * dx + dy * dy <= 16
+                        && !matches!(s.tile - cliff_base + 1, 5..=8 | 15..=18 | 23..=26 | 35..=38)
                 })
                 .collect();
             assert!(!corners.is_empty());
@@ -1560,4 +1564,43 @@ fn stacking_plateaus_can_cross_the_previous_fourteen_level_limit() {
         assert_eq!(value(&doc, &scene, [50, 50]).level, base + 4);
     }
     assert_eq!(infer_base(&doc, &scene, [50, 50]), 16);
+}
+
+#[test]
+fn cliff_variants_do_not_move_the_ramp_landing() {
+    let (flat, scene) = setup();
+    let region = cliff_tools::rectangle([40, 40], [58, 58]);
+    let mut narrow = flat.fork();
+    let mut wide = flat.fork();
+    cliff_tools::geometry(&flat, &scene, region.clone(), 4)
+        .unwrap()
+        .apply(&mut narrow)
+        .unwrap();
+    cliff_tools::plan(&flat, &scene, region, 4)
+        .unwrap()
+        .apply(&mut wide)
+        .unwrap();
+    let ramp_cells = |p: PlateauPlan| {
+        p.edits
+            .into_iter()
+            .filter(|(_, v)| {
+                crate::coastal_cliffs::piece(&scene, scene.palette.raw_ids[&v.tile]).is_none()
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    for n in 44..=54 {
+        for (start, end) in [
+            ([n, 58], [n, 63]),
+            ([58, n], [63, n]),
+            ([n, 40], [n, 35]),
+            ([40, n], [35, n]),
+        ] {
+            let baseline = ramp(&narrow, &scene, start, end, 4).unwrap();
+            let styled = ramp(&wide, &scene, start, end, 4).unwrap();
+            assert!(
+                ramp_cells(styled) == ramp_cells(baseline),
+                "ramp landing shifted at {start:?}"
+            );
+        }
+    }
 }
