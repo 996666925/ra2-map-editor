@@ -738,7 +738,7 @@ fn joining_gestures_cache_previews_freeze_the_mode_and_cancel_invalid_strokes() 
     e.attach(&scene);
     e.tool = Tool::Terrain;
     for (mode, path) in [
-        (TerrainMode::Water, vec![[28, 28], [38, 38]]),
+        (TerrainMode::Water, vec![[26, 26], [49, 49]]),
         (
             TerrainMode::WaterOutline,
             vec![[28, 28], [42, 28], [42, 42], [28, 42]],
@@ -779,6 +779,48 @@ fn joining_gestures_cache_previews_freeze_the_mode_and_cancel_invalid_strokes() 
         assert!(!e.status.starts_with("本笔未修改"), "{}", e.status);
         for (&at, &v) in &p.edits {
             assert_eq!(e.doc.as_ref().unwrap().terrain(at), Some(v));
+        }
+        if mode == TerrainMode::Water {
+            let lake = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+            e.activate_terrain_mode(TerrainMode::CliffFront);
+            let start = [32, 36];
+            let end = [43, 36];
+            assert!(ra2_map_scene::shore_tools::wet(
+                &scene,
+                e.doc.as_ref().unwrap().terrain(start).unwrap()
+            ));
+            e.pointer(&scene, Some(start), true, true, false, None);
+            e.pointer(&scene, Some(end), false, true, false, None);
+            let cliffs = e.plateau_preview_plan(&scene, end).unwrap();
+            assert!(!cliffs.cliffs.is_empty());
+            assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), lake);
+            e.pointer(&scene, Some(end), false, false, true, None);
+            for (&at, &v) in &cliffs.edits {
+                assert_eq!(e.doc.as_ref().unwrap().terrain(at), Some(v));
+            }
+            e.history(false, &scene);
+            assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), lake);
+
+            e.activate_terrain_mode(TerrainMode::Plateau);
+            e.pointer(&scene, Some([32, 32]), true, true, false, None);
+            e.pointer(&scene, Some([43, 42]), false, false, true, None);
+            let island = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+            assert_ne!(island, lake);
+
+            e.activate_terrain_mode(TerrainMode::RampEntrance);
+            let (start, end) = ([36, 42], [38, 42]);
+            e.pointer(&scene, Some(start), true, true, false, None);
+            e.pointer(&scene, Some(end), false, true, false, None);
+            let entrance = e.plateau_preview_plan(&scene, end).unwrap();
+            assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), island);
+            e.pointer(&scene, Some(end), false, false, true, None);
+            for (&at, &v) in &entrance.edits {
+                assert_eq!(e.doc.as_ref().unwrap().terrain(at), Some(v));
+            }
+            e.history(false, &scene);
+            assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), island);
+            e.history(false, &scene);
+            assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), lake);
         }
         e.history(false, &scene);
         assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);

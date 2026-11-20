@@ -14,8 +14,11 @@ use ra2_map_document::{
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
 fn setup() -> (MapDocument, MapScene) {
-    let f = Fixture::with_joining();
-    let mut install = f.install();
+    setup_fixture(&Fixture::with_joining())
+}
+
+fn setup_fixture(fixture: &Fixture) -> (MapDocument, MapScene) {
+    let mut install = fixture.install();
     install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
     let s = load_scene_bytes(
         &mut install,
@@ -655,6 +658,513 @@ fn roads_reject_broken_templates_dense_bends_and_resource_loss_without_writes() 
     assert!(road_tools::plan(&d, &s, [70, 50], [70, 75], false).is_err());
     assert_eq!(d.snapshot().bytes().unwrap(), before);
 }
+#[test]
+fn cliff_authoring_draws_directly_on_water() {
+    let (mut doc, scene) = setup();
+    let ids = scene.palette.tile_ids.unwrap();
+    let raw_water = scene.catalog.raw_tiles[&(ids.water_base as u16)];
+    let raw_clear = scene.catalog.raw_tiles[&(ids.clear as u16)];
+    // Paint complete 2×2 water templates, including nonzero subtiles.
+    for at @ [x, y] in cliff_tools::rectangle([50, 50], [81, 81]) {
+        let v = TerrainValue {
+            tile: raw_water,
+            sub: ((y % 2) * 2 + x % 2) as u8,
+            level: 4,
+            ice: 0,
+        };
+        doc.set(Target::Terrain(at), Some(Value::Terrain(v)))
+            .unwrap();
+    }
+    doc.commit("lake");
+    let before = doc.snapshot().bytes().unwrap();
+    let lake_cell = [51, 51];
+    let loop_path = [[60, 60], [60, 72], [72, 72], [72, 60], [60, 60]];
+    let selection = cliff_tools::enclose(&loop_path).unwrap();
+    let plans = [
+        (
+            cliff_authoring::line(&doc, &scene, [60, 62], [72, 62], 4, false),
+            None,
+        ),
+        (
+            cliff_authoring::line(&doc, &scene, [60, 62], [72, 62], 4, true),
+            None,
+        ),
+        (
+            cliff_authoring::polyline(&doc, &scene, &[[60, 62], [72, 62]], 4, false),
+            None,
+        ),
+        (
+            cliff_authoring::polyline(&doc, &scene, &loop_path, 4, true),
+            Some([66, 66]),
+        ),
+        (
+            cliff_authoring::reshape(&doc, &scene, selection.clone(), 4, false),
+            Some([66, 66]),
+        ),
+        (
+            cliff_tools::plan(&doc, &scene, selection.clone(), 4),
+            Some([66, 66]),
+        ),
+    ];
+    for (i, (plan, summit)) in plans.into_iter().enumerate() {
+        let plan = plan.unwrap();
+        if i != 2 {
+            assert!(plan.cliffs.iter().any(|s| {
+                coastal_cliffs::piece(&scene, s.tile).is_some_and(|(_, water)| water)
+            }));
+        }
+        assert!(!plan.edits.contains_key(&lake_cell));
+        let mut drawn = doc.fork();
+        undoable(&mut drawn, &plan);
+        complete(&drawn, &scene, &plan);
+        assert_eq!(
+            value(&drawn, &scene, lake_cell),
+            value(&doc, &scene, lake_cell)
+        );
+        if let Some(at) = summit {
+            let v = value(&drawn, &scene, at);
+            assert_eq!((v.tile, v.level), (raw_clear, 8));
+        }
+    }
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+
+    doc.set(Target::Overlay([66, 66]), Some(Value::Overlay(0, 0)))
+        .unwrap();
+    let before = doc.snapshot().bytes().unwrap();
+    let Err(err) = cliff_authoring::reshape(&doc, &scene, selection, 4, false) else {
+        panic!("covered water cell must block the cliff stroke");
+    };
+    assert!(err.to_string().contains("覆盖物占用"), "{err:#}");
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+fn ramp_entrances_replace_water_under_their_footprint() {
+    let (mut doc, scene) = setup();
+    let ids = scene.palette.tile_ids.unwrap();
+    let raw_water = scene.catalog.raw_tiles[&(ids.water_base as u16)];
+    for at @ [x, y] in cliff_tools::rectangle([50, 50], [85, 85]) {
+        doc.set(
+            Target::Terrain(at),
+            Some(Value::Terrain(TerrainValue {
+                tile: raw_water,
+                sub: ((y % 2) * 2 + x % 2) as u8,
+                level: 4,
+                ice: 0,
+            })),
+        )
+        .unwrap();
+    }
+    let island = cliff_authoring::reshape(
+        &doc,
+        &scene,
+        cliff_tools::rectangle([59, 59], [76, 76]),
+        4,
+        false,
+    )
+    .unwrap();
+    island.apply(&mut doc).unwrap();
+    doc.commit("cliff island");
+    let before = doc.snapshot().bytes().unwrap();
+    let ramp_base = ids.ramp_base as u16;
+    for (start, end, corner_slope) in [
+        ([68, 76], [72, 76], None),
+        ([76, 68], [76, 72], None),
+        ([68, 59], [72, 59], None),
+        ([59, 68], [59, 72], None),
+        ([59, 59], [61, 59], Some(5)),
+        ([76, 59], [74, 59], Some(6)),
+        ([59, 76], [61, 76], Some(8)),
+        ([76, 76], [74, 76], Some(7)),
+    ] {
+        let plan = cliff_authoring::ramp(&doc, &scene, start, end, 4)
+            .unwrap_or_else(|e| panic!("{start:?} -> {end:?}: {e:#}"));
+        if let Some(slope) = corner_slope {
+            assert_eq!(
+                plan.edits[&start].tile,
+                scene.catalog.raw_tiles[&(ramp_base + slope - 1)]
+            );
+        }
+        let shores: Vec<_> = plan
+            .cliffs
+            .iter()
+            .filter(|s| shore_tools::shore(&scene, s.tile))
+            .collect();
+        assert!(!shores.is_empty(), "missing shore at {start:?}");
+        assert!(
+            shores.iter().any(|s| {
+                let t = &scene.palette.templates[&(s.tile, 0)];
+                (t.width, t.height) == (2, 2)
+            }),
+            "shore needs a corner piece at {start:?}"
+        );
+        let submerged = plan
+            .edits
+            .iter()
+            .find_map(|(&at, next)| {
+                (shore_tools::flat_water(&scene, value(&doc, &scene, at))
+                    && !shore_tools::wet(&scene, *next))
+                .then_some(at)
+            })
+            .expect("the ramp must cover some water");
+        let mut changed = doc.fork();
+        undoable(&mut changed, &plan);
+        complete(&changed, &scene, &plan);
+        assert_eq!(
+            value(&changed, &scene, [54, 54]),
+            value(&doc, &scene, [54, 54])
+        );
+
+        if start == [68, 76] {
+            let ramp_ends = ids.slope_set_pieces as u16;
+            let cap = plan.cliffs.iter().find(|s| s.tile == ramp_ends).unwrap();
+            assert!(
+                plan.edits.keys().all(|at| at[1] <= cap.origin[1] + 7),
+                "do not extend the front to smooth its shoulders"
+            );
+            let is_floor = |at, next| {
+                shore_tools::flat_water(&scene, value(&doc, &scene, at))
+                    && shore_tools::ground(&scene, next)
+            };
+            assert!(plan.edits.iter().any(|(&at, &v)| is_floor(at, v)));
+            assert!(
+                shores.iter().all(|s| {
+                    let t = &scene.palette.templates[&(s.tile, 0)];
+                    t.width <= 2 && t.height <= 2
+                }),
+                "do not insert a diagonal notch between the side and front"
+            );
+            for (end, side) in [(ramp_ends, 0), (ramp_ends + 1, 2)] {
+                let cap = plan.cliffs.iter().find(|s| s.tile == end).unwrap();
+                for dy in [3, 4, 5, 6] {
+                    let shoulder = [cap.origin[0] + side, cap.origin[1] + dy];
+                    let v = plan.edits[&shoulder];
+                    let tile = shore_tools::id(&scene, v).unwrap();
+                    assert!(shore_tools::shore(&scene, tile) && !shore_tools::wet(&scene, v));
+                }
+                assert!(shores.iter().any(|s| {
+                    s.origin[1] == cap.origin[1] + 6
+                        && s.tile == ids.shore as u16 + if side == 0 { 30 } else { 6 }
+                }));
+            }
+            assert!(
+                cliff_authoring::ramp(&changed, &scene, start, start, 4)
+                    .unwrap()
+                    .edits
+                    .is_empty()
+            );
+            // Simulate a saved ramp authored before the shoreline pass existed.
+            let mut legacy = doc.fork();
+            for (&at, &v) in &plan.edits {
+                if !shore_tools::id(&scene, v).is_some_and(|tile| shore_tools::shore(&scene, tile))
+                    && !is_floor(at, v)
+                {
+                    legacy
+                        .set(Target::Terrain(at), Some(Value::Terrain(v)))
+                        .unwrap();
+                }
+            }
+            legacy.commit("legacy ramp");
+            let repaired = cliff_authoring::ramp(&legacy, &scene, start, start, 4).unwrap();
+            assert_eq!(
+                repaired
+                    .cliffs
+                    .iter()
+                    .filter(|s| shore_tools::shore(&scene, s.tile))
+                    .count(),
+                shores.len()
+            );
+            repaired.apply(&mut legacy).unwrap();
+            assert_eq!(
+                legacy.snapshot().bytes().unwrap(),
+                changed.snapshot().bytes().unwrap()
+            );
+
+            let (source, _) = ra2_map_document::source::SourceMap::parse(
+                "shore-ramp.map".into(),
+                "test".into(),
+                changed.snapshot().bytes().unwrap(),
+            )
+            .unwrap();
+            let mut reopened = MapDocument::new(source.edit_base.as_ref().unwrap().clone());
+            let widened = cliff_authoring::ramp(&reopened, &scene, [69, 76], [75, 76], 4).unwrap();
+            undoable(&mut reopened, &widened);
+            complete(&reopened, &scene, &widened);
+            assert!(
+                cliff_authoring::ramp(&reopened, &scene, start, start, 4)
+                    .unwrap()
+                    .edits
+                    .is_empty()
+            );
+
+            // A protected cell just beyond the compact coast only blocks
+            // the extension. Removing it makes the compact entrance upgradable.
+            let protected = [cap.origin[0], cap.origin[1] + 7];
+            assert!(plan.edits.contains_key(&protected));
+            let mut tight = doc.fork();
+            tight
+                .set(Target::Overlay(protected), Some(Value::Overlay(0, 0)))
+                .unwrap();
+            let compact = cliff_authoring::ramp(&tight, &scene, start, end, 4).unwrap();
+            assert!(!compact.edits.contains_key(&protected));
+            assert!(compact.edits.iter().all(|(&at, &v)| !is_floor(at, v)));
+            compact.apply(&mut tight).unwrap();
+            let (id, frame) = doc.overlay(protected);
+            tight
+                .set(Target::Overlay(protected), Some(Value::Overlay(id, frame)))
+                .unwrap();
+            let upgrade = cliff_authoring::ramp(&tight, &scene, start, start, 4).unwrap();
+            upgrade.apply(&mut tight).unwrap();
+            complete(&tight, &scene, &plan);
+        }
+
+        let mut blocked = doc.fork();
+        blocked
+            .set(Target::Overlay(submerged), Some(Value::Overlay(0, 0)))
+            .unwrap();
+        let blocked_before = blocked.snapshot().bytes().unwrap();
+        if let Ok(alternative) = cliff_authoring::ramp(&blocked, &scene, start, end, 4) {
+            assert!(!alternative.edits.contains_key(&submerged));
+        }
+        assert_eq!(blocked.snapshot().bytes().unwrap(), blocked_before);
+    }
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+fn a_short_water_set_does_not_let_cliff_tools_overwrite_roads() {
+    let fixture = Fixture::with_joining();
+    let ini = fixture.0.join("temperatmd.ini");
+    let source = std::fs::read_to_string(&ini)
+        .unwrap()
+        .replace(
+            "FileName=water\nTilesInSet=14",
+            "FileName=water\nTilesInSet=9",
+        )
+        .replace("ShorePieces=6\nPavedRoads=7", "ShorePieces=7\nPavedRoads=6")
+        .replace(
+            "[TileSet0006]\nFileName=shore",
+            "[TileSet0007]\nFileName=shore",
+        )
+        .replace(
+            "[TileSet0007]\nFileName=road",
+            "[TileSet0006]\nFileName=road",
+        );
+    std::fs::write(ini, source).unwrap();
+    let (mut doc, scene) = setup_fixture(&fixture);
+    let ids = scene.palette.tile_ids.unwrap();
+    let road = ids.paved_roads as u16;
+    assert_eq!(i32::from(road), ids.water_base + 9);
+    for (at, v) in cliff_authoring::stamp(&doc, &scene, road, [64, 64], 4).unwrap() {
+        doc.set(Target::Terrain(at), Some(Value::Terrain(v)))
+            .unwrap();
+    }
+    let area = cliff_tools::rectangle([60, 60], [72, 72]);
+    let before = doc.snapshot().bytes().unwrap();
+    assert!(cliff_authoring::reshape(&doc, &scene, area, 4, false).is_err());
+    assert!(!shore_tools::wet(&scene, value(&doc, &scene, [64, 64])));
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+fn water_cliffs_fall_back_when_coastal_art_is_missing() {
+    let (mut doc, mut scene) = setup();
+    let water = shore_tools::plan(
+        &doc,
+        &scene,
+        cliff_tools::rectangle([48, 48], [84, 84]),
+        Some(true),
+    )
+    .unwrap();
+    water.apply(&mut doc).unwrap();
+    doc.commit("lake");
+    let base = scene.palette.tile_ids.unwrap().cliffs.water_cliffs.unwrap();
+    Arc::get_mut(&mut scene.palette)
+        .unwrap()
+        .images
+        .retain(|key, _| !(base..base + 22).contains(&key.tile_id));
+    let plan = cliff_authoring::line(&doc, &scene, [60, 62], [72, 62], 4, false).unwrap();
+    assert!(!plan.cliffs.is_empty());
+    assert!(
+        plan.cliffs
+            .iter()
+            .all(|s| { coastal_cliffs::piece(&scene, s.tile).is_some_and(|(_, water)| !water) })
+    );
+    undoable(&mut doc, &plan);
+    complete(&doc, &scene, &plan);
+}
+
+#[test]
+fn drawing_cliffs_cannot_leave_half_a_shore_template() {
+    let (mut doc, scene) = setup();
+    let area = cliff_tools::rectangle([60, 60], [72, 72]);
+    let draft = cliff_authoring::reshape(&doc, &scene, area.clone(), 4, false).unwrap();
+    let shore = scene.palette.tile_ids.unwrap().shore as u16;
+    // Set a two-cell shoreline across the edge of the cliff footprint,
+    // leaving its dry cell outside the set of edits.
+    let shore_cells = draft
+        .edits
+        .iter()
+        .find_map(|(&at, &v)| {
+            if v.level != 4 {
+                return None;
+            }
+            for (n, dx, dy, reverse) in [
+                (3, 0, 1, false),
+                (11, 1, 0, false),
+                (19, 0, 1, true),
+                (27, 1, 0, true),
+            ] {
+                let origin = if reverse {
+                    at
+                } else {
+                    shore_tools::offset(at, -dx, -dy).unwrap()
+                };
+                let dry = if reverse {
+                    shore_tools::offset(at, dx, dy).unwrap()
+                } else {
+                    origin
+                };
+                if !draft.edits.contains_key(&dry) {
+                    return Some(
+                        cliff_authoring::stamp(&doc, &scene, shore + n, origin, 4).unwrap(),
+                    );
+                }
+            }
+            None
+        })
+        .unwrap();
+    for (at, v) in shore_cells {
+        doc.set(Target::Terrain(at), Some(Value::Terrain(v)))
+            .unwrap();
+    }
+    let before = doc.snapshot().bytes().unwrap();
+    let Err(err) = cliff_authoring::reshape(&doc, &scene, area, 4, false) else {
+        panic!("a stroke must not cut an intact shore template");
+    };
+    assert!(err.to_string().contains("切断水岸模板"), "{err:#}");
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+#[ignore = "requires stock YR assets in RA2_DIR"]
+fn retail_water_cliffs_survive_map_reload_extension_and_ramps() {
+    let root = std::env::var_os("RA2_DIR").expect("RA2_DIR required");
+    let mut install = ra2_map_assets::assets::Install::open(std::path::Path::new(&root)).unwrap();
+    for theater in ["TEMPERATE", "SNOW", "URBAN", "DESERT", "NEWURBAN"] {
+        let scene = load_scene_bytes(
+            &mut install,
+            "retail-water-cliffs.map",
+            "test".into(),
+            NewMapOptions {
+                theater: theater.into(),
+                ..Default::default()
+            }
+            .bytes()
+            .unwrap(),
+            Instant::now(),
+        )
+        .unwrap();
+        let ids = scene.palette.tile_ids.unwrap();
+        let mut doc = MapDocument::new(scene.source.edit_base.as_ref().unwrap().clone());
+        let water = shore_tools::plan(
+            &doc,
+            &scene,
+            cliff_tools::rectangle([48, 48], [84, 84]),
+            Some(true),
+        )
+        .unwrap_or_else(|e| panic!("{theater}: could not draw lake: {e:#}"));
+        water.apply(&mut doc).unwrap();
+        doc.commit("lake");
+        let land = cliff_tools::rectangle([59, 59], [70, 70]);
+        let plan = cliff_authoring::reshape(&doc, &scene, land, 0, false)
+            .unwrap_or_else(|e| panic!("{theater}: could not draw island: {e:#}"));
+        assert!(
+            plan.cliffs
+                .iter()
+                .any(|s| { coastal_cliffs::piece(&scene, s.tile).is_some_and(|(_, water)| water) })
+                || !(0..22).any(|i| coastal_cliffs::supports(&scene, i)),
+            "{theater}"
+        );
+        undoable(&mut doc, &plan);
+        let reloaded = load_scene_bytes(
+            &mut install,
+            "retail-water-cliffs-edited.map",
+            "test".into(),
+            doc.snapshot().bytes().unwrap(),
+            Instant::now(),
+        )
+        .unwrap();
+        let mut reopened = MapDocument::new(reloaded.source.edit_base.as_ref().unwrap().clone());
+        complete(&reopened, &reloaded, &plan);
+        assert!(shore_tools::wet(
+            &reloaded,
+            value(&reopened, &reloaded, [54, 54])
+        ));
+        let extended = cliff_authoring::reshape(
+            &reopened,
+            &reloaded,
+            cliff_tools::rectangle([68, 59], [75, 70]),
+            0,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("{theater}: could not extend reopened island: {e:#}"));
+        undoable(&mut reopened, &extended);
+        complete(&reopened, &reloaded, &extended);
+        for at in [[64, 64], [73, 64]] {
+            let v = value(&reopened, &reloaded, at);
+            assert_eq!(
+                (shore_tools::id(&reloaded, v), v.level),
+                (Some(ids.clear as u16), 4)
+            );
+        }
+        for (start, end) in [([64, 70], [66, 70]), ([75, 70], [75, 70])] {
+            let entrance = cliff_authoring::ramp(&reopened, &reloaded, start, end, 0)
+                .unwrap_or_else(|e| panic!("{theater} {start:?} -> {end:?}: {e:#}"));
+            assert!(
+                entrance.edits.keys().any(|&at| {
+                    shore_tools::flat_water(&reloaded, value(&reopened, &reloaded, at))
+                }),
+                "{theater} {start:?}"
+            );
+            assert!(
+                entrance
+                    .cliffs
+                    .iter()
+                    .any(|s| shore_tools::shore(&reloaded, s.tile)),
+                "{theater} {start:?}"
+            );
+            let mut edited = reopened.fork();
+            undoable(&mut edited, &entrance);
+            complete(&edited, &reloaded, &entrance);
+            if theater == "TEMPERATE" && start == [64, 70] {
+                let saved = edited.snapshot().bytes().unwrap();
+                let (source, _) = ra2_map_document::source::SourceMap::parse(
+                    "retail-tapered-ramp.map".into(),
+                    "test".into(),
+                    saved,
+                )
+                .unwrap();
+                let saved = MapDocument::new(source.edit_base.unwrap());
+                assert!(
+                    entrance.edits.keys().any(|&at| {
+                        shore_tools::id(&reloaded, value(&saved, &reloaded, at)).is_some_and(|t| {
+                            i32::from(t) != ids.green && ids.is_green_lat(i32::from(t))
+                        })
+                    }),
+                    "save grass-to-sand transitional pieces, not merely the base sand"
+                );
+                assert!(
+                    cliff_authoring::ramp(&saved, &reloaded, start, start, 0)
+                        .unwrap()
+                        .edits
+                        .is_empty()
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn coastal_cliffs_switch_both_ways_and_are_recognized_by_height_tools() {
     let (mut d, s) = setup();

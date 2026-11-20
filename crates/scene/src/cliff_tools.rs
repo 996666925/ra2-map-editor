@@ -5,7 +5,7 @@
 use crate::{map::MapScene, terrain_tools::value};
 use anyhow::{Context, Result, ensure};
 use ra2_map_document::document::{Cell, MapDocument, Target, TerrainValue, Value, cell_line};
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque, btree_map::Entry};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 use vera20k_core::map::theater::TileKey;
 
@@ -493,14 +493,18 @@ fn geometry_impl(
     };
     let mut edits = stamped;
     for (&(x, y), &level) in &levels {
-        if !low_inside && level == base + 4
-            || low_inside && interior.contains(&[x as u16, y as u16])
+        let at = [x as u16, y as u16];
+        if (!low_inside && level == base + 4 || low_inside && interior.contains(&at))
+            && let Entry::Vacant(entry) = edits.entry(at)
         {
-            let at = [x as u16, y as u16];
-            edits.entry(at).or_insert_with(|| TerrainValue {
-                level,
-                ..value(doc, scene, at)
-            });
+            let old = value(doc, scene, at);
+            // An island needs dry high ground inside its cliff walls.
+            let next = if !low_inside && crate::shore_tools::flat_water(scene, old) {
+                crate::cliff_authoring::clear(scene, old, level)?
+            } else {
+                TerrainValue { level, ..old }
+            };
+            entry.insert(next);
         }
     }
     Ok(PlateauPlan {
@@ -549,6 +553,7 @@ fn validate_impl(
         .iter()
         .map(|(&tile, &raw)| (raw, tile))
         .collect();
+    let mut checked_shore = BTreeSet::new();
     for (&at, v) in edits {
         doc.check_cell(at)?;
         let old = value(doc, scene, at);
@@ -569,10 +574,18 @@ fn validate_impl(
         });
         let cliff =
             existing && tile.is_some_and(|t| crate::coastal_cliffs::piece(scene, t).is_some());
-        let water = crate::shore_tools::wet(scene, old)
-            && old.level == base
-            && crate::shore_tools::id(scene, *v)
-                .is_some_and(|t| crate::coastal_cliffs::piece(scene, t).is_some());
+        let water = crate::shore_tools::wet(scene, old) && {
+            let new_tile = crate::shore_tools::id(scene, *v);
+            let new_cliff =
+                new_tile.is_some_and(|t| crate::coastal_cliffs::piece(scene, t).is_some());
+            // Shore pieces keep the existing base-height cliff replacement rule.
+            // Open water can also become dry high ground or a lowered pool floor.
+            (old.level == base && new_cliff)
+                || (crate::shore_tools::flat_water(scene, old)
+                    && (new_cliff
+                        || new_tile.is_some_and(|t| i32::from(t) == ids.clear)
+                        || (v.tile, v.sub) == (old.tile, old.sub)))
+        };
         ensure!(
             (if flatten {
                 old.level <= MAX_CLIFF_LEVEL
@@ -583,7 +596,7 @@ fn validate_impl(
             }) && (morphable && geometry.is_some_and(|s| existing || s.slope == 0)
                 || cliff
                 || water),
-            "{},{} 不是同一基准高度的平坦可塑地面；请避开已有悬崖、道路、水面或坡道",
+            "{},{} 不是同一基准高度的平坦可塑地面；请避开不兼容的悬崖、道路、水岸或坡道",
             at[0],
             at[1]
         );
@@ -594,6 +607,20 @@ fn validate_impl(
             at[1]
         );
         ensure!(v.level <= MAX_CLIFF_LEVEL, "高台高度超出引擎正高度范围");
+        if let Some(tile) = tile.filter(|&t| crate::shore_tools::shore(scene, t))
+            && old != *v
+            && !checked_shore.contains(&at)
+        {
+            for (p, expected) in crate::shore_tools::existing_shore(doc, scene, at, tile, old)? {
+                ensure!(
+                    edits.get(&p).is_some_and(|&next| next != expected),
+                    "操作会切断水岸模板，请避开 {},{} 的水岸",
+                    p[0],
+                    p[1]
+                );
+                checked_shore.insert(p);
+            }
+        }
     }
     for record in doc
         .records()

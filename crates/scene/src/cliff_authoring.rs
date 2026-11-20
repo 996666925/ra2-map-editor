@@ -758,6 +758,11 @@ pub fn ramp(
         base <= cliff_tools::MAX_CLIFF_BASE,
         "坡道高度超出引擎正高度范围"
     );
+    if start == end
+        && let Some(plan) = ramp_join::repair_shore(doc, scene, start, base)?
+    {
+        return Ok(plan);
+    }
     if let Some(corner) = ramp_corner(doc, scene, start, base) {
         return corner_ramp(doc, scene, start, end, base, corner);
     }
@@ -784,10 +789,7 @@ fn ramp_corner(doc: &MapDocument, scene: &MapScene, start: Cell, base: u8) -> Op
         if level != base {
             continue;
         }
-        let (piece, water) = crate::coastal_cliffs::piece(scene, id)?;
-        if water {
-            continue;
-        }
+        let (piece, _) = crate::coastal_cliffs::piece(scene, id)?;
         let (outward, center) = match piece + 1 {
             1..=4 => ([-1, 1], offset(origin, 1, 0)?),
             12..=14 => ([1, 1], offset(origin, -1, -1)?),
@@ -813,7 +815,7 @@ fn corner_ramp(
 ) -> Result<PlateauPlan> {
     let extra = [start[0].abs_diff(end[0]), start[1].abs_diff(end[1])]
         .map(|n| i32::from(n.div_ceil(2)) * 2);
-    ramp_join::finish(
+    let ramp = ramp_join::finish(
         doc,
         scene,
         ramp_join::Shape::Corner {
@@ -823,7 +825,8 @@ fn corner_ramp(
         },
         base,
         start,
-    )
+    )?;
+    ramp_join::finish_shore(doc, scene, ramp)
 }
 
 pub(super) fn corner_geometry(
@@ -949,16 +952,18 @@ fn ramp_straight(
                 let Some(origin) = offset(start, ox, oy) else {
                     continue;
                 };
-                let Ok(p) = ramp_candidate(doc, scene, start, origin, base, direction, 0) else {
+                let Ok(prepared) = ramp_candidate(doc, scene, start, origin, base, direction, 0)
+                else {
                     continue;
                 };
+                let p = &prepared.plan;
                 let cx =
                     p.edits.keys().map(|p| i32::from(p[0])).sum::<i32>() / p.edits.len() as i32;
                 let cy =
                     p.edits.keys().map(|p| i32::from(p[1])).sum::<i32>() / p.edits.len() as i32;
                 let score = (cx - i32::from(start[0])).abs() + (cy - i32::from(start[1])).abs();
                 if best.as_ref().is_none_or(|(s, _, _)| score < *s) {
-                    best = Some((score, origin, p));
+                    best = Some((score, origin, prepared));
                 }
             }
         }
@@ -967,7 +972,7 @@ fn ramp_straight(
             let delta = if across_x { dx } else { dy };
             let extra = (delta.abs() + 1) / 2 * 2;
             if extra == 0 {
-                return Ok(p);
+                return ramp_join::finish_shore(doc, scene, p);
             }
             let shift = if delta < 0 { -extra } else { 0 };
             let origin = offset(
@@ -978,8 +983,9 @@ fn ramp_straight(
             .context("坡道越界")?;
             // Once the starting edge is found, an obstructed wider entrance
             // must fail as a whole instead of silently choosing another edge.
-            return ramp_candidate(doc, scene, start, origin, base, direction, extra)
-                .context("无法加宽坡道：请沿同一直线悬崖拖动，并避开对象、覆盖物与拐角");
+            let ramp = ramp_candidate(doc, scene, start, origin, base, direction, extra)
+                .context("无法加宽坡道：请沿同一直线悬崖拖动，并避开对象、覆盖物与拐角")?;
+            return ramp_join::finish_shore(doc, scene, ramp);
         }
     }
     anyhow::bail!(
@@ -995,7 +1001,7 @@ fn ramp_candidate(
     base: u8,
     direction: u8,
     extra: i32,
-) -> Result<PlateauPlan> {
+) -> Result<ramp_join::PreparedRamp> {
     ramp_join::finish(
         doc,
         scene,

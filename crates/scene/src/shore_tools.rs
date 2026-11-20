@@ -19,20 +19,75 @@ pub(crate) fn offset(at: Cell, dx: i32, dy: i32) -> Option<Cell> {
 pub(crate) fn id(scene: &MapScene, v: TerrainValue) -> Option<u16> {
     scene.palette.raw_ids.get(&v.tile).copied()
 }
-fn shore(scene: &MapScene, tile: u16) -> bool {
+pub(crate) fn shore(scene: &MapScene, tile: u16) -> bool {
     scene
         .palette
         .tile_ids
         .is_some_and(|i| i.shore >= 0 && (i.shore..i.shore + 40).contains(&i32::from(tile)))
 }
+/// Recover the complete shoreline piece owning an existing subtile.
+pub(crate) fn existing_shore(
+    doc: &MapDocument,
+    scene: &MapScene,
+    at: Cell,
+    tile: u16,
+    v: TerrainValue,
+) -> Result<BTreeMap<Cell, TerrainValue>> {
+    let t = scene
+        .palette
+        .templates
+        .get(&(tile, 0))
+        .context("已有海岸模板缺失")?;
+    let origin = offset(
+        at,
+        -(i32::from(v.sub) % i32::from(t.width)),
+        -(i32::from(v.sub) / i32::from(t.width)),
+    )
+    .context("已有海岸越界")?;
+    let base = v
+        .level
+        .checked_sub(
+            t.cells
+                .get(usize::from(v.sub))
+                .and_then(|s| *s)
+                .context("海岸子块无效")?
+                .height,
+        )
+        .context("海岸高度无效")?;
+    let cells = cliff_authoring::stamp(doc, scene, tile, origin, base)?;
+    for (&p, &expected) in &cells {
+        ensure!(
+            value(doc, scene, p) == expected,
+            "{},{} 的海岸模板不完整，请先恢复该模板",
+            p[0],
+            p[1]
+        );
+    }
+    Ok(cells)
+}
+
+fn water_tile(scene: &MapScene, tile: u16) -> bool {
+    scene.palette.tile_ids.is_some_and(|ids| {
+        ids.water_base >= 0
+            && (ids.water_base..ids.water_base + 14).contains(&i32::from(tile))
+            && crate::coastal_cliffs::same_tileset(scene, ids.water_base as u16, tile)
+    })
+}
+
+/// Flat WaterSet cells can be replaced independently of shoreline templates.
+pub(crate) fn flat_water(scene: &MapScene, v: TerrainValue) -> bool {
+    id(scene, v)
+        .filter(|&tile| water_tile(scene, tile))
+        .and_then(|tile| scene.palette.templates.get(&(tile, 0)))
+        .and_then(|t| t.cells.get(usize::from(v.sub)).copied().flatten())
+        .is_some_and(|sub| sub.height == 0 && sub.slope == 0)
+}
+
 /// Shore beach cells are the wet half of the authored shoreline, even though
 /// the engine lets amphibious/ground units walk on those cells.
 pub fn wet(scene: &MapScene, v: TerrainValue) -> bool {
-    let Some(i) = scene.palette.tile_ids else {
-        return false;
-    };
     id(scene, v).is_some_and(|tile| {
-        i.water_base >= 0 && (i.water_base..i.water_base + 14).contains(&i32::from(tile))
+        water_tile(scene, tile)
             || shore(scene, tile)
                 && scene
                     .palette
@@ -432,56 +487,12 @@ pub fn plan(
             let Some(tile) = id(scene, v).filter(|&t| shore(scene, t)) else {
                 continue;
             };
-            let t = scene
-                .palette
-                .templates
-                .get(&(tile, 0))
-                .context("已有海岸模板缺失")?;
-            let origin = offset(
-                at,
-                -(i32::from(v.sub) % i32::from(t.width)),
-                -(i32::from(v.sub) / i32::from(t.width)),
-            )
-            .context("已有海岸越界")?;
-            let base = v
-                .level
-                .checked_sub(
-                    t.cells
-                        .get(usize::from(v.sub))
-                        .and_then(|s| *s)
-                        .context("海岸子块无效")?
-                        .height,
-                )
-                .context("海岸高度无效")?;
-            for (p, expected) in cliff_authoring::stamp(doc, scene, tile, origin, base)? {
-                ensure!(
-                    value(doc, scene, p) == expected,
-                    "{},{} 的海岸模板不完整，请先恢复该模板",
-                    p[0],
-                    p[1]
-                );
-                zone.insert(p);
-            }
+            zone.extend(existing_shore(doc, scene, at, tile, v)?.into_keys());
         }
     }
     let mut logical = BTreeMap::new();
     let mut edits = BTreeMap::new();
-    let water_id = (ids.water_base..ids.water_base + 14)
-        .find(|&id| {
-            scene
-                .palette
-                .templates
-                .get(&(id as u16, 0))
-                .is_some_and(|t| {
-                    t.width == 1
-                        && t.height == 1
-                        && t.cells
-                            .first()
-                            .and_then(|s| *s)
-                            .is_some_and(|s| s.height == 0 && s.slope == 0 && s.terrain == 9)
-                })
-        })
-        .context("缺少 1×1 纯水面模板")? as u16;
+    let water_id = plain_water_tile(scene)?;
     let water = *scene
         .catalog
         .raw_tiles
@@ -548,19 +559,57 @@ pub fn plan(
             }
         }
     }
-    let edge_list: Vec<_> = edges.iter().copied().collect();
+    let fitted = fit_pieces(doc, scene, &logical, edges, |p| {
+        let old = value(doc, scene, p);
+        ground(scene, old) || wet(scene, old) || id(scene, old).is_some_and(|t| shore(scene, t))
+    })?;
+    let mut cliffs = Vec::new();
+    for c in fitted {
+        edits.extend(c.cells);
+        cliffs.push(c.stamp);
+    }
+    cliffs.extend(crate::coastal_cliffs::gather(doc, scene, &zone)?);
+    let mut result = PlateauPlan {
+        edits,
+        overlays: BTreeMap::new(),
+        cliffs,
+        interior: selection,
+        base: 0,
+    };
+    if scene
+        .palette
+        .tile_ids
+        .is_some_and(|i| i.cliffs.cliff_set.is_some())
+    {
+        crate::coastal_cliffs::adapt(doc, scene, &mut result)?;
+    }
+    ground_transitions(doc, scene, &zone, &mut result)?;
+    result.edits.retain(|&at, v| *v != value(doc, scene, at));
+    protect(doc, scene, &result.edits)?;
+    Ok(result)
+}
+
+fn fit_pieces(
+    doc: &MapDocument,
+    scene: &MapScene,
+    logical: &BTreeMap<Cell, (bool, u8)>,
+    edges: BTreeSet<Edge>,
+    replaceable: impl Fn(Cell) -> bool,
+) -> Result<Vec<Candidate>> {
+    let ids = scene.palette.tile_ids.context("缺少地形配置")?;
+    let edge_list: Vec<_> = edges.into_iter().collect();
     let mut incident: HashMap<Cell, Vec<usize>> = HashMap::new();
-    for (i, &(a, b)) in edges.iter().enumerate() {
+    for (i, &(a, b)) in edge_list.iter().enumerate() {
         incident.entry(a).or_default().push(i);
         incident.entry(b).or_default().push(i);
     }
     let mut origins = BTreeSet::new();
-    for &(a, b) in &edges {
+    for &(a, b) in &edge_list {
         for p in [a, b] {
             for dx in -2..=0 {
                 for dy in -2..=0 {
                     if let Some(p) = offset(p, dx, dy)
-                        && zone.contains(&p)
+                        && logical.contains_key(&p)
                     {
                         origins.insert(p);
                     }
@@ -617,13 +666,10 @@ pub fn plan(
                     return false;
                 };
                 let s = t.cells[usize::from(v.sub)].unwrap();
-                let old = value(doc, scene, *p);
                 wet == matches!(s.terrain, 9 | 10)
                     && level == v.level
                     && s.slope == 0
-                    && (ground(scene, old)
-                        || self::wet(scene, old)
-                        || id(scene, old).is_some_and(|t| shore(scene, t)))
+                    && replaceable(*p)
             }) {
                 continue;
             }
@@ -666,35 +712,531 @@ pub fn plan(
             c.stamp.origin,
         )
     });
-    let mut by_edge = vec![Vec::new(); edges.len()];
+    let mut by_edge = vec![Vec::new(); edge_list.len()];
     for (c, candidate) in candidates.iter().enumerate() {
         for &e in &candidate.edges {
             by_edge[e].push(c);
         }
     }
     let chosen = solve(&candidates, &by_edge)?;
-    let mut cliffs = Vec::new();
-    for c in chosen {
-        edits.extend(candidates[c].cells.iter().copied());
-        cliffs.push(candidates[c].stamp.clone());
+    let mut candidates: Vec<_> = candidates.into_iter().map(Some).collect();
+    Ok(chosen
+        .into_iter()
+        .filter_map(|i| candidates[i].take())
+        .collect())
+}
+
+fn plain_water_tile(scene: &MapScene) -> Result<u16> {
+    let ids = scene.palette.tile_ids.context("缺少地形配置")?;
+    Ok((ids.water_base..ids.water_base + 14)
+        .filter(|&tile| water_tile(scene, tile as u16))
+        .find(|&id| {
+            scene
+                .palette
+                .templates
+                .get(&(id as u16, 0))
+                .is_some_and(|t| {
+                    t.width == 1
+                        && t.height == 1
+                        && t.cells
+                            .first()
+                            .and_then(|s| *s)
+                            .is_some_and(|s| s.height == 0 && s.slope == 0 && s.terrain == 9)
+                })
+        })
+        .context("缺少 1×1 纯水面模板")? as u16)
+}
+
+/// Match a complete, flat ShorePieces template with one dry subtile.
+fn shore_tip(scene: &MapScene, shore_base: u16, size: [u16; 2], dry: usize) -> Option<u16> {
+    (shore_base..shore_base.saturating_add(40)).find(|&tile| {
+        crate::coastal_cliffs::same_tileset(scene, shore_base, tile)
+            && crate::cliff_variants::available(scene, tile)
+            && {
+                let template = &scene.palette.templates[&(tile, 0)];
+                [template.width, template.height] == size
+                    && template.cells.len() == usize::from(size[0] * size[1])
+                    && template.cells.iter().enumerate().all(|(i, s)| {
+                        s.is_some_and(|s| {
+                            s.height == 0
+                                && s.slope == 0
+                                && matches!(s.terrain, 9 | 10) == (i != dry)
+                        })
+                    })
+            }
+    })
+}
+
+fn has_low_edge(scene: &MapScene, v: TerrainValue, base: u8, edge: [usize; 2]) -> bool {
+    v.level == base
+        && id(scene, v)
+            .and_then(|tile| scene.palette.templates.get(&(tile, 0)))
+            .and_then(|t| t.cells.get(usize::from(v.sub)).copied().flatten())
+            .filter(|s| s.slope != 0)
+            .and_then(|s| crate::flatten_tools::RAMPS.get(usize::from(s.slope)))
+            .is_some_and(|corners| edge.into_iter().all(|i| corners[i] == 0))
+}
+
+const SHORE_EDGES: [([i32; 2], [usize; 2]); 4] = [
+    ([1, 0], [1, 2]),
+    ([-1, 0], [0, 3]),
+    ([0, 1], [2, 3]),
+    ([0, -1], [0, 1]),
+];
+
+#[derive(Clone, Copy)]
+struct RampLane {
+    dry: Cell,
+    wet: Cell,
+    outward: [i32; 2],
+    round_end: bool,
+}
+
+impl RampLane {
+    fn straight_tile(self, scene: &MapScene, shore_base: u16) -> Option<u16> {
+        let [dx, dy] = self.outward;
+        let size = if dx == 0 { [1, 2] } else { [2, 1] };
+        shore_tip(scene, shore_base, size, usize::from(dx < 0 || dy < 0))
     }
-    cliffs.extend(crate::coastal_cliffs::gather(doc, scene, &zone)?);
-    let mut result = PlateauPlan {
-        edits,
-        overlays: BTreeMap::new(),
-        cliffs,
-        interior: selection,
-        base: 0,
+}
+
+/// Determine where a complete flat shore piece can meet a slope at its base.
+/// The small returns turn a straight landing back towards the cliff, along
+/// the exposed low side of each triangular ramp cap.
+fn ramp_lanes(
+    doc: &MapDocument,
+    scene: &MapScene,
+    ramp: &PlateauPlan,
+    outward: [i32; 2],
+) -> (Vec<RampLane>, Vec<[RampLane; 2]>) {
+    let lane = |at, direction: [i32; 2], round_end| {
+        let [dx, dy] = direction;
+        let dry = offset(at, dx, dy)?;
+        let wet = offset(dry, dx, dy)?;
+        [dry, wet]
+            .into_iter()
+            .all(|p| !ramp.edits.contains_key(&p) && doc.check_cell(p).is_ok())
+            .then_some(RampLane {
+                dry,
+                wet,
+                outward: direction,
+                round_end,
+            })
     };
-    if scene
-        .palette
-        .tile_ids
-        .is_some_and(|i| i.cliffs.cliff_set.is_some())
-    {
-        crate::coastal_cliffs::adapt(doc, scene, &mut result)?;
+    let mut front = Vec::new();
+    let mut returns = Vec::new();
+    for (direction @ [dx, dy], edge) in SHORE_EDGES {
+        if dx != 0 && outward[0] != dx || dy != 0 && outward[1] != dy {
+            continue;
+        }
+        for (&at, &v) in &ramp.edits {
+            if !has_low_edge(scene, v, ramp.base, edge) {
+                continue;
+            }
+            let Some(contact) = lane(at, direction, true) else {
+                continue;
+            };
+            front.push(contact);
+            if direction != outward {
+                continue;
+            }
+            for (side @ [sx, sy], side_edge) in SHORE_EDGES {
+                if dx * sx + dy * sy == 0
+                    && has_low_edge(scene, v, ramp.base, side_edge)
+                    && let Some(flank) = lane(at, side, false)
+                    && let Some(turn) = lane(flank.dry, direction, true)
+                {
+                    returns.push([flank, turn]);
+                }
+            }
+        }
     }
-    ground_transitions(doc, scene, &zone, &mut result)?;
-    result.edits.retain(|&at, v| *v != value(doc, scene, at));
-    protect(doc, scene, &result.edits)?;
-    Ok(result)
+    (front, returns)
+}
+
+fn ramp_shore_tiles(scene: &MapScene) -> Option<(u16, [Option<u16>; 4])> {
+    let base = u16::try_from(scene.palette.tile_ids?.shore).ok()?;
+    Some((
+        base,
+        std::array::from_fn(|dry| shore_tip(scene, base, [2, 2], dry)),
+    ))
+}
+
+type RampCoast = (BTreeMap<Cell, TerrainValue>, Vec<CliffStamp>);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RampCoastProfile {
+    Rounded,
+    ProbeOriginal,
+    LegacyTaper,
+}
+
+/// Reconstruct the footprint independently of what occupies it, so the same
+/// complete pieces can also be recognized after saving and reopening.
+fn fitted_ramp_coast(
+    doc: &MapDocument,
+    scene: &MapScene,
+    ramp: &PlateauPlan,
+    outward: [i32; 2],
+    front: &[RampLane],
+    returns: &[[RampLane; 2]],
+    profile: RampCoastProfile,
+) -> Option<RampCoast> {
+    let [dx, dy] = outward;
+    if dx.abs() + dy.abs() != 1 || front.len() < 4 {
+        return None;
+    }
+    let axis = usize::from(dx != 0);
+    let (first, last) = (front.first()?.dry, front.last()?.dry);
+    let across = |p, n| offset(p, n * dy.abs(), n * dx.abs());
+    let forward = |p, n| offset(p, n * dx, n * dy);
+    if first[1 - axis] != last[1 - axis]
+        || front.len() != usize::from(last[axis].checked_sub(first[axis])?) + 1
+        || front.iter().any(|l| l.dry[1 - axis] != first[1 - axis])
+    {
+        return None;
+    }
+    let mut land: BTreeSet<_> = front.iter().map(|l| l.dry).collect();
+    let mut cliff_side = BTreeSet::new();
+    let probe = std::env::var("COAST_ROOT_PROBE").unwrap_or_default();
+    for (p, side) in [(first, -1), (last, 1)] {
+        let end = across(p, side)?;
+        let [flank, _] = returns.iter().find(|[_, turn]| turn.dry == end)?;
+        land.extend([flank.dry, end]);
+        if profile != RampCoastProfile::LegacyTaper {
+            land.extend([forward(end, 1)?, forward(end, 2)?]);
+            if profile == RampCoastProfile::Rounded {
+                for (row, flag) in probe.bytes().take(4).enumerate() {
+                    let cell = forward(flank.dry, row as i32)?;
+                    for extension in 1..=i32::from(flag.saturating_sub(b'0').min(5)) {
+                        let added = across(cell, side * extension)?;
+                        land.insert(added);
+                        if row == 0 {
+                            cliff_side.insert(edge(added, forward(added, -1)?));
+                        }
+                    }
+                }
+            }
+        }
+        cliff_side.insert(edge(flank.dry, forward(flank.dry, -1)?));
+    }
+    let width = i32::try_from(front.len()).ok()?;
+    for i in 0..width {
+        for step in 1..=2 {
+            land.insert(forward(across(first, i)?, step)?);
+        }
+    }
+    let mut logical = BTreeMap::new();
+    let mut edges = BTreeSet::new();
+    for &at in &land {
+        doc.check_cell(at).ok()?;
+        if ramp.edits.contains_key(&at) {
+            return None;
+        }
+        for sx in -2..=2 {
+            for sy in -2..=2 {
+                if let Some(n) = offset(at, sx, sy)
+                    && !ramp.edits.contains_key(&n)
+                    && doc.check_cell(n).is_ok()
+                {
+                    logical.insert(n, (!land.contains(&n), ramp.base));
+                }
+            }
+        }
+        for n in terrain_tools::neighbors(at) {
+            if !land.contains(&n)
+                && !ramp.edits.contains_key(&n)
+                && !cliff_side.contains(&edge(at, n))
+            {
+                edges.insert(edge(at, n));
+            }
+        }
+    }
+    let mut edits = BTreeMap::new();
+    let mut stamps = Vec::new();
+    for part in fit_pieces(doc, scene, &logical, edges, |_| true).ok()? {
+        edits.extend(part.cells);
+        stamps.push(part.stamp);
+    }
+    let ids = scene.palette.tile_ids?;
+    let green = u16::try_from(ids.green).ok().filter(|&id| {
+        let Some(template) = scene.palette.templates.get(&(id, 0)) else {
+            return false;
+        };
+        [template.width, template.height] == [1, 1]
+            && template
+                .cells
+                .first()
+                .copied()
+                .flatten()
+                .is_some_and(|s| s.height == 0 && s.slope == 0)
+            && crate::cliff_variants::available(scene, id)
+    });
+    let shore_cells: BTreeSet<_> = edits
+        .iter()
+        .filter_map(|(&p, &v)| (!wet(scene, v)).then_some(p))
+        .collect();
+    let mut filled = false;
+    for at in land {
+        if let std::collections::btree_map::Entry::Vacant(entry) = edits.entry(at) {
+            let mut v = cliff_authoring::clear(scene, value(doc, scene, at), ramp.base).ok()?;
+            // In stock temperate GreenTile is sand. Keep clear ground at
+            // the foot, with LAT where the floor meets the front and where
+            // it meets the two returns. Do not repaint the ramp subtiles.
+            if let Some(green) = green
+                && (forward(at, 1).is_some_and(|p| shore_cells.contains(&p))
+                    || profile != RampCoastProfile::LegacyTaper
+                        && [-1, 1]
+                            .into_iter()
+                            .any(|side| across(at, side).is_some_and(|p| shore_cells.contains(&p))))
+            {
+                v.tile = *scene.catalog.raw_tiles.get(&green)?;
+            }
+            entry.insert(v);
+            filled = true;
+        }
+    }
+    filled.then_some((edits, stamps))
+}
+
+/// Recover complete shore pieces associated with the saved ramp geometry.
+/// This includes the older strip without returns, so it can be repaired or
+/// widened in one operation using only terrain stored in the map.
+pub(crate) fn ramp_shore_cells(
+    doc: &MapDocument,
+    scene: &MapScene,
+    ramp: &PlateauPlan,
+    outward: [i32; 2],
+) -> BTreeSet<Cell> {
+    let Some((shore_base, corners)) = ramp_shore_tiles(scene) else {
+        return BTreeSet::new();
+    };
+    let (front, returns) = ramp_lanes(doc, scene, ramp, outward);
+    for profile in [RampCoastProfile::Rounded, RampCoastProfile::LegacyTaper] {
+        let profile = if std::env::var_os("COAST_ROOT_PROBE").is_some()
+            && profile == RampCoastProfile::Rounded
+        {
+            RampCoastProfile::ProbeOriginal
+        } else {
+            profile
+        };
+        if let Some((edits, _)) =
+            fitted_ramp_coast(doc, scene, ramp, outward, &front, &returns, profile)
+            && edits.iter().all(|(&at, &v)| {
+                let old = value(doc, scene, at);
+                old == v
+                    || (TerrainValue {
+                        tile: v.tile,
+                        ..old
+                    } == v
+                        && scene.palette.tile_ids.is_some_and(|ids| {
+                            id(scene, v).map(i32::from) == Some(ids.green)
+                                && id(scene, old).is_some_and(|t| ids.is_green_lat(i32::from(t)))
+                        }))
+            })
+        {
+            return edits.into_keys().collect();
+        }
+    }
+    let mut old_shore = BTreeSet::new();
+    if let Some(tile) = crate::coastal_cliffs::legacy_ramp_end(scene, outward) {
+        for [flank, _] in &returns {
+            if id(scene, value(doc, scene, flank.dry)) == Some(tile)
+                && let Ok(cells) = cliff_authoring::stamp(doc, scene, tile, flank.dry, ramp.base)
+                && cells
+                    .iter()
+                    .all(|(&at, &v)| !ramp.edits.contains_key(&at) && value(doc, scene, at) == v)
+            {
+                old_shore.extend(cells.into_keys());
+            }
+        }
+    }
+    for lane in front.into_iter().chain(returns.into_iter().flatten()) {
+        let old = value(doc, scene, lane.dry);
+        if old.level == ramp.base
+            && let Some(tile) = id(scene, old).filter(|&tile| shore(scene, tile))
+            && let Some(t) = scene.palette.templates.get(&(tile, 0))
+            && (lane.straight_tile(scene, shore_base) == Some(tile)
+                || ([t.width, t.height] == [2, 2]
+                    && corners.get(usize::from(old.sub)) == Some(&Some(tile))))
+            && let Ok(cells) = existing_shore(doc, scene, lane.dry, tile, old)
+            && cells.get(&lane.wet).is_some_and(|&v| wet(scene, v))
+            && cells.keys().all(|p| !ramp.edits.contains_key(p))
+        {
+            old_shore.extend(cells.into_keys());
+        }
+    }
+    old_shore
+}
+
+/// Prefer a rounded stock-TMP shore. In tight spaces or at corners keep a
+/// compact shore without changing the ramp's footprint.
+pub(crate) fn join_ramp(
+    doc: &MapDocument,
+    scene: &MapScene,
+    ramp: &mut PlateauPlan,
+    outward: [i32; 2],
+    old_shore: BTreeSet<Cell>,
+) -> Result<()> {
+    let Some((shore_base, corners)) = ramp_shore_tiles(scene) else {
+        return Ok(());
+    };
+    let base = ramp.base;
+    let (front, returns) = ramp_lanes(doc, scene, ramp, outward);
+    let water_available = |at| {
+        old_shore.contains(&at) || {
+            let old = value(doc, scene, at);
+            old.level == base && flat_water(scene, old)
+        }
+    };
+    if let Some((edits, stamps)) = fitted_ramp_coast(
+        doc,
+        scene,
+        ramp,
+        outward,
+        &front,
+        &returns,
+        RampCoastProfile::Rounded,
+    ) && edits.keys().copied().all(water_available)
+        && protect(doc, scene, &edits).is_ok()
+    {
+        return finish_ramp_coast(doc, scene, ramp, old_shore, edits, stamps);
+    }
+    let usable = |lane: RampLane| {
+        lane.straight_tile(scene, shore_base).is_some()
+            && [lane.dry, lane.wet].into_iter().all(water_available)
+    };
+    let mut lanes = BTreeMap::new();
+    let mut reserved = BTreeSet::new();
+    for lane in front.into_iter().filter(|&lane| usable(lane)) {
+        if !reserved.contains(&lane.dry) && !reserved.contains(&lane.wet) {
+            reserved.extend([lane.dry, lane.wet]);
+            lanes.insert(lane.dry, lane);
+        }
+    }
+    let mut edits = BTreeMap::new();
+    let mut stamps = Vec::new();
+    for [flank, turn] in returns {
+        let [dx, dy] = flank.outward;
+        // The return needs room for its outer rounding, or the default
+        // front corner is a better fit in the available water.
+        let (Some(outer_dry), Some(outer_wet)) =
+            (offset(turn.dry, dx, dy), offset(turn.wet, dx, dy))
+        else {
+            continue;
+        };
+        let return_cells = [
+            flank.dry, flank.wet, turn.dry, turn.wet, outer_dry, outer_wet,
+        ];
+        if usable(flank)
+            && usable(turn)
+            && return_cells.into_iter().all(|p| {
+                !reserved.contains(&p)
+                    && !ramp.edits.contains_key(&p)
+                    && doc.check_cell(p).is_ok()
+                    && water_available(p)
+                    && doc.overlay(p).0 == 255
+            })
+        {
+            for lane in [flank, turn] {
+                reserved.extend([lane.dry, lane.wet]);
+                lanes.insert(lane.dry, lane);
+            }
+        }
+    }
+    for lane in lanes.into_values() {
+        let RampLane {
+            dry,
+            wet,
+            outward: [dx, dy],
+            round_end,
+        } = lane;
+        let straight = lane.straight_tile(scene, shore_base).unwrap();
+        let corner = round_end
+            .then(|| {
+                [-1, 1].into_iter().find_map(|sign| {
+                    let a = offset(dry, sign * dy.abs(), sign * dx.abs())?;
+                    let b = offset(wet, sign * dy.abs(), sign * dx.abs())?;
+                    if [a, b].into_iter().any(|p| {
+                        reserved.contains(&p)
+                            || ramp.edits.contains_key(&p)
+                            || edits.contains_key(&p)
+                            || doc.check_cell(p).is_err()
+                            || !water_available(p)
+                    }) {
+                        return None;
+                    }
+                    let origin = [
+                        dry[0].min(wet[0]).min(a[0]).min(b[0]),
+                        dry[1].min(wet[1]).min(a[1]).min(b[1]),
+                    ];
+                    let dry_sub = usize::from(2 * (dry[1] - origin[1]) + dry[0] - origin[0]);
+                    Some((corners[dry_sub]?, origin))
+                })
+            })
+            .flatten();
+        let (tile, origin) = corner.unwrap_or((straight, dry.min(wet)));
+        edits.extend(cliff_authoring::stamp(doc, scene, tile, origin, base)?);
+        stamps.push(CliffStamp { tile, origin, base });
+    }
+    finish_ramp_coast(doc, scene, ramp, old_shore, edits, stamps)
+}
+
+fn finish_ramp_coast(
+    doc: &MapDocument,
+    scene: &MapScene,
+    ramp: &mut PlateauPlan,
+    old_shore: BTreeSet<Cell>,
+    mut edits: BTreeMap<Cell, TerrainValue>,
+    stamps: Vec<CliffStamp>,
+) -> Result<()> {
+    let obsolete: Vec<_> = old_shore
+        .into_iter()
+        .filter(|at| !ramp.edits.contains_key(at) && !edits.contains_key(at))
+        .collect();
+    if !obsolete.is_empty() {
+        let tile = plain_water_tile(scene)?;
+        let raw = *scene
+            .catalog
+            .raw_tiles
+            .get(&tile)
+            .context("缺少可保存的水面编号")?;
+        for at in obsolete {
+            edits.insert(
+                at,
+                TerrainValue {
+                    tile: raw,
+                    sub: 0,
+                    ..value(doc, scene, at)
+                },
+            );
+        }
+    }
+    // Persist the real grass-to-sand LAT tiles. Restrict writes to the new
+    // shore floor so slope fixups and LATs on neighboring land stay intact.
+    if let Some(ids) = scene.palette.tile_ids {
+        let sand: BTreeSet<_> = edits
+            .iter()
+            .filter_map(|(&at, &v)| (id(scene, v).map(i32::from) == Some(ids.green)).then_some(at))
+            .collect();
+        if !sand.is_empty() {
+            let mut scratch = doc.fork();
+            ramp.apply(&mut scratch)?;
+            for (&at, &v) in &edits {
+                scratch.set(Target::Terrain(at), Some(Value::Terrain(v)))?;
+            }
+            terrain_tools::recalculate(&mut scratch, scene, &sand)?;
+            for at in sand {
+                edits.insert(at, value(&scratch, scene, at));
+            }
+        }
+    }
+    protect(doc, scene, &edits)?;
+    ramp.edits.extend(edits);
+    ramp.cliffs.extend(stamps);
+    // Shore edits change which cliff feet touch water. Re-select the matching
+    // stock water-cliff TMPs after the final shore footprint is known.
+    crate::coastal_cliffs::adapt(doc, scene, ramp)?;
+    crate::cliff_variants::apply(doc, scene, ramp);
+    Ok(())
 }

@@ -20,6 +20,28 @@ pub(crate) fn same_tileset(scene: &MapScene, a: u16, b: u16) -> bool {
         .is_some_and(|(a, b)| a.id == b.id)
 }
 
+/// WCliff24/25 join a vertical cliff to a flat shore in Tsunami. Recognize
+/// them here only to recover complete pieces from older ramp experiments.
+pub(crate) fn legacy_ramp_end(scene: &MapScene, outward: [i32; 2]) -> Option<u16> {
+    let (index, size) = match outward {
+        [0, 1] => (23, [1, 3]),
+        [1, 0] => (24, [3, 1]),
+        _ => return None,
+    };
+    let base = scene.palette.tile_ids?.cliffs.water_cliffs?;
+    let tile = base.checked_add(index)?;
+    if !same_tileset(scene, base, tile) || !cliff_variants::available(scene, tile) {
+        return None;
+    }
+    let t = &scene.palette.templates[&(tile, 0)];
+    ([t.width, t.height] == size
+        && t.cells.len() == 3
+        && t.cells.iter().zip([15, 10, 10]).all(|(cell, terrain)| {
+            cell.is_some_and(|m| (m.height, m.slope, m.terrain) == (0, 0, terrain))
+        }))
+    .then_some(tile)
+}
+
 /// WaterCliffs only shares the first 22 orientations with CliffSet. Later
 /// entries are caves/shore joins, not the land set's back faces.
 pub(crate) fn piece(scene: &MapScene, tile: u16) -> Option<(u16, bool)> {
@@ -91,6 +113,7 @@ fn adapt_inner(
         } else {
             land.checked_add(index)
         }
+        .filter(|&tile| cliff_variants::available(scene, tile))
     };
     let mut cliffs = Vec::with_capacity(p.cliffs.len());
     for s in &p.cliffs {
@@ -107,10 +130,7 @@ fn adapt_inner(
                 // At a shoreline boundary, converting the wide tile as a
                 // whole would also repaint the half whose foot stays dry.
                 let narrow_index = halves[0].tile - (s.tile - index);
-                let targets = [first, second].map(|water| {
-                    target(narrow_index, water)
-                        .filter(|&tile| cliff_variants::available(scene, tile))
-                });
+                let targets = [first, second].map(|water| target(narrow_index, water));
                 if let [Some(a), Some(b)] = targets {
                     for (half, tile) in halves.iter_mut().zip([a, b]) {
                         half.tile = tile;

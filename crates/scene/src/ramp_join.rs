@@ -17,6 +17,15 @@ pub(super) enum Shape {
     },
 }
 impl Shape {
+    fn outward(self) -> [i32; 2] {
+        match self {
+            Self::Straight { direction, .. } => {
+                [[0, 1], [1, 0], [0, -1], [-1, 0]][usize::from(direction)]
+            }
+            Self::Corner { outward, .. } => outward,
+        }
+    }
+
     fn geometry(self, doc: &MapDocument, scene: &MapScene, base: u8) -> Result<PlateauPlan> {
         match self {
             Self::Straight {
@@ -180,10 +189,15 @@ pub(super) fn infer_base(doc: &MapDocument, scene: &MapScene, start: Cell) -> Op
     None
 }
 
-fn recover(doc: &MapDocument, scene: &MapScene, plan: &PlateauPlan, base: u8) -> Vec<Shape> {
+fn recover(
+    doc: &MapDocument,
+    scene: &MapScene,
+    seeds: impl IntoIterator<Item = Cell>,
+    base: u8,
+) -> Vec<Shape> {
     let mut seen = BTreeSet::new();
     let mut queue = VecDeque::new();
-    for &at in plan.edits.keys() {
+    for at in seeds {
         for x in -1..=1 {
             for y in -1..=1 {
                 if let Some(p) = offset(at, x, y) {
@@ -279,19 +293,25 @@ fn recover(doc: &MapDocument, scene: &MapScene, plan: &PlateauPlan, base: u8) ->
     shapes
 }
 
+pub(super) struct PreparedRamp {
+    shape: Shape,
+    pub(super) plan: PlateauPlan,
+    old_shore: BTreeSet<Cell>,
+}
+
 pub(super) fn finish(
     doc: &MapDocument,
     scene: &MapScene,
     mut shape: Shape,
     base: u8,
     start: Cell,
-) -> Result<PlateauPlan> {
+) -> Result<PreparedRamp> {
     let mut p = shape.geometry(doc, scene, base)?;
     ensure!(
         p.edits.contains_key(&start),
         "请从悬崖边缘或已有坡道入口拖动"
     );
-    let old = recover(doc, scene, &p, base);
+    let old = recover(doc, scene, p.edits.keys().copied(), base);
     let mut included = BTreeSet::new();
     loop {
         let mut changed = false;
@@ -339,10 +359,35 @@ pub(super) fn finish(
         touched |= cliff(scene, value(doc, scene, at), at).is_some();
     }
     ensure!(touched, "请放置在悬崖边界或已有坡道入口");
-    complete_replacement(doc, scene, &mut p)?;
+    // A ramp replaces the flat water under its footprint cell by cell.
+    // Normalize those cells for preflight while retaining the real heights
+    // and occupancy. Shoreline templates still require complete replacement.
+    let mut old_shore = BTreeSet::new();
+    for i in included {
+        let shape = old[i];
+        let saved = shape.geometry(doc, scene, base)?;
+        old_shore.extend(crate::shore_tools::ramp_shore_cells(
+            doc,
+            scene,
+            &saved,
+            shape.outward(),
+        ));
+    }
+    let mut validation = doc.fork();
+    for &at in p.edits.keys() {
+        let old = value(doc, scene, at);
+        if old_shore.contains(&at)
+            || old.level == base && crate::shore_tools::flat_water(scene, old)
+        {
+            validation.set(
+                Target::Terrain(at),
+                Some(Value::Terrain(clear(scene, old, old.level)?)),
+            )?;
+        }
+    }
+    complete_replacement(&validation, scene, &mut p)?;
     // Admit only complete same-height endpoint TMPs for replacement here;
     // generic plateau authoring still protects existing entrances.
-    let mut validation = doc.fork();
     for &at in p.edits.keys() {
         if let Some(e) = end_at(doc, scene, at) {
             ensure!(e.base == base, "已有坡道基准高度不匹配");
@@ -357,5 +402,55 @@ pub(super) fn finish(
         }
     }
     cliff_tools::validate(&validation, scene, &p.edits, base, true)?;
-    Ok(p)
+    Ok(PreparedRamp {
+        shape,
+        plan: p,
+        old_shore,
+    })
+}
+
+pub(super) fn repair_shore(
+    doc: &MapDocument,
+    scene: &MapScene,
+    start: Cell,
+    base: u8,
+) -> Result<Option<PlateauPlan>> {
+    if end_at(doc, scene, start).is_none() && body_at(doc, scene, start).is_none() {
+        return Ok(None);
+    }
+    for shape in recover(doc, scene, [start], base) {
+        let plan = shape.geometry(doc, scene, base)?;
+        if plan.edits.contains_key(&start) {
+            let old_shore =
+                crate::shore_tools::ramp_shore_cells(doc, scene, &plan, shape.outward());
+            let already_coastal = !old_shore.is_empty();
+            let mut plan = finish_shore(
+                doc,
+                scene,
+                PreparedRamp {
+                    shape,
+                    plan,
+                    old_shore,
+                },
+            )?;
+            plan.edits.retain(|&at, v| value(doc, scene, at) != *v);
+            if already_coastal || !plan.edits.is_empty() {
+                return Ok(Some(plan));
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub(super) fn finish_shore(
+    doc: &MapDocument,
+    scene: &MapScene,
+    PreparedRamp {
+        shape,
+        mut plan,
+        old_shore,
+    }: PreparedRamp,
+) -> Result<PlateauPlan> {
+    crate::shore_tools::join_ramp(doc, scene, &mut plan, shape.outward(), old_shore)?;
+    Ok(plan)
 }
