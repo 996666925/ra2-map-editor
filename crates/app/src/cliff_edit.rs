@@ -4,6 +4,13 @@ use crate::i18n::tr;
 use ra2_map_scene::cliff_authoring;
 use ra2_map_scene::cliff_tools::{self, PlateauPlan};
 
+fn click_polyline(mode: TerrainMode) -> bool {
+    matches!(
+        mode,
+        TerrainMode::CliffPolyline | TerrainMode::WaterPolyline
+    )
+}
+
 #[derive(Default)]
 pub(super) struct PlateauEdit {
     gesture: Option<Gesture>,
@@ -45,12 +52,17 @@ impl PlateauEdit {
     ) -> std::result::Result<Arc<PlateauPlan>, String> {
         let g = self.gesture.as_ref().ok_or(tr!("按下并拖动绘制高台"))?;
         let mut path = g.path.clone();
-        if path.last() != Some(&at) {
+        // Water previews show the exact closure Enter will commit. Hover
+        // only draws a guide for the next edge until that point is clicked.
+        if g.mode != TerrainMode::WaterPolyline && path.last() != Some(&at) {
             path.push(at);
         }
         if !matches!(
             g.mode,
-            TerrainMode::CliffOutline | TerrainMode::CliffPolyline | TerrainMode::WaterOutline
+            TerrainMode::CliffOutline
+                | TerrainMode::CliffPolyline
+                | TerrainMode::WaterOutline
+                | TerrainMode::WaterPolyline
         ) {
             path = vec![
                 g.start,
@@ -105,6 +117,11 @@ impl PlateauEdit {
                     )?));
                 }
                 if key.mode.joining() {
+                    if key.mode == TerrainMode::WaterPolyline {
+                        return Ok(Arc::new(ra2_map_scene::shore_tools::polyline(
+                            doc, scene, &key.path,
+                        )?));
+                    }
                     if key.mode == TerrainMode::WaterOutline {
                         return Ok(Arc::new(ra2_map_scene::shore_tools::outline(
                             doc, scene, &key.path,
@@ -117,7 +134,7 @@ impl PlateauEdit {
                         )?));
                     }
                     let paint = match key.mode {
-                        TerrainMode::Water | TerrainMode::WaterOutline => Some(true),
+                        TerrainMode::Water => Some(true),
                         TerrainMode::LandFill => Some(false),
                         _ => None,
                     };
@@ -177,12 +194,12 @@ impl PlateauEdit {
     }
 }
 impl Editor {
-    pub(super) fn cliff_polyline_shortcuts(&mut self, ctx: &egui::Context, scene: &MapScene) {
+    pub(super) fn polyline_shortcuts(&mut self, ctx: &egui::Context, scene: &MapScene) {
         if !self
             .plateau
             .gesture
             .as_ref()
-            .is_some_and(|g| g.mode == TerrainMode::CliffPolyline)
+            .is_some_and(|g| click_polyline(g.mode))
         {
             return;
         }
@@ -209,10 +226,10 @@ impl Editor {
             .plateau
             .generate(self.doc.as_ref().unwrap(), scene, last);
         // Keep an invalid polyline editable so its last vertex can be removed.
-        if mode == TerrainMode::CliffPolyline
+        if click_polyline(mode)
             && let Err(ref e) = result
         {
-            self.status = e.clone();
+            self.status = crate::i18n::text(e).to_owned();
             return;
         }
         self.plateau.cancel();
@@ -263,11 +280,17 @@ impl Editor {
             .plateau
             .gesture
             .as_ref()
-            .is_some_and(|g| g.mode == TerrainMode::CliffPolyline)
+            .is_some_and(|g| click_polyline(g.mode))
         {
             if press && let Some(at) = at {
                 let g = self.plateau.gesture.as_mut().unwrap();
-                if g.path.last() != Some(&at) {
+                if g.mode == TerrainMode::WaterPolyline && at == g.start {
+                    // The planner already closes the path. Keep the stored
+                    // vertices editable if the attempted closure is invalid.
+                    if g.path.len() > 1 {
+                        self.finish_plateau(scene);
+                    }
+                } else if g.path.last() != Some(&at) {
                     g.path.push(at);
                     if at == g.start && g.path.len() >= 4 {
                         self.finish_plateau(scene);
@@ -309,7 +332,7 @@ impl Editor {
                     })
                 },
             });
-            if self.terrain_mode == TerrainMode::CliffPolyline {
+            if click_polyline(self.terrain_mode) {
                 return true;
             }
         }
@@ -346,6 +369,8 @@ impl Editor {
                     tr!("点击崖顶或地面拾取高度；此次点击不会修改地图。")
                 } else if self.terrain_mode == TerrainMode::CliffPolyline {
                     tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。")
+                } else if self.terrain_mode == TerrainMode::WaterPolyline {
+                    tr!("点击添加折点，点击起点或按 Enter 闭合填水。Backspace 撤回折点，Esc 取消。")
                 } else {
                     crate::i18n::text(self.terrain_mode.name())
                 },
@@ -356,7 +381,10 @@ impl Editor {
         }
         let world = camera.world_rect(rect);
         let result = self.plateau.generate(doc, scene, at);
-        let error = result.as_ref().err().cloned();
+        let error = result
+            .as_ref()
+            .err()
+            .map(|e| crate::i18n::text(e).to_owned());
         let plan = result
             .ok()
             .or_else(|| self.plateau.preview.as_ref()?.bridge_draft.clone());
@@ -642,6 +670,8 @@ impl Editor {
                         .unwrap_or_else(|| {
                             if g.mode == TerrainMode::CliffPolyline {
                                 format!("{heights} · {}", tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。"))
+                            } else if g.mode == TerrainMode::WaterPolyline {
+                                tr!("点击添加折点，点击起点或按 Enter 闭合填水。Backspace 撤回折点，Esc 取消。").into()
                             } else { tr!(
                                 "{arg0} 格修改 · {arg1} 个地形模板 · {arg2}；松开放置，Esc 取消",
                                 arg0 = plan.edits.len() + plan.overlays.len(),
@@ -672,7 +702,7 @@ impl Editor {
                     for cell in cliff_tools::rectangle(g.start, at) {
                         outline(painter, cell, g.base);
                     }
-                } else {
+                } else if g.mode != TerrainMode::WaterPolyline {
                     for (a, b) in g
                         .path
                         .iter()
@@ -694,13 +724,20 @@ impl Editor {
             }
         }
         if let Some(g) = self.plateau.gesture.as_ref()
-            && g.mode == TerrainMode::CliffPolyline
+            && click_polyline(g.mode)
         {
+            let water = g.mode == TerrainMode::WaterPolyline;
             let position = |at: Cell| {
                 let (x, y) = vera20k_core::map::terrain::iso_to_screen(
                     at[0],
                     at[1],
-                    if self.flat_view { 0 } else { g.base },
+                    if self.flat_view {
+                        0
+                    } else if water {
+                        terrain_tools::value(doc, scene, at).level
+                    } else {
+                        g.base
+                    },
                 );
                 rect.min + (egui::pos2(x + 30., y + 15.) - world.min) * camera.zoom
             };
@@ -708,13 +745,20 @@ impl Editor {
             if path.last() != Some(&at) {
                 path.push(at);
             }
-            let high_left = g.high_left;
+            if water && g.path.len() >= 3 {
+                painter.extend(egui::Shape::dashed_line(
+                    &[position(*g.path.last().unwrap()), position(g.start)],
+                    egui::Stroke::new(2., color),
+                    6.,
+                    4.,
+                ));
+            }
             for (i, ab) in path.windows(2).enumerate() {
                 let a = position(ab[0]);
                 let b = position(ab[1]);
                 if i + 1 < g.path.len() {
                     painter.line_segment([a, b], egui::Stroke::new(2., Color32::YELLOW));
-                } else {
+                } else if !water || at != g.start || g.path.len() < 3 {
                     painter.extend(egui::Shape::dashed_line(
                         &[a, b],
                         egui::Stroke::new(2., Color32::YELLOW),
@@ -722,9 +766,9 @@ impl Editor {
                         4.,
                     ));
                 }
-                if a.distance(b) > 12. {
+                if !water && a.distance(b) > 12. {
                     let d = (b - a).normalized();
-                    let normal = egui::vec2(d.y, -d.x) * if high_left { 1. } else { -1. };
+                    let normal = egui::vec2(d.y, -d.x) * if g.high_left { 1. } else { -1. };
                     painter.arrow(
                         a + (b - a) * 0.5,
                         normal * 18.,
@@ -794,6 +838,9 @@ impl Editor {
                         "按住描绘水域轮廓，松开闭合并填水；无法拼接的细小折角会按 2×2 格向外规整，以预览为准。"
                     )
                 }
+                TerrainMode::WaterPolyline => {
+                    tr!("点击添加折点，点击起点或按 Enter 闭合填水。Backspace 撤回折点，Esc 取消。")
+                }
                 TerrainMode::LandFill => {
                     tr!("拖动矩形回填为平地；自动移除旧岸线，修补湖岸和岛屿。")
                 }
@@ -813,6 +860,11 @@ impl Editor {
                 _ => tr!("沿道路中心线拖动切除，修复剩余路段的端点和路口。"),
             };
             ui.small(text);
+            if self.terrain_mode == TerrainMode::WaterPolyline {
+                ui.small(tr!(
+                    "自动连接末点与起点，保留凹形轮廓。岸线无法拼接时按 2×2 格向外规整。"
+                ));
+            }
             if matches!(self.terrain_mode, TerrainMode::Road | TerrainMode::RoadCut) {
                 ui.small(tr!(
                     "中心线吸附附近道路；路口与转角之间请保留至少 4 格直道。切除后恢复为平地。"

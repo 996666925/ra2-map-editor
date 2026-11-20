@@ -56,6 +56,90 @@ fn undoable(doc: &mut MapDocument, p: &PlateauPlan) {
 }
 
 #[test]
+fn water_polyline_keeps_concavities_for_both_directions_and_closure_methods() {
+    let (mut d, s) = setup();
+    let path = [[60, 60], [78, 60], [78, 66], [69, 66], [69, 78], [60, 78]];
+    let open = shore_tools::polyline(&d, &s, &path).unwrap();
+    let closed: Vec<_> = path.into_iter().chain([path[0]]).collect();
+    assert_eq!(
+        open.edits,
+        shore_tools::polyline(&d, &s, &closed).unwrap().edits
+    );
+    let reversed: Vec<_> = path.into_iter().rev().collect();
+    assert_eq!(
+        open.edits,
+        shore_tools::polyline(&d, &s, &reversed).unwrap().edits
+    );
+    undoable(&mut d, &open);
+    complete(&d, &s, &open);
+    assert!(shore_tools::wet(&s, value(&d, &s, [64, 72])));
+    assert!(shore_tools::wet(&s, value(&d, &s, [75, 63])));
+    assert!(
+        !shore_tools::wet(&s, value(&d, &s, [72, 71])),
+        "preserve the dry notch inside the convex hull"
+    );
+}
+
+#[test]
+fn water_polyline_preserves_a_dry_bay_behind_a_narrow_diagonal_mouth() {
+    let (mut d, s) = setup();
+    let path = [
+        [60, 60],
+        [68, 60],
+        [74, 66],
+        [74, 74],
+        [87, 74],
+        [87, 66],
+        [76, 66],
+        [70, 60],
+        [94, 60],
+        [94, 86],
+        [60, 86],
+    ];
+    let p = shore_tools::polyline(&d, &s, &path).unwrap();
+    p.apply(&mut d).unwrap();
+    assert!(shore_tools::wet(&s, value(&d, &s, [82, 80])));
+    assert!(
+        !shore_tools::wet(&s, value(&d, &s, [80, 70])),
+        "the bay is outside the polygon"
+    );
+}
+
+#[test]
+fn water_polyline_rejects_ambiguous_closures_without_editing_the_map() {
+    let (d, s) = setup();
+    let before = d.snapshot().bytes().unwrap();
+    let start = [60, 60];
+    let east = [78, 60];
+    let corner = [78, 78];
+    let upper = [60, 78];
+    for (path, message) in [
+        (vec![start, east], "至少三个"),
+        // Drawn edges do not cross. The closing edge crosses x = 66.
+        (
+            vec![
+                start,
+                east,
+                corner,
+                [66, 78],
+                [66, 66],
+                [72, 66],
+                [72, 72],
+                [69, 72],
+            ],
+            "自交",
+        ),
+        (vec![start, corner, upper, east, start], "自交"),
+        (vec![start, east, [72, 60]], "重叠"),
+        (vec![start, east, corner, upper, east], "自交"),
+    ] {
+        let error = shore_tools::polyline(&d, &s, &path).err().unwrap();
+        assert!(error.to_string().contains(message), "{path:?}: {error}");
+        assert_eq!(d.snapshot().bytes().unwrap(), before);
+    }
+}
+
+#[test]
 fn freehand_water_outlines_fit_diagonal_edges_and_small_pointer_jitter() {
     let (mut d, s) = setup();
     let path = [

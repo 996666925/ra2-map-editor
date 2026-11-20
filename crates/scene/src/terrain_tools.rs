@@ -62,6 +62,7 @@ pub enum TerrainMode {
     Bridge,
     Water,
     WaterOutline,
+    WaterPolyline,
     LandFill,
     ShoreRepair,
     Road,
@@ -69,7 +70,7 @@ pub enum TerrainMode {
     CoastalCliff,
 }
 impl TerrainMode {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Subtile,
         Self::Template,
         Self::Fill,
@@ -88,6 +89,7 @@ impl TerrainMode {
         Self::Bridge,
         Self::Water,
         Self::WaterOutline,
+        Self::WaterPolyline,
         Self::LandFill,
         Self::ShoreRepair,
         Self::Road,
@@ -114,6 +116,7 @@ impl TerrainMode {
             Self::Bridge => "桥梁（拖动连接两端）",
             Self::Water => "矩形水域（自动岸线）",
             Self::WaterOutline => "围合水域（自动岸线）",
+            Self::WaterPolyline => "折线水域（自动岸线）",
             Self::LandFill => "回填陆地（修补岸线）",
             Self::ShoreRepair => "修复岸线（矩形）",
             Self::Road => "道路（自动转角 / 路口）",
@@ -145,6 +148,7 @@ impl TerrainMode {
             self,
             Self::Water
                 | Self::WaterOutline
+                | Self::WaterPolyline
                 | Self::LandFill
                 | Self::ShoreRepair
                 | Self::Road

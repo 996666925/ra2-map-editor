@@ -683,7 +683,7 @@ impl Editor {
         if undo || redo {
             self.history(redo, scene);
         }
-        self.cliff_polyline_shortcuts(ctx, scene);
+        self.polyline_shortcuts(ctx, scene);
         self.tool_shortcuts(ctx);
         self.terrain_placement_shortcuts(ctx, scene);
         if self.stroking {

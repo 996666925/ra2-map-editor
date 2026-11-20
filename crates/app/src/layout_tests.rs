@@ -142,8 +142,13 @@ fn mission_refresh_preserves_gpu_and_viewport_bindings_through_history() {
 }
 
 fn flat_authoring_view() -> (MapView, MapScene, PathBuf) {
+    flat_authoring_view_with(ra2_map_assets::test_support::Fixture::with_authoring())
+}
+
+fn flat_authoring_view_with(
+    fixture: ra2_map_assets::test_support::Fixture,
+) -> (MapView, MapScene, PathBuf) {
     let (mut view, root) = view();
-    let fixture = ra2_map_assets::test_support::Fixture::with_authoring();
     let mut install = fixture.install();
     install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
     let scene = ra2_map_scene::map::load_scene_bytes(
@@ -754,6 +759,81 @@ fn cliff_polyline_canvas_clicks_preview_close_enter_and_cancel_use_one_transacti
             .unwrap(),
         before
     );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn water_polyline_canvas_closes_fills_and_keeps_invalid_drafts_editable() {
+    use ra2_map_scene::terrain_tools::TerrainMode;
+    let (mut view, scene, root) =
+        flat_authoring_view_with(ra2_map_assets::test_support::Fixture::with_joining());
+    let ctx = egui::Context::default();
+    view.editor
+        .activate_terrain_mode(TerrainMode::WaterPolyline);
+    flat_frame(&mut view, &ctx, None, None, None);
+    let bytes = |view: &MapView| {
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap()
+    };
+    let before = bytes(&view);
+    let path = [[30, 30], [38, 30], [38, 38], [30, 38]];
+    let expected =
+        ra2_map_scene::shore_tools::polyline(view.editor.doc.as_ref().unwrap(), &scene, &path)
+            .unwrap();
+    let click = |view: &mut MapView, at| {
+        flat_frame(view, &ctx, Some(at), Some(true), None);
+        flat_frame(view, &ctx, Some(at), Some(false), None);
+    };
+    for click_start in [true, false] {
+        for at in path {
+            click(&mut view, at);
+            assert!(view.editor.stroking);
+            assert_eq!(bytes(&view), before);
+        }
+        let hover = [34, 28];
+        click(&mut view, hover); // Crosses the first edge.
+        if click_start {
+            click(&mut view, path[0]);
+        } else {
+            flat_frame(&mut view, &ctx, None, None, Some(egui::Key::Enter));
+        }
+        assert!(view.editor.stroking);
+        assert!(
+            view.editor.status.contains("自交"),
+            "{}",
+            view.editor.status
+        );
+        assert_eq!(bytes(&view), before);
+        flat_frame(&mut view, &ctx, None, None, Some(egui::Key::Backspace));
+        let plan = view.editor.plateau_preview_plan(&scene, hover).unwrap();
+        assert_eq!(plan.edits, expected.edits);
+        if click_start {
+            click(&mut view, path[0]);
+        } else {
+            flat_frame(&mut view, &ctx, Some(hover), None, Some(egui::Key::Enter));
+        }
+        assert!(!view.editor.stroking, "{}", view.editor.status);
+        for (&at, &v) in &plan.edits {
+            assert_eq!(view.editor.doc.as_ref().unwrap().terrain(at), Some(v));
+        }
+        let after = bytes(&view);
+        assert_ne!(after, before);
+        view.editor.history(false, &scene);
+        assert_eq!(bytes(&view), before);
+        view.editor.history(true, &scene);
+        assert_eq!(bytes(&view), after);
+        view.editor.history(false, &scene);
+    }
+    click(&mut view, path[0]);
+    flat_frame(&mut view, &ctx, None, None, Some(egui::Key::Escape));
+    assert!(!view.editor.stroking);
+    assert_eq!(bytes(&view), before);
     drop(view);
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -2,12 +2,12 @@
 //! No random-generator erosion, partial stamps, or changes outside the plan.
 use crate::{
     cliff_authoring,
-    cliff_tools::{CliffStamp, PlateauPlan},
+    cliff_tools::{self, CliffStamp, PlateauPlan},
     map::MapScene,
     terrain_tools::{self, value},
 };
 use anyhow::{Context, Result, ensure};
-use ra2_map_document::document::{Cell, MapDocument, Target, TerrainValue, Value};
+use ra2_map_document::document::{Cell, MapDocument, Target, TerrainValue, Value, cell_line};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
@@ -210,13 +210,76 @@ fn solve(candidates: &[Candidate], by_edge: &[Vec<usize>]) -> Result<Vec<usize>>
     }
 }
 
+/// Close a click-authored path with a straight edge and fill its interior.
+/// Validate that edge together with the drawn edges before rasterizing.
+pub fn polyline(doc: &MapDocument, scene: &MapScene, path: &[Cell]) -> Result<PlateauPlan> {
+    let mut path = path.to_vec();
+    path.dedup();
+    if path.len() > 1 && path.first() == path.last() {
+        path.pop();
+    }
+    ensure!(path.len() >= 3, "折线水域需要至少三个不同的折点");
+    for &at in &path {
+        doc.check_cell(at)?;
+    }
+    path.push(path[0]);
+    cliff_tools::validate_polyline_path(
+        &path,
+        "水域折线不能回折重叠，请撤回或补画折点",
+        "水域轮廓不能自交或重复经过折点，请撤回或补画折点",
+    )?;
+    fit_outline(doc, scene, polygon_cells(&path)?)
+}
+
+/// Fill a validated, closed polygon using its actual edge crossings. A flood
+/// on rounded edges can mistake a dry bay with a narrow mouth for an interior.
+fn polygon_cells(path: &[Cell]) -> Result<BTreeSet<Cell>> {
+    let mut cells = BTreeSet::new();
+    let mut crossings = BTreeMap::<u16, Vec<u16>>::new();
+    for edge in path.windows(2) {
+        let (mut a, mut b) = (edge[0], edge[1]);
+        cells.extend(cell_line(a, b));
+        if a[1] > b[1] {
+            std::mem::swap(&mut a, &mut b);
+        }
+        // Half-open Y counts a shared vertex once when the path crosses the
+        // row. Round each X up for the half-open integer span between crossings.
+        for y in a[1]..b[1] {
+            let numerator =
+                u32::from(a[0]) * u32::from(b[1] - y) + u32::from(b[0]) * u32::from(y - a[1]);
+            crossings
+                .entry(y)
+                .or_default()
+                .push(numerator.div_ceil(u32::from(b[1] - a[1])) as u16);
+        }
+    }
+    let mut has_interior = false;
+    for (y, mut row) in crossings {
+        row.sort_unstable();
+        for &[left, right] in row.as_chunks::<2>().0 {
+            for x in left..right {
+                has_interior |= cells.insert([x, y]);
+            }
+        }
+    }
+    ensure!(has_interior, "轮廓没有围出内部区域，请扩大轮廓");
+    Ok(cells)
+}
+
 /// Freehand sampling produces one-cell stair steps that complete shore TMPs
 /// cannot cover. Keep exact outlines when possible; otherwise expand to 2x2
 /// blocks, adding at most one cell per axis around the enclosed selection.
 /// Rectangle painting and repair keep their exact geometry. Only tiling
 /// failures trigger snapping; both attempts validate terrain and protection.
 pub fn outline(doc: &MapDocument, scene: &MapScene, path: &[Cell]) -> Result<PlateauPlan> {
-    let selection = crate::cliff_tools::enclose(path)?;
+    fit_outline(doc, scene, cliff_tools::enclose(path)?)
+}
+
+fn fit_outline(
+    doc: &MapDocument,
+    scene: &MapScene,
+    selection: BTreeSet<Cell>,
+) -> Result<PlateauPlan> {
     match plan(doc, scene, selection.clone(), Some(true)) {
         Ok(plan) => Ok(plan),
         Err(e) if e.is::<ShoreGeometryError>() => {

@@ -32,6 +32,7 @@ impl TerrainPage {
             | TerrainMode::RampEntrance => Self::Cliffs,
             TerrainMode::Water
             | TerrainMode::WaterOutline
+            | TerrainMode::WaterPolyline
             | TerrainMode::LandFill
             | TerrainMode::ShoreRepair
             | TerrainMode::CoastalCliff => Self::Water,
@@ -63,6 +64,7 @@ impl TerrainPage {
             ],
             Self::Water => &[
                 (WaterOutline, "围合水域"),
+                (WaterPolyline, "折线水域"),
                 (Water, "矩形水域"),
                 (LandFill, "回填陆地"),
                 (ShoreRepair, "修复岸线"),
@@ -164,6 +166,7 @@ impl Editor {
                     (TerrainMode::HeightFill, tr!("填高地")),
                     (TerrainMode::RampEntrance, tr!("坡道")),
                     (TerrainMode::WaterOutline, tr!("水域")),
+                    (TerrainMode::WaterPolyline, tr!("折线水域")),
                     (TerrainMode::Road, tr!("道路")),
                 ] {
                     if ui

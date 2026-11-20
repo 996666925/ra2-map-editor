@@ -26,6 +26,7 @@ wgpu.workspace = true
 vera20k-core.workspace = true
 
 [dev-dependencies]
+vera20k-core = { workspace = true, features = ["test-support"] }
 egui_system_font_provider = "=0.37.0"
 egui_kittest.workspace = true
 ra2-map-document = { workspace = true, features = ["test-support"] }

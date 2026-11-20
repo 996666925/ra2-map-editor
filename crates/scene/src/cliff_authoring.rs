@@ -480,7 +480,11 @@ pub fn polyline(
         doc.check_cell(at)?;
     }
     let closed = path.first() == path.last();
-    validate_polyline_path(&path)?;
+    cliff_tools::validate_polyline_path(
+        &path,
+        "悬崖折线不能回折重叠，请撤回折点",
+        "悬崖折线不能自交或重复经过折点，请撤回折点",
+    )?;
     let pit = polyline_is_pit(&path, high_left);
     ensure!(
         base <= if pit {
@@ -613,43 +617,6 @@ pub fn polyline_is_pit(path: &[Cell], high_left: bool) -> bool {
         })
         .sum();
     area != 0 && (area < 0) != high_left
-}
-
-fn validate_polyline_path(path: &[Cell]) -> Result<()> {
-    let closed = path.first() == path.last();
-    // A directed edge must have an unambiguous side. Reject crossings, touches
-    // and retraced segments before selecting any templates.
-    let cross = |a: Cell, b: Cell, c: Cell| {
-        (i64::from(b[0]) - i64::from(a[0])) * (i64::from(c[1]) - i64::from(a[1]))
-            - (i64::from(b[1]) - i64::from(a[1])) * (i64::from(c[0]) - i64::from(a[0]))
-    };
-    for (i, ab) in path.windows(2).enumerate() {
-        for (j, cd) in path.windows(2).enumerate().skip(i + 1) {
-            if j == i + 1 || closed && i == 0 && j == path.len() - 2 {
-                let (a, b, c) = if j == i + 1 {
-                    (ab[0], ab[1], cd[1])
-                } else {
-                    (cd[0], cd[1], ab[1])
-                };
-                let dot = (i64::from(b[0]) - i64::from(a[0])) * (i64::from(c[0]) - i64::from(b[0]))
-                    + (i64::from(b[1]) - i64::from(a[1])) * (i64::from(c[1]) - i64::from(b[1]));
-                ensure!(
-                    cross(a, b, c) != 0 || dot >= 0,
-                    "悬崖折线不能回折重叠，请撤回折点"
-                );
-                continue;
-            }
-            let overlap = (0..2).all(|axis| {
-                ab[0][axis].min(ab[1][axis]) <= cd[0][axis].max(cd[1][axis])
-                    && cd[0][axis].min(cd[1][axis]) <= ab[0][axis].max(ab[1][axis])
-            });
-            let intersects = overlap
-                && cross(ab[0], ab[1], cd[0]).signum() * cross(ab[0], ab[1], cd[1]).signum() <= 0
-                && cross(cd[0], cd[1], ab[0]).signum() * cross(cd[0], cd[1], ab[1]).signum() <= 0;
-            ensure!(!intersects, "悬崖折线不能自交或重复经过折点，请撤回折点");
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn stamp(

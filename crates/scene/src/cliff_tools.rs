@@ -112,6 +112,44 @@ pub fn enclose(path: &[Cell]) -> Result<BTreeSet<Cell>> {
     Ok(enclosed)
 }
 
+pub(crate) fn validate_polyline_path(
+    path: &[Cell],
+    retraced: &str,
+    intersecting: &str,
+) -> Result<()> {
+    let closed = path.first() == path.last();
+    // Neighboring edges may meet only at their shared vertex. All other
+    // contacts are ambiguous, including touches and retraced segments.
+    let cross = |a: Cell, b: Cell, c: Cell| {
+        (i64::from(b[0]) - i64::from(a[0])) * (i64::from(c[1]) - i64::from(a[1]))
+            - (i64::from(b[1]) - i64::from(a[1])) * (i64::from(c[0]) - i64::from(a[0]))
+    };
+    for (i, ab) in path.windows(2).enumerate() {
+        for (j, cd) in path.windows(2).enumerate().skip(i + 1) {
+            if j == i + 1 || closed && i == 0 && j == path.len() - 2 {
+                let (a, b, c) = if j == i + 1 {
+                    (ab[0], ab[1], cd[1])
+                } else {
+                    (cd[0], cd[1], ab[1])
+                };
+                let dot = (i64::from(b[0]) - i64::from(a[0])) * (i64::from(c[0]) - i64::from(b[0]))
+                    + (i64::from(b[1]) - i64::from(a[1])) * (i64::from(c[1]) - i64::from(b[1]));
+                ensure!(cross(a, b, c) != 0 || dot >= 0, "{retraced}");
+                continue;
+            }
+            let overlap = (0..2).all(|axis| {
+                ab[0][axis].min(ab[1][axis]) <= cd[0][axis].max(cd[1][axis])
+                    && cd[0][axis].min(cd[1][axis]) <= ab[0][axis].max(ab[1][axis])
+            });
+            let intersects = overlap
+                && cross(ab[0], ab[1], cd[0]).signum() * cross(ab[0], ab[1], cd[1]).signum() <= 0
+                && cross(cd[0], cd[1], ab[0]).signum() * cross(cd[0], cd[1], ab[1]).signum() <= 0;
+            ensure!(!intersects, "{intersecting}");
+        }
+    }
+    Ok(())
+}
+
 const DIRECTIONS: [(i32, i32, u8); 8] = [
     (0, -1, 0x80),
     (1, -1, 1),
