@@ -199,7 +199,11 @@ impl ScriptUi {
                 .name("mission-freshness".into())
                 .spawn(move || {
                     let result = (|| -> Result<()> {
-                        mission_script::resource_payload(&snapshot.bytes()?, &profile)?;
+                        mission_script::resource_payload_with_ares(
+                            &snapshot.bytes()?,
+                            &profile,
+                            snapshot.base.reads_ares,
+                        )?;
                         Ok(())
                     })();
                     let _ = send.send((id, state, result.map_err(|e| format!("{e:#}"))));

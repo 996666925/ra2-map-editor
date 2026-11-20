@@ -60,8 +60,14 @@ fn startup_owners_share_graph_roundtrip_change_clear_and_undo() {
 fn extended_startup_owners_roundtrip_and_reject_out_of_range_slots() {
     let mut doc = document();
     let id = doc.add_record("Units", [2, 2], "Neutral", "HTNK").unwrap();
-    for slot in [8, 25, 26, 29] {
-        doc.waypoint(u32::from(slot), [2, 2]).unwrap();
+    doc.waypoint(119, [2, 2]).unwrap();
+    assert!(set(&mut doc, id, Some(119)).is_err());
+    doc.set_ini("Basic", "MaxPlayers", Some(b"120".to_vec()))
+        .unwrap();
+    for slot in 1..120 {
+        doc.waypoint(slot, [2, 2]).unwrap();
+    }
+    for slot in [8, 25, 26, 29, 119] {
         set(&mut doc, id, Some(slot)).unwrap();
         doc.commit("extended startup owner");
         let tag = doc.records()[&id].fields()[7].clone();
@@ -80,7 +86,7 @@ fn extended_startup_owners_roundtrip_and_reject_out_of_range_slots() {
             .unwrap()
             .clone();
         assert_eq!(get(&reopened, &record), Some(slot));
-        for invalid in [30, u8::MAX] {
+        for invalid in [120, u8::MAX] {
             assert!(set(&mut doc, id, Some(invalid)).is_err());
             assert_eq!(doc.snapshot().bytes().unwrap(), bytes);
         }

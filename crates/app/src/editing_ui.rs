@@ -706,7 +706,7 @@ impl Editor {
                         .range(0..=701)
                         .prefix(tr!("航点编号  ")),
                 );
-                ui.small(tr!("点击地图设置航点位置。0～7 用于出生点；9～30 人地图还使用扩展编号。可在“设置 → 地图信息”中增减数量。"));
+                ui.small(tr!("点击地图设置航点位置。0～7 用于出生点；9～120 人地图还使用扩展编号。可在“设置 → 地图信息”中增减数量。"));
             }
             Tool::Tunnel => self.tunnel_options(ui, scene),
             Tool::Move => {

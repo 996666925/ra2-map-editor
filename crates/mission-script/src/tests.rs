@@ -12,6 +12,15 @@ fn fixture() -> (MapDocument, Catalog) {
     (doc, catalog)
 }
 
+fn declare_extended_starts(doc: &mut MapDocument) {
+    doc.set_ini("Basic", "MaxPlayers", Some(b"120".to_vec()))
+        .unwrap();
+    for slot in 0..120 {
+        doc.waypoint(slot, [2, 2]).unwrap();
+    }
+    doc.commit("declare extended starts");
+}
+
 #[test]
 fn engine_034_orders_compile_to_native_rows_and_validate_team_ordinals() {
     let (mut doc, catalog) = fixture();
@@ -53,7 +62,7 @@ fn plan() -> Mission {
 }
 
 #[test]
-fn ares_sdk_lowering_is_gated_and_preserves_engine_operands_and_attachments() {
+fn ares_sdk_lowering_preserves_engine_operands_and_attachments_without_a_build_feature() {
     use crate::catalog::ResourceKind;
     let bytes = ra2_map_document::new_map::NewMapOptions::default()
         .bytes()
@@ -92,17 +101,7 @@ export default defineMission(map,{id:'ares',player:House.Neutral},m=>{
             ("/map.generated.ts".into(), catalog.typescript().unwrap()),
         ]))
         .unwrap();
-    if !vera20k_core::rules::ARES_BUILD {
-        assert!(
-            prepare(&doc, &plan, &catalog)
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("--features ares")
-        );
-        assert!(mission::schema::opcode(false, 146).is_none());
-        return;
-    }
+    assert!(mission::schema::opcode(false, 146).is_some());
     let build = prepare(&doc, &plan, &catalog).unwrap();
     let map = vera20k_core::map::map_file::load_from_bytes(build.bytes.clone()).unwrap();
     let conditions: Vec<_> = map.events.values().flat_map(|e| e.conditions()).collect();
@@ -453,7 +452,7 @@ fn reward_unit_isolated_cloning_rebuild_reload_cleanup_and_conflicts() {
     let registry = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),
         &ini,
-        false,
+        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
     );
     let mut order = Vec::<&str>::new();
     for id in registry
@@ -2004,7 +2003,7 @@ export default defineMission(map,{id:'bubbles',player:House.Neutral},m=>{
     let registry = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),
         &ini,
-        false,
+        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
     );
     let actions = &registry.scripts[0].actions;
     assert_eq!(
@@ -2067,7 +2066,7 @@ export default defineMission(map,{id:'orders',player:House.Neutral},m=>{
     let registry = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),
         &ini,
-        false,
+        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
     );
     let parsed = registry.scripts.iter().find(|s| s.id == script).unwrap();
     assert_eq!(parsed.actions.len(), 17);
@@ -2157,7 +2156,11 @@ export default defineMission(map,{id:'change_script',player:House.Neutral},m=>{
         .apply(&mut doc)
         .unwrap();
     let ini = IniFile::from_bytes(&doc.snapshot().bytes().unwrap()).unwrap();
-    let registry = TeamAiIniRegistry::from_sources(&fixed, &ini, false);
+    let registry = TeamAiIniRegistry::from_sources(
+        &fixed,
+        &ini,
+        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+    );
     let mut native_order = vec![];
     for id in registry
         .team_types
@@ -2271,9 +2274,17 @@ export default defineMission(map,{id:'selectors',player:House.Neutral},m=>{
             .contains("仅支持单人")
     );
     multiplayer.rules[0].actions = vec![Action::StartProduction {
-        house: ActionHouse::StartPlayer { id: 29 },
+        house: ActionHouse::StartPlayer { id: 119 },
     }];
-    catalog.waypoints.push(29);
+    doc.waypoint(119, [2, 2]).unwrap();
+    assert!(
+        prepare(&doc, &multiplayer, &catalog)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("不是多人地图已配置的玩家起点")
+    );
+    declare_extended_starts(&mut doc);
     prepare(&doc, &multiplayer, &catalog)
         .unwrap()
         .apply(&mut doc)
@@ -2284,7 +2295,7 @@ export default defineMission(map,{id:'selectors',player:House.Neutral},m=>{
         .unwrap();
     assert_eq!(
         vera20k_core::rules::native_processing::house_type_player_at_text(selector).as_deref(),
-        Some("<Player @ AD>")
+        Some("<Player @ DP>")
     );
     catalog.fixed_country_indices.clear();
     assert!(
@@ -2943,7 +2954,11 @@ export default defineMission(map, {id:'ai_defs', mode:MissionMode.Multiplayer}, 
         let registry = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
             &vera20k_core::rules::ini_parser::IniFile::from_str(""),
             &map.ini,
-            multiplayer,
+            if multiplayer {
+                vera20k_core::rules::rule_policy::BootstrapRuleProfile::Multiplayer
+            } else {
+                vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign
+            },
         );
         assert_eq!(registry.ai_triggers.len(), 2);
         assert!(registry.ai_triggers.iter().all(|trigger| !trigger.enabled));
@@ -3142,7 +3157,8 @@ fn multiplayer_gifts_encode_all_native_start_selectors_and_preserve_history() {
     for slot in 0..30 {
         doc.waypoint(slot, [2, 2]).unwrap();
     }
-    doc.waypoint(20, [2, 2]).unwrap();
+    doc.set_ini("Basic", "MaxPlayers", Some(b"30".to_vec()))
+        .unwrap();
     doc.set_ini("Basic", "Player", Some(b"Special".to_vec()))
         .unwrap();
     doc.commit("start positions");
@@ -3210,12 +3226,23 @@ fn multiplayer_gifts_encode_all_native_start_selectors_and_preserve_history() {
 
 #[test]
 fn start_player_validation_cannot_be_bypassed_by_forged_ir() {
-    let (doc, mut catalog) = fixture();
-    catalog.waypoints.extend([8, 20, 29, 30]);
-    for slot in [8, 20, 29] {
-        assert!(prepare(&doc, &gift_plan(slot), &catalog).is_ok());
+    let (mut doc, mut catalog) = fixture();
+    doc.waypoint(119, [2, 2]).unwrap();
+    doc.waypoint(20, [2, 2]).unwrap();
+    doc.commit("ordinary waypoints");
+    catalog.waypoints.extend([20, 119]);
+    catalog.player_starts.push(119);
+    for slot in [1, 7, 28, 119, 120, u32::MAX] {
+        assert!(
+            prepare(&doc, &gift_plan(slot), &catalog).is_err(),
+            "invalid start {slot}"
+        );
     }
-    for slot in [1, 7, 28, 30, u32::MAX] {
+    declare_extended_starts(&mut doc);
+    for slot in [8, 20, 29, 119] {
+        prepare(&doc, &gift_plan(slot), &catalog).unwrap();
+    }
+    for slot in [120, u32::MAX] {
         assert!(
             prepare(&doc, &gift_plan(slot), &catalog).is_err(),
             "invalid/missing start {slot}"
@@ -3413,7 +3440,7 @@ export default defineMission(map, {id:'shared', player:House.Neutral}, m => {
     let registry = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),
         &ini,
-        false,
+        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
     );
     assert_eq!(registry.team_types.len(), 2);
     assert_eq!(registry.task_forces.len(), 1);
@@ -3783,26 +3810,33 @@ fn transpilation_skips_types_but_keeps_sdk_and_native_validation() {
                 .unwrap_err().to_string();
             assert!(error.contains(expected), "{body}: {error}");
         }
-        catalog.waypoints.extend([7, 8, 20, 25, 26, 29, 30]);
+        let mut doc = doc;
+        doc.waypoint(119, [2, 2]).unwrap();
+        catalog.waypoints.push(119);
         files.insert("/map.generated.ts".into(), catalog.typescript().unwrap());
         let multiplayer = base.replace("player:House.Neutral", "mode:MissionMode.Multiplayer");
+        files.insert("/mission.ts".into(), multiplayer.replace("BODY", "m.waypoint(Waypoint.WP119); m.playerAt(Waypoint.WP119);"));
+        assert!(compiler.build(files.clone()).unwrap_err().to_string().contains("Unknown player start: 119"));
+        declare_extended_starts(&mut doc);
+        doc.waypoint(120, [2, 2]).unwrap();
+        catalog = Catalog::from_document(&doc, catalog.units, catalog.strings);
+        files.insert("/map.generated.ts".into(), catalog.typescript().unwrap());
         files.insert("/mission.ts".into(), multiplayer.replace("BODY", "const gift = m.team('gift', {house:m.playerAt(Waypoint.WP7), waypoint:m.waypoint(Waypoint.WP20), units:[{type:m.unit(Unit.E1), count:3}], orders:[order.guard(60)]}); m.rule('give', {when:event.sinceScenarioStart(10), once:true, actions:[action.reinforce(gift, m.waypoint(Waypoint.WP20))]});"));
         let built = compiler.build(files.clone()).unwrap();
         assert_eq!(built.mode, MissionMode::Multiplayer);
         assert!(built.player.is_empty());
         assert!(matches!(built.teams[0].house, TeamOwner::StartPlayer { id: 7 }));
-        for slot in [8, 20, 25, 26, 29] {
+        for slot in [8, 20, 25, 26, 29, 119] {
             files.insert("/mission.ts".into(), multiplayer.replace("BODY", &format!("const gift = m.team('gift', {{house:m.playerAt(Waypoint.WP{slot}), waypoint:m.waypoint(Waypoint.WP0), units:[{{type:m.unit(Unit.E1), count:3}}], orders:[order.guard(60)]}});")));
             let built = compiler.build(files.clone()).unwrap();
             assert!(matches!(built.teams[0].house, TeamOwner::StartPlayer { id } if id == slot));
             assert!(prepare(&doc, &built, &catalog).is_ok());
         }
         for (source, expected) in [
-            (multiplayer.replace("BODY", "m.playerAt(Waypoint.WP30);"), "仅支持 0～29"),
+            (multiplayer.replace("BODY", "m.playerAt(Waypoint.WP120);"), "仅支持 0～119"),
             (multiplayer.replace("BODY", "m.playerAt(1.5);"), "Unknown player start"),
             (multiplayer.replace("BODY", "m.playerAt(m.waypoint(Waypoint.WP0));"), "Unknown player start"),
             (multiplayer.replace("BODY", "m.playerAt(House.Neutral);"), "Unknown player start"),
-            (multiplayer.replace("BODY", "m.playerAt(6);"), "Unknown player start"),
             (multiplayer.replace("mode:MissionMode.Multiplayer", "mode:MissionMode.Multiplayer, player:House.Neutral").replace("BODY", ""), "多人"),
         ] {
             files.insert("/mission.ts".into(), source.clone());
@@ -3860,7 +3894,7 @@ export default defineMission(map,{id:'new_handlers',mode:MissionMode.Multiplayer
     let scripts = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),
         &ini,
-        false,
+        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
     );
     assert_eq!(
         scripts.scripts[0]

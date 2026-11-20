@@ -133,8 +133,12 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
         .load_scenario(NativeScenarioRulesPrefix::Campaign(None), &map.ini)?
         .into_parts();
     rules.install_art_data(vera20k_core::rules::art_data::ArtRegistry::from_ini(&art));
-    let teams = TeamAiIniRegistry::load_retail(&install.manager, &map.ini, false)
-        .map_err(anyhow::Error::msg)?;
+    let teams = TeamAiIniRegistry::load_retail(
+        &install.manager,
+        &map.ini,
+        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+    )
+    .map_err(anyhow::Error::msg)?;
     let roster =
         vera20k_core::map::houses::parse_house_roster(&map.ini, &rules.color_schemes, Some(&rules));
     let descriptor = ScenarioDescriptor {
@@ -184,8 +188,7 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
             dummy,
         )
     };
-    let roots =
-        vera20k_core::map::resolved_terrain::scheduler_anim_roots(&rules, &overlay_registry, &[]);
+    let roots = vera20k_core::map::resolved_terrain::scheduler_anim_roots(&rules, &[]);
     rules.bind_scheduler_anim_assets(
         &roots,
         &install.manager,
@@ -223,7 +226,7 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
     sim.construct_native_map_tubes(&map.ini)?;
     let signed_format = map.basic.new_ini_format.unwrap_or(0);
     let cliff = rules.general.cliff_back_impassability;
-    let loaded = vera20k_core::sim::runtime::finalize_and_populate_staged_authored_scenario(
+    vera20k_core::sim::runtime::finalize_and_populate_staged_authored_scenario(
         &mut sim,
         &mut map,
         terrain_fill,
@@ -231,7 +234,6 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
         &install.manager,
         &mut rules,
         &mut owner,
-        &overlay_registry,
         &shp_ids,
         signed_format,
         true,
@@ -247,13 +249,7 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
     // The engine logs unresolved AI references and installs the remaining data.
     sim.install_team_ai_registry(&teams, &rules);
     let post = vera20k_core::sim::runtime::finalize_constructed_scenario(
-        &mut sim,
-        &map,
-        &rules,
-        &overlay_registry,
-        loaded.overlay_grid,
-        &roster,
-        None,
+        &mut sim, &map, &rules, &roster, None,
     )?;
     ensure!(post.navigation_published, "post-map navigation");
     sim.publish_scenario_started();

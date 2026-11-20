@@ -117,7 +117,7 @@ fn retail_tank_enters_and_exits_editor_authored_tunnel() {
             start.1,
             0,
             &runtime.resources.rules,
-            &runtime.resources.overlay_registry,
+            runtime.resources.rules.overlay_registry(),
         )
         .expect("tank spawns on approach road");
     let mut issued_exit = false;

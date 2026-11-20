@@ -136,9 +136,16 @@ pub fn catalog(doc: &MapDocument, scene: &ra2_map_scene::map::MapScene) -> Catal
 
 /// Read saved declarations through the same manifest validation as rebuild.
 pub fn declared_texts(bytes: &[u8]) -> Result<BTreeMap<String, String>> {
-    use ra2_map_document::document::Baseline;
-    let map = crate::editor_io::validate(bytes)?;
-    let doc = MapDocument::new(Baseline::parse(std::sync::Arc::from(bytes), &map)?);
+    declared_texts_with_ares(bytes, ra2_map_document::source::game_reads_ares())
+}
+
+/// Read declarations using the document's retained INI dialect, independent of
+/// another worker's active game.
+pub fn declared_texts_with_ares(
+    bytes: &[u8],
+    reads_ares: bool,
+) -> Result<BTreeMap<String, String>> {
+    let doc = saved_document_with_ares(bytes, reads_ares)?;
     ra2_map_mission_script::native::declared_texts(&doc)
 }
 
@@ -146,7 +153,8 @@ pub fn text_payload(
     bytes: &[u8],
     install: &ra2_map_assets::assets::Install,
 ) -> Result<Option<Vec<u8>>> {
-    let strings = declared_texts(bytes)?;
+    let doc = saved_document_with_ares(bytes, install.manager.ships_ares())?;
+    let strings = ra2_map_mission_script::native::declared_texts(&doc)?;
     if strings.is_empty() {
         return Ok(None);
     }
@@ -160,10 +168,15 @@ pub fn text_payload(
     )?))
 }
 
-fn saved_document(bytes: &[u8]) -> Result<MapDocument> {
+fn saved_document_with_ares(bytes: &[u8], reads_ares: bool) -> Result<MapDocument> {
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(reads_ares);
     let map = crate::editor_io::validate(bytes)?;
     Ok(MapDocument::new(
-        ra2_map_document::document::Baseline::parse(std::sync::Arc::from(bytes), &map)?,
+        ra2_map_document::document::Baseline::parse_with_ares(
+            std::sync::Arc::from(bytes),
+            &map,
+            reads_ares,
+        )?,
     ))
 }
 
@@ -357,15 +370,32 @@ pub fn run_campaign_cli(args: &[std::ffi::OsString]) -> Result<i32> {
 
 /// Called on IO workers before play/export; all checks finish before any output.
 pub fn resource_payload(bytes: &[u8], profile: &str) -> Result<BTreeMap<String, Vec<u8>>> {
+    resource_payload_with_ares(bytes, profile, ra2_map_document::source::game_reads_ares())
+}
+
+pub fn resource_payload_with_ares(
+    bytes: &[u8],
+    profile: &str,
+    reads_ares: bool,
+) -> Result<BTreeMap<String, Vec<u8>>> {
+    let doc = saved_document_with_ares(bytes, reads_ares)?;
+    resource_payload_for_document(bytes, &doc, profile)
+}
+
+fn resource_payload_for_document(
+    bytes: &[u8],
+    doc: &MapDocument,
+    profile: &str,
+) -> Result<BTreeMap<String, Vec<u8>>> {
     use ra2_map_assets::profile::{file_hash, hash};
-    let doc = saved_document(bytes)?;
-    let assets = ra2_map_mission_script::native::declared_assets(&doc)?;
-    let context = ra2_map_mission_script::native::build_context(&doc)?;
+    let assets = ra2_map_mission_script::native::declared_assets(doc)?;
+    let context = ra2_map_mission_script::native::build_context(doc)?;
     let Some(context) = context else {
         ensure!(assets.is_empty(), "任务缺少资源构建记录，请重新构建");
         return Ok(BTreeMap::new());
     };
-    ra2_map_mission_script::native::check_product(&doc)?;
+    ra2_map_mission_script::native::check_product(doc)?;
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(doc.base.reads_ares);
     ensure!(
         context.registries.is_empty()
             || context.registries == ra2_map_mission_script::native::registry_fingerprints(bytes)?,
@@ -414,7 +444,22 @@ pub fn playtest_payload(
     directory: &Path,
     profile: &str,
 ) -> Result<BTreeMap<String, Vec<u8>>> {
-    scoped_playtest_payload(bytes, directory, None, profile)
+    playtest_payload_with_ares(
+        bytes,
+        directory,
+        profile,
+        ra2_map_document::source::game_reads_ares(),
+    )
+}
+
+/// Build a playtest payload using the selected map's retained INI dialect.
+pub fn playtest_payload_with_ares(
+    bytes: &[u8],
+    directory: &Path,
+    profile: &str,
+    reads_ares: bool,
+) -> Result<BTreeMap<String, Vec<u8>>> {
+    scoped_playtest_payload(bytes, directory, None, profile, reads_ares)
 }
 
 pub(crate) fn scoped_playtest_payload(
@@ -422,9 +467,10 @@ pub(crate) fn scoped_playtest_payload(
     directory: &Path,
     resources: Option<&ra2_map_assets::map_resources::MapResources>,
     profile: &str,
+    reads_ares: bool,
 ) -> Result<BTreeMap<String, Vec<u8>>> {
-    let payload = resource_payload(bytes, profile)?;
-    let doc = saved_document(bytes)?;
+    let doc = saved_document_with_ares(bytes, reads_ares)?;
+    let payload = resource_payload_for_document(bytes, &doc, profile)?;
     let texts = ra2_map_mission_script::native::declared_texts(&doc)?;
     if texts.is_empty() && ra2_map_mission_script::native::build_context(&doc)?.is_none() {
         return Ok(payload);
@@ -442,6 +488,7 @@ fn prepare_playtest_payload(
     mut payload: BTreeMap<String, Vec<u8>>,
     install: &ra2_map_assets::assets::Install,
 ) -> Result<BTreeMap<String, Vec<u8>>> {
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(install.manager.ships_ares());
     if let Some(csf) = text_payload(bytes, install)? {
         payload.insert("ra2md.csf".into(), csf);
     }
@@ -1263,7 +1310,7 @@ export default defineCampaign({id:'nested',entry:'first.map',missions:[
         assert_eq!(doc.ini_text("Basic", "NextScenario"), "second.map");
         assert_eq!(resource_payload(&bytes, "").unwrap()["brief.wav"], b"wave");
 
-        let mut reopened = saved_document(&bytes).unwrap();
+        let mut reopened = saved_document_with_ares(&bytes, false).unwrap();
         refresh_document_types(&reopened, &entry, &catalog).unwrap();
         assert!(!entry.parent().unwrap().join("sdk.ts").exists());
         let sources = Sources::read_for_document(&reopened, &entry).unwrap();
@@ -1365,8 +1412,10 @@ export default defineMission({houses:['Neutral']},{id:'localized',player:'Neutra
             .apply(&mut doc)
             .unwrap();
         let bytes = doc.snapshot().bytes().unwrap();
-        let strings = declared_texts(&bytes).unwrap();
+        let strings = declared_texts_with_ares(&bytes, false).unwrap();
         assert_eq!(strings.values().next().unwrap(), "下一波增援：中文🚀\n准备");
+        let _other_map = vera20k_core::rules::ares_switch::read_ares_way(true);
+        assert_eq!(declared_texts_with_ares(&bytes, false).unwrap(), strings);
         let empty: Vec<_> = [0x43534620u32, 3, 0, 0, 0, 9]
             .into_iter()
             .flat_map(u32::to_le_bytes)
@@ -1386,6 +1435,18 @@ export default defineMission({houses:['Neutral']},{id:'localized',player:'Neutra
                 .unwrap();
         assert!(
             resource_payload(&altered, "profile")
+                .unwrap_err()
+                .to_string()
+                .contains("注册顺序或航点")
+        );
+        let mut max_players_doc = saved_document_with_ares(&bytes, false).unwrap();
+        max_players_doc
+            .set_ini("Basic", "MaxPlayers", Some(b"30".to_vec()))
+            .unwrap();
+        max_players_doc.commit("change player capacity");
+        let altered_max_players = max_players_doc.snapshot().bytes().unwrap();
+        assert!(
+            resource_payload(&altered_max_players, "profile")
                 .unwrap_err()
                 .to_string()
                 .contains("注册顺序或航点")

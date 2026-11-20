@@ -802,11 +802,13 @@ fn main_canvas_gpu_preview_uses_full_terrain_and_objects_during_map_drag() {
                 .unwrap();
             let mut covered = 0;
             for ((dst, cpu), gpu) in expected
-                .chunks_exact_mut(4)
-                .zip(cpu.chunks_exact(4))
-                .zip(gpu.chunks_exact(4))
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(cpu.as_chunks::<4>().0)
+                .zip(gpu.as_chunks::<4>().0)
             {
-                if cpu == [11, 15, 20, 255] {
+                if *cpu == [11, 15, 20, 255] {
                     assert_eq!(
                         gpu[3], 0,
                         "pixels outside a map must reveal the layer beneath"
@@ -826,8 +828,10 @@ fn main_canvas_gpu_preview_uses_full_terrain_and_objects_during_map_drag() {
             );
         }
         let differing = actual
-            .chunks_exact(4)
-            .zip(expected.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(expected.as_chunks::<4>().0)
             .filter(|(a, b)| a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 2))
             .count();
         // Layer outlines, name labels and the drag hint are deliberately drawn

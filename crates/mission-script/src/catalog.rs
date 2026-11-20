@@ -91,6 +91,8 @@ pub struct Catalog {
     pub native_definitions: BTreeMap<String, Vec<String>>,
     pub houses: Vec<String>,
     pub waypoints: Vec<u32>,
+    #[serde(rename = "playerStarts")]
+    pub player_starts: Vec<u32>,
     pub units: Vec<String>,
     pub objects: Vec<String>,
     pub strings: Vec<String>,
@@ -137,6 +139,7 @@ impl Catalog {
         let records = doc.records();
         let mut result = Self {
             houses: mission::ids(doc, Kind::House),
+            player_starts: player_starts(doc),
             waypoints: records
                 .values()
                 .filter(|r| r.section == "Waypoints")
@@ -164,6 +167,10 @@ impl Catalog {
         result.strings.sort();
         result.strings.dedup();
         result
+    }
+
+    pub(crate) fn has_player_start(&self, id: u32) -> bool {
+        self.player_starts.contains(&id)
     }
 
     pub fn resources(&self, kind: ResourceKind) -> &[String] {
@@ -329,6 +336,7 @@ impl Catalog {
             };
             collections.push(format!("  {collection}: {array}"));
         }
+        collections.push(format!("  playerStarts: {}", schema["playerStarts"]));
         source.push_str(
             "/** 当前地图的类型安全引用目录，由上述枚举组成。 */\nexport const map = {\n",
         );
@@ -353,6 +361,13 @@ impl Catalog {
             .map(|(_, member)| member)
             .context("引用不在当前目录中")
     }
+}
+
+pub(crate) fn player_starts(doc: &MapDocument) -> Vec<u32> {
+    ra2_map_document::player_starts::from_document(doc)
+        .into_iter()
+        .map(u32::from)
+        .collect()
 }
 
 fn enum_members(values: &[serde_json::Value], numeric: bool) -> Vec<String> {

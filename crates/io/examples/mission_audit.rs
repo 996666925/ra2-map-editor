@@ -51,7 +51,7 @@ fn main() -> Result<()> {
     let teams = TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),
         &map.ini,
-        false,
+        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
     );
     ensure!(
         teams.diagnostics.is_empty(),

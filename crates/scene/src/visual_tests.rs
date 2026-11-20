@@ -453,15 +453,13 @@ fn shp_turret_z_adjust_tests_body_and_neighbor_depth_at_each_height() {
             let surface = &scene.visual.surfaces[turret.surface];
             let row = if level > 20 { 1200 } else { 600 };
             let top = turret.position[1] as i32 - row;
-            let expected_z = native_z::sprite_row_z(
-                ZGradient::Vertical,
-                top,
-                1,
-                z_adjust - 2 - i32::from(level) * 15,
-                0,
+            let lift = vera20k_core::util::native_x87::adjust_for_z_standard(
+                i32::from(level) * vera20k_core::util::lepton::GROUND_LEVEL_HEIGHT_LEPTONS,
             );
+            let expected_z =
+                native_z::sprite_row_z(ZGradient::Vertical, top, 1, z_adjust - 2 - lift, 0);
             assert_eq!(i32::from(surface.depth[0]), expected_z);
-            let point = egui::pos2(-0.5, row as f32 + 15.5 - f32::from(level) * 15.);
+            let point = egui::pos2(-0.5, row as f32 + 15.5 - lift as f32);
             assert_eq!(
                 scene.visual.sample(point, unlit()).0,
                 expected,

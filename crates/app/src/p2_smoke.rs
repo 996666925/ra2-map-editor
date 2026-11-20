@@ -1072,13 +1072,12 @@ impl MapView {
                     .authoring_smoke(&mut self.editor, scene)?;
                 std::fs::write(path, serde_json::to_vec_pretty(&report)?)?;
                 self.workbench.mission.open = false;
-                // Region/mission smoke uses its own two-player fixture. Return
-                // to the authored extended map to inspect its playtest limits.
+                // Keep the mission fixture's Houses for the later base-node
+                // checks while exercising the requested extended start count.
                 if self.p2.new_map && self.p2.starts.len() > 8 {
-                    self.open_now(
-                        self.directory.clone(),
-                        output.join("blank.map").display().to_string(),
-                    );
+                    let doc = self.editor.doc.as_mut().context("no mission map")?;
+                    ra2_map_document::player_starts::set_count(doc, self.p2.starts.len() as u8)?;
+                    self.editor.commit(scene, "extended playtest starts");
                 }
                 self.p2.stage = 49;
             }
@@ -1086,14 +1085,16 @@ impl MapView {
                 self.editor.play_options.mission = false;
                 self.editor.play_options.ai = 1;
                 if self.p2.new_map && self.p2.starts.len() > 8 {
-                    self.editor.play_options.ai = self.p2.starts.len() as u8 - 1;
-                    self.editor.play_options.start = self
+                    let starts: Vec<_> = self
                         .p2
                         .starts
                         .iter()
                         .filter_map(|(key, _)| key.parse::<u8>().ok())
-                        .max()
-                        .unwrap();
+                        .filter(|&slot| slot < ra2_map_io::playtest::MAX_PLAYTEST_PLAYERS)
+                        .collect();
+                    self.editor.play_options.start =
+                        starts.iter().copied().max().context("no playtest start")?;
+                    self.editor.play_options.ai = starts.len().saturating_sub(1) as u8;
                 }
                 self.editor.play_options.ai_side = 8;
                 self.editor.play_options.difficulty = 0;

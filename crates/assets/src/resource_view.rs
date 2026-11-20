@@ -484,13 +484,16 @@ const THEATERS: &[(&str, &str, &str)] = &[
     ("LUNAR", "lunar", "lunar"),
 ];
 fn native_manager(game: &Path, overlay: Option<&Path>, ares: AresSetting) -> Result<AssetManager> {
-    AssetManager::with_mod_and_ares(game, overlay, MediaArchiveMode::STOCK_DIGITAL, ares)
-        .context("无法打开 YR 资源归档")
+    AssetManager::with_mod_and_ares(
+        game,
+        overlay,
+        MediaArchiveMode::STOCK_DIGITAL,
+        ares,
+        Default::default(),
+    )
+    .context("无法打开 YR 资源归档")
 }
 fn effective_ares(game: &Path, config: &MapResources, paths: &ResolvedPaths) -> AresSetting {
-    if vera20k_core::rules::ARES_BUILD {
-        return AresSetting::On;
-    }
     if config.ares != AresMode::Auto {
         return config.ares.setting();
     }

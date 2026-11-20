@@ -22,37 +22,25 @@ pub fn restore_checkpoint(
         None,
         None,
         None,
-    );
+    )?;
     let header = GameSnapshot::read_header(&bytes)?;
     ensure!(
         header.map_hash == map_hash && header.rules_hash == rules_hash,
         "checkpoint resource identity"
     );
     let snapshot: GameSnapshot = vera20k_core::util::save_codec::deserialize(&bytes)?;
-    let mut restored = snapshot.sim;
-    restored.retain_process_state_for_load(vera20k_core::sim::world::SnapshotProcessState::Live(
-        &runtime.simulation,
-    ));
-    restored.bind_shared_cell_dummy(vera20k_core::map::resolved_terrain::SharedCellDummy::fresh());
-    restored.reconstruct_cellclass_dummy_for_map_resize();
-    restored.restore_after_snapshot_load()?;
-    restored.rebuild_caches_after_load(
+    let mut restored = snapshot.restore_checkpoint_map_for_test(
+        &runtime.resources.rules,
+        runtime.resources.rules.overlay_registry(),
         runtime
             .simulation
             .resolved_terrain()
             .context("checkpoint terrain")?
             .clone(),
         runtime.simulation.terrain_speed_config().clone(),
-        &runtime.resources.rules,
-    );
-    restored.restore_map_authority_after_snapshot_load(
-        &runtime.resources.rules,
-        &runtime.resources.overlay_registry,
-        None,
     )?;
     restored.intern_rule_type_ids(&runtime.resources.rules);
     restored.resolve_type_handles(&runtime.resources.rules);
-    restored.rebuild_lighting_sources_after_load(&runtime.resources.rules);
     ensure!(
         restored.global_variables() == runtime.simulation.global_variables(),
         "checkpoint globals"

@@ -10,15 +10,6 @@ use serde::{Deserialize, Serialize};
 use vera20k_core::assets::{asset_manager::AssetManager, shp_file::ShpFile, tmp_file::TmpFile};
 use vera20k_core::map::theater::{self, TheaterData};
 
-/// Resource loading and isolated playtests share one launch choice. The Ares
-/// build must opt in to mounting installed ares.mix under engine 0.3.5.
-pub const ARES_SETTING: vera20k_core::util::ares_launch::AresSetting =
-    if vera20k_core::rules::ARES_BUILD {
-        vera20k_core::util::ares_launch::AresSetting::On
-    } else {
-        vera20k_core::util::ares_launch::AresSetting::Auto
-    };
-
 pub fn open_manager(directory: &Path, resources: Option<&MapResources>) -> Result<AssetManager> {
     crate::resource_view::ResourceView::open(directory, resources, &|| false)?.manager()
 }
@@ -32,12 +23,12 @@ pub fn read_ini(
         IniFile,
         directives::{DirectiveOptions, process_directives},
     };
-    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(manager.ares_form());
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(manager.ships_ares());
     let bytes = manager
         .get_ref(name)
         .with_context(|| format!("缺少 {name}"))?;
     let ini = IniFile::from_bytes(bytes)?;
-    if manager.ares_form() {
+    if manager.ships_ares() {
         let expanded = process_directives(
             ini,
             name,
@@ -276,7 +267,7 @@ impl Install {
                 vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::load_retail(
                     &self.manager,
                     &vera20k_core::rules::ini_parser::IniFile::empty(),
-                    false,
+                    vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
                 )
                 .map(std::sync::Arc::new)
             })
@@ -409,7 +400,7 @@ impl Install {
 }
 
 fn catalog_inputs_equal(old: &AssetManager, new: &AssetManager, theater_name: &str) -> bool {
-    if old.ini_roots() != new.ini_roots() || old.ares_form() != new.ares_form() {
+    if old.ini_roots() != new.ini_roots() || old.ships_ares() != new.ships_ares() {
         return false;
     }
     let names = [

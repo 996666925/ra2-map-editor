@@ -95,7 +95,7 @@ pub const FIELDS: &[Field] = &[
         Group::Listing,
         "MinPlayers",
         "最低玩家人数",
-        Kind::Integer(2, 30),
+        Kind::Integer(2, crate::new_map::MAX_PLAYERS as i32),
     ),
     basic(Group::Listing, "Official", "标记为官方地图", Kind::Boolean),
     basic(Group::Listing, "MultiplayerOnly", "多人地图", Kind::Boolean),

@@ -22,6 +22,7 @@ fn native_team_start_owners_are_distinct_from_fixed_house_references() {
         "<Player @ Z>",
         "<Player @ AA>",
         "<Player @ AD>",
+        "<Player @ DP>",
     ] {
         doc.set_ini("GIFT", "House", Some(owner.as_bytes().to_vec()))
             .unwrap();
@@ -33,8 +34,8 @@ fn native_team_start_owners_are_distinct_from_fixed_house_references() {
     }
     for owner in [
         "Russians",
-        "<Player @ AE>",
-        "<Player @ BA>",
+        "<Player @ DQ>",
+        "<Player @ EA>",
         "<Player @ a>",
         "<Player @ AAA>",
         "<Player @ >",
@@ -55,12 +56,10 @@ fn physical_ini_edits_preserve_duplicates_legacy_bytes_and_share_spatial_history
     let mut bytes = crate::test_support::fixture();
     bytes.extend_from_slice(b"\r\n[Triggers]\r\nT=Neutral,<none>,\xD6\xD0,0,1,1,1,0 ; untouched\r\nT=shadow\r\n[Custom]\r\n  X = old ; keep\r\nX=shadow\r\n");
     let mut doc = parse(bytes.clone());
-    if !vera20k_core::rules::ARES_BUILD {
-        assert!(
-            doc.set_ini("Custom", "X", Some(b"ambiguous".to_vec()))
-                .is_err()
-        );
-    }
+    assert!(
+        doc.set_ini("Custom", "X", Some(b"ambiguous".to_vec()))
+            .is_err()
+    );
     let last = doc.base.raw.entries("Custom").last().unwrap().0;
     doc.set(
         Target::IniLine(last),
@@ -107,38 +106,54 @@ fn physical_ini_edits_preserve_duplicates_legacy_bytes_and_share_spatial_history
 fn selected_dialect_keeps_the_same_effective_ini_value_after_save_reopen_and_undo() {
     let mut bytes = crate::new_map::NewMapOptions::default().bytes().unwrap();
     bytes.extend_from_slice(b"[Custom]\nX=first\nX=last\n");
-    let mut doc = parse(bytes.clone());
-    let expected = if vera20k_core::rules::ARES_BUILD {
-        "last"
-    } else {
-        "first"
-    };
-    assert_eq!(doc.ini_text("Custom", "X"), expected);
-    if vera20k_core::rules::ARES_BUILD {
-        doc.set_ini("Custom", "X", Some(b"edited".to_vec()))
+    for ares in [false, true] {
+        let _dialect = vera20k_core::rules::ares_switch::read_ares_way(ares);
+        let (source, _) = crate::source::SourceMap::parse_with_ares(
+            "dialect.map".into(),
+            "test".into(),
+            bytes.clone(),
+            ares,
+        )
+        .unwrap();
+        let mut doc = MapDocument::new(source.edit_base.unwrap());
+        let expected = if ares { "last" } else { "first" };
+        assert_eq!(doc.ini_text("Custom", "X"), expected);
+        if ares {
+            doc.set_ini("Custom", "X", Some(b"edited".to_vec()))
+                .unwrap();
+            doc.commit("edit last key");
+            let saved = doc.snapshot().bytes().unwrap();
+            let runtime = IniFile::from_bytes(&saved).unwrap();
+            assert_eq!(
+                runtime.section_or_empty("Custom").read_string("X", "", 64),
+                "edited"
+            );
+            let (reopened, _) = crate::source::SourceMap::parse_with_ares(
+                "dialect.map".into(),
+                "test".into(),
+                saved,
+                ares,
+            )
             .unwrap();
-        doc.commit("edit last key");
-        let saved = doc.snapshot().bytes().unwrap();
-        let runtime = IniFile::from_bytes(&saved).unwrap();
-        assert_eq!(
-            runtime.section_or_empty("Custom").read_string("X", "", 64),
-            "edited"
-        );
-        assert_eq!(parse(saved).ini_text("Custom", "X"), "edited");
-        doc.undo();
-        assert_eq!(doc.snapshot().bytes().unwrap(), bytes);
-        doc.set_ini("Custom", "X", Some(Vec::new())).unwrap();
-        doc.commit("clear last key and shadows");
-        assert!(doc.ini_fields("Custom")["X"].is_empty());
-        assert!(doc.ini_value("Custom", "X").is_none());
-        let saved = doc.snapshot().bytes().unwrap();
-        assert!(
-            !IniFile::from_bytes(&saved)
-                .unwrap()
-                .section_or_empty("Custom")
-                .is_present("X")
-        );
-        assert!(parse(saved).ini_fields("Custom")["X"].is_empty());
+            assert_eq!(
+                MapDocument::new(reopened.edit_base.unwrap()).ini_text("Custom", "X"),
+                "edited"
+            );
+            doc.undo();
+            assert_eq!(doc.snapshot().bytes().unwrap(), bytes);
+            doc.set_ini("Custom", "X", Some(Vec::new())).unwrap();
+            doc.commit("clear last key and shadows");
+            assert!(doc.ini_fields("Custom")["X"].is_empty());
+            assert!(doc.ini_value("Custom", "X").is_none());
+            let saved = doc.snapshot().bytes().unwrap();
+            assert!(
+                !IniFile::from_bytes(&saved)
+                    .unwrap()
+                    .section_or_empty("Custom")
+                    .is_present("X")
+            );
+            assert!(parse(saved).ini_fields("Custom")["X"].is_empty());
+        }
     }
 }
 #[test]
@@ -161,7 +176,11 @@ fn minimum_mission_roundtrips_through_engine_readers_and_undoes_as_one_command()
             .collect::<Vec<_>>(),
         [7, 56]
     );
-    let teams = TeamAiIniRegistry::from_sources(&IniFile::empty(), &map.ini, false);
+    let teams = TeamAiIniRegistry::from_sources(
+        &IniFile::empty(),
+        &map.ini,
+        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+    );
     assert!(teams.diagnostics.is_empty(), "{:?}", teams.diagnostics);
     assert_eq!(teams.team_types.len(), 1);
     assert_eq!(teams.scripts.len(), 1);

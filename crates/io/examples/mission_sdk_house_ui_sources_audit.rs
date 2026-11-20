@@ -162,7 +162,6 @@ fn main() -> Result<()> {
             launch.options.unit_count = 0;
             launch.options.short_game = false;
             launch.options.crates = false;
-            launch.rebuild_house_roster();
             let launch = MatchLaunchDescriptor::from_resolved(launch)
                 .map_err(|e| anyhow::anyhow!("{e:?}"))?;
             let mut scenario = load_with_launch_and_ini(

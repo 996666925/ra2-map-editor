@@ -7,7 +7,7 @@ pub const MIN_MAP_DIMENSION: u16 = 20;
 /// Maximum Size span supported by VERA20k's extended cell grid.
 pub const MAX_MAP_SPAN: u16 = vera20k_core::map::cell_index::MAX_CELL_SIDE;
 pub const MAX_MAP_DIMENSION: u16 = MAX_MAP_SPAN - MIN_MAP_DIMENSION;
-pub const MAX_PLAYERS: u8 = 30;
+pub const MAX_PLAYERS: u8 = vera20k_core::skirmish_launch::SKIRMISH_MAX_SLOT_COUNT as u8;
 pub const THEATERS: [(&str, &str); 6] = [
     ("TEMPERATE", "温带"),
     ("SNOW", "雪地"),
@@ -399,7 +399,7 @@ mod tests {
             .bytes()
             .is_err()
         );
-        for players in [0, 1, 31, 255] {
+        for players in [0, 1, MAX_PLAYERS + 1, 255] {
             assert!(
                 NewMapOptions {
                     players,

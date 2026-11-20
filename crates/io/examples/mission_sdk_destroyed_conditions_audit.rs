@@ -138,7 +138,7 @@ fn state(runtime: &SimRuntime) -> Result<Value> {
         }
         Ok(json!({"name":name,"counts":counts,"unit_losses":house.stats().units_lost(),"building_losses":house.stats().buildings_lost(),"money":house.economy().available_money()}))
     }).collect::<Result<Vec<_>>>()?;
-    let actors=sim.entities().iter_sorted().map(|(id,e)|json!({"id":id,"type":sim.interner().resolve(e.type_ref()),"owner":sim.interner().resolve(e.owner()),"cell":sim.object_coords_cell(id),"health":e.health.current(),"alive":e.lifecycle.object_alive(),"limbo":e.lifecycle.in_limbo(),"passengers":e.passenger_role.passenger_count()})).collect::<Vec<_>>();
+    let actors=sim.entities().iter_sorted().map(|(id,e)|json!({"id":id,"type":sim.interner().resolve(e.type_ref()),"owner":sim.interner().resolve(e.owner()),"cell":sim.object_coords_cell(id),"health":e.health.current(),"alive":e.lifecycle.object_alive(),"limbo":e.lifecycle.in_limbo(),"passengers":e.passenger_role().passenger_count()})).collect::<Vec<_>>();
     Ok(json!({"houses":houses,"actors":actors,"flags":sim.global_variables()[..2]}))
 }
 fn audit(install: &Install, bytes: &[u8], root: &Path, name: &str, restore: bool) -> Result<Value> {

@@ -1397,7 +1397,7 @@ fn read_manifest(doc: &MapDocument) -> Result<Manifest> {
     let mut start_owner_objects = BTreeSet::new();
     ensure!(
         result.start_owners.iter().all(|owner| {
-            owner.player < 30 && start_owner_objects.insert(owner.object.as_str())
+            owner.player < MAX_PLAYERS && start_owner_objects.insert(owner.object.as_str())
         }),
         "任务起点对象归属清单无效"
     );
@@ -1694,6 +1694,19 @@ pub fn registry_fingerprints(bytes: &[u8]) -> Result<BTreeMap<String, u64>> {
         }
         result.insert(section.into(), hash);
     }
+    let mut hash = 0xcbf29ce484222325u64;
+    for (i, line) in raw.entries("Basic") {
+        if line
+            .key
+            .as_deref()
+            .is_some_and(|key| key.eq_ignore_ascii_case("MaxPlayers"))
+        {
+            for b in raw.value(i).iter().copied().chain([0]) {
+                hash = (hash ^ u64::from(b)).wrapping_mul(0x100000001b3);
+            }
+        }
+    }
+    result.insert("Basic.MaxPlayers".into(), hash);
     Ok(result)
 }
 pub fn declared_assets(doc: &MapDocument) -> Result<Vec<ra2_map_document::campaign::Asset>> {
@@ -1809,6 +1822,8 @@ pub fn prepare_with_context(
     catalog: &Catalog,
     mut context: Option<BuildContext>,
 ) -> Result<Build> {
+    let reads_ares = doc.base.reads_ares;
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(reads_ares);
     validate_assets(&plan.assets)?;
     ensure!(
         context.as_ref().is_none_or(|c| c.inputs.len() <= 256),
@@ -1875,9 +1890,10 @@ pub fn prepare_with_context(
         let bytes = scratch.snapshot().bytes()?;
         let map = vera20k_core::map::map_file::load_from_bytes(bytes.clone())?;
         let profile = scratch.resource_profile.clone();
-        scratch = MapDocument::new(ra2_map_document::document::Baseline::parse(
+        scratch = MapDocument::new(ra2_map_document::document::Baseline::parse_with_ares(
             bytes.into(),
             &map,
+            reads_ares,
         )?);
         scratch.resource_profile = profile;
     }
@@ -1949,10 +1965,22 @@ pub fn prepare_with_context(
         .retain(|id| !old_waypoint_ids.contains(id));
     let mut generated_waypoints = Vec::new();
     let mut waypoint_ids = BTreeSet::new();
+    let declared_starts = scratch.ini_text("Basic", "MaxPlayers");
+    let declared_starts = vera20k_core::rules::ini_parser::IniFile::from_str(&format!(
+        "[Basic]\nMaxPlayers={declared_starts}\n"
+    ))
+    .section_or_empty("Basic")
+    .read_int("MaxPlayers", 0);
+    let first_mission_waypoint = if (31..=i32::from(MAX_PLAYERS)).contains(&declared_starts) {
+        declared_starts as u32
+    } else {
+        30
+    };
     for waypoint in &plan.waypoints {
         ensure!(
-            (30..=701).contains(&waypoint.id) && waypoint_ids.insert(waypoint.id),
-            "新任务航点编号须唯一且位于 30～701"
+            (first_mission_waypoint..=701).contains(&waypoint.id)
+                && waypoint_ids.insert(waypoint.id),
+            "新任务航点编号须唯一且位于 {first_mission_waypoint}～701"
         );
         ensure!(
             !effective_catalog.waypoints.contains(&waypoint.id),
@@ -1998,6 +2026,8 @@ pub fn prepare_with_context(
     }
     effective_catalog.waypoints.sort_unstable();
     effective_catalog.waypoints.dedup();
+    // Start selectors are bound to the actual map, not the caller's SDK catalog.
+    effective_catalog.player_starts = crate::catalog::player_starts(&scratch);
     let catalog = &effective_catalog;
     let mut projected_houses = scratch.fork();
     let mut generated_house_slots = BTreeMap::new();
@@ -2417,9 +2447,9 @@ pub fn prepare_with_context(
                     "按起点选择玩家仅支持多人任务"
                 );
                 ensure!(
-                    *id < u32::from(MAX_PLAYERS) && catalog.waypoints.contains(id),
-                    "小队 {} 的玩家起点必须是地图已有的 0～29 号航点",
-                    team.id
+                    catalog.has_player_start(*id),
+                    "小队 {} 的航点 {id} 不是地图已配置的玩家起点",
+                    team.id,
                 );
                 player_starts::house_token(*id).context("玩家起点选择器无效")?
             }
@@ -2533,9 +2563,10 @@ pub fn prepare_with_context(
     for assignment in &plan.start_owners {
         let object_id = assignment.object.check("object")?;
         ensure!(
-            assignment.player < 30 && catalog.waypoints.contains(&assignment.player),
-            "对象 {} 的玩家起点须为地图已有的 0～29 航点",
-            object_id
+            catalog.has_player_start(assignment.player),
+            "对象 {} 的航点 {} 不是地图已配置的玩家起点",
+            object_id,
+            assignment.player,
         );
         ensure!(
             catalog.objects.iter().any(|known| known == object_id),

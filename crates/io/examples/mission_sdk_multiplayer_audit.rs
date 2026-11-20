@@ -143,7 +143,6 @@ export default defineMission(map,{id:'multiplayer_audit',mode:MissionMode.Multip
                 second.slot.country = LaunchCountry::Russia;
                 second.slot.color_index = 1;
                 launch.humans.push(second);
-                launch.rebuild_house_roster();
                 launch.options.unit_count = 0;
                 launch.options.short_game = false;
                 launch.options.crates = false;

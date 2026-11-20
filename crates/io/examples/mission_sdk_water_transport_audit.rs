@@ -110,7 +110,7 @@ fn state(runtime: &SimRuntime, team_type: &str) -> Value {
     let actors = sim.entities().iter_sorted().map(|(id,e)| {
         let cell = sim.object_coords_cell(id);
         let land = cell.and_then(|(x,y)| sim.resolved_terrain()?.cell(x,y)).map(|c| c.land_type);
-        let cargo = e.passenger_role.cargo().map(|c|c.passengers().to_vec()).unwrap_or_default();
+        let cargo = e.passenger_role().cargo().map(|c|c.passengers().to_vec()).unwrap_or_default();
         json!({"id":id,"type":sim.interner().resolve(e.type_ref()),"owner":sim.interner().resolve(e.owner()),
             "health":e.health.current(),"alive":e.lifecycle.object_alive(),"limbo":e.lifecycle.in_limbo(),
             "cell":cell,"land":land,"cargo":cargo})

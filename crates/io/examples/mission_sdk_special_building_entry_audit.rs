@@ -165,11 +165,16 @@ export default defineMission(map,{id:'special_building_entry',player:'Americans'
             .team_script_vm()
             .teams_in_order()
             .find(|t| t.members().any(|id| id == recruit));
-        let cargo = sim.entities().get(reactor).unwrap().passenger_role.cargo();
+        let cargo = sim
+            .entities()
+            .get(reactor)
+            .unwrap()
+            .passenger_role()
+            .cargo();
         let passenger_link = sim
             .entities()
             .get(recruit)
-            .and_then(|e| e.passenger_role.inside_transport())
+            .and_then(|e| e.passenger_role().inside_transport())
             .is_some_and(|(id, _)| id == reactor);
         reactor_absorbed |= cargo.is_some_and(|c| c.passengers().contains(&recruit));
         reactor_order_completed |= reactor_absorbed;

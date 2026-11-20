@@ -7,14 +7,39 @@ use ra2_map_document::document::{Cell, MapDocument, Target, TerrainValue, Value}
 use std::collections::{BTreeSet, HashMap};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 use vera20k_core::map::{
-    corner_heights::{CornerGrid, FinalTiles},
+    corner_heights::{CornerCells, CornerGrid, FinalTiles},
     lat::{LatConfig, SlopeFixupConfig, apply_load_recalc_sweeps},
     map_file::MapCell,
-    rmg::{
-        RmgGrid, RmgScratch,
-        phases::hills_corners::{RMG_HEIGHTS, RmgCornerCells, write_finals},
-    },
+    playfield::size_diamond_contains,
+    rmg::phases::hills_corners::RMG_HEIGHTS,
 };
+
+struct AuthoredCorners<'a> {
+    size: (i32, i32),
+    cells: &'a HashMap<(i32, i32), (i32, u8, u8)>,
+    protected: &'a BTreeSet<(i32, i32)>,
+    morphable: &'a dyn Fn(i32) -> bool,
+}
+
+impl CornerCells for AuthoredCorners<'_> {
+    fn in_diamond(&self, x: i32, y: i32) -> bool {
+        size_diamond_contains(self.size.0, self.size.1, (x as i16, y as i16))
+    }
+
+    fn level_slope(&self, x: i32, y: i32) -> (i32, u8) {
+        self.cells
+            .get(&(x, y))
+            .map_or((0, 0), |&(_, level, slope)| (level.into(), slope))
+    }
+
+    fn editable(&self, x: i32, y: i32) -> bool {
+        !self.protected.contains(&(x, y))
+            && self
+                .cells
+                .get(&(x, y))
+                .is_some_and(|&(tile, _, _)| (self.morphable)(tile))
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TerrainMode {
@@ -591,32 +616,30 @@ pub fn height_with_change(
         ids.clear >= 0 && ids.ramp_base >= 0,
         "当前环境没有可用的坡面模板；可关闭自动坡面直接编辑高度"
     );
-    let span = (doc.base.header.width + doc.base.header.height) as usize;
-    let min = doc.base.header.width as i32;
-    let max = min + 2 * doc.base.header.height as i32;
-    let mut grid = RmgGrid::new(span, min, max);
-    let scratch = RmgScratch::new(span, min, max);
+    let (width, height) = (doc.base.header.width as i32, doc.base.header.height as i32);
+    let span = width + height;
+    let domain = || {
+        (width + 1..=width + 2 * height).flat_map(|row| {
+            let first = (row - width) / 2 + 1;
+            (first..row - first + 1).map(move |x| (x, row - x))
+        })
+    };
     let translated = translated(scene);
-    for (x, y) in grid.native_cells().collect::<Vec<_>>() {
+    let mut grid = HashMap::new();
+    let mut protected = BTreeSet::new();
+    for (x, y) in domain() {
         let old = value(doc, scene, [x as u16, y as u16]);
         let tile = tile_id(&translated, old);
-        let c = grid.get_mut(x, y).context("坡面格网无效")?;
-        c.tile = tile;
-        c.sub_tile = old.sub;
-        c.level = old.level;
-        c.slope = u16::try_from(tile)
+        let slope = u16::try_from(tile)
             .ok()
             .and_then(|tile| scene.palette.templates.get(&(tile, 0)))
             .and_then(|t| t.cells.get(usize::from(old.sub)))
             .and_then(|s| *s)
             .map_or(0, |s| s.slope);
-        let overlay = doc.overlay([x as u16, y as u16]);
-        c.overlay = if overlay.0 == 255 {
-            -1
-        } else {
-            i32::from(overlay.0)
-        };
-        c.occupied = old.level > 12;
+        grid.insert((x, y), (tile, old.level, slope));
+        if old.level > 12 || doc.overlay([x as u16, y as u16]).0 != 255 {
+            protected.insert((x, y));
+        }
     }
     for record in doc
         .records()
@@ -645,12 +668,10 @@ pub fn height_with_change(
                 vec![(0, 0)]
             };
             for (dx, dy) in offsets {
-                if let Some(c) = grid.get_mut(
+                protected.insert((
                     i32::from(at[0]) + i32::from(dx),
                     i32::from(at[1]) + i32::from(dy),
-                ) {
-                    c.occupied = true;
-                }
+                ));
             }
         }
     }
@@ -662,18 +683,19 @@ pub fn height_with_change(
             || (ids.ramp_base..ids.ramp_base + 20).contains(&tile)
             || ids.ramp_smooth >= 0 && (ids.ramp_smooth..ids.ramp_smooth + 12).contains(&tile)
     };
-    let cells = RmgCornerCells {
-        grid: &grid,
-        scratch: &scratch,
+    let cells = AuthoredCorners {
+        size: (width, height),
+        cells: &grid,
+        protected: &protected,
         morphable: &morphable,
     };
-    let mut corners = CornerGrid::build(&cells, (1, 1), span as i32, RMG_HEIGHTS);
+    let mut corners = CornerGrid::build(&cells, (1, 1), span, RMG_HEIGHTS);
     for &at in selected {
         doc.check_cell(at)?;
         let (x, y) = (i32::from(at[0]), i32::from(at[1]));
-        let c = grid.get(x, y).context("格子在 Size 之外")?;
-        let goal = target(c.level);
-        if mode != TerrainMode::Flatten && goal == c.level {
+        let &(_, level, _) = grid.get(&(x, y)).context("格子在 Size 之外")?;
+        let goal = target(level);
+        if mode != TerrainMode::Flatten && goal == level {
             continue;
         }
         ensure!(
@@ -681,7 +703,7 @@ pub fn height_with_change(
             "自动坡面支持 0～12 层；可关闭自动坡面编辑到 127 层"
         );
         ensure!(
-            morphable(c.tile) && c.overlay == -1 && !c.occupied,
+            cells.editable(x, y),
             "自动坡面不能修改水面、道路、建筑或覆盖物占用的格子"
         );
         for _ in 0..28 {
@@ -705,28 +727,28 @@ pub fn height_with_change(
     }
     let finals = corners.finalize(
         &cells,
-        grid.native_cells(),
+        domain(),
         FinalTiles {
             clear: ids.clear,
             ramp_base: ids.ramp_base,
         },
     );
-    write_finals(&mut grid, &finals);
     let mut edits = Vec::new();
-    for (x, y) in grid.native_cells() {
-        let c = grid.get(x, y).context("坡面格网无效")?;
+    let mut final_levels = HashMap::new();
+    for final_cell in finals {
+        let (x, y) = (final_cell.x, final_cell.y);
         let at = [x as u16, y as u16];
         let old = value(doc, scene, at);
-        if c.level == old.level && c.tile == tile_id(&translated, old) {
+        let old_tile = tile_id(&translated, old);
+        let tile = final_cell.slope_tile.map_or(old_tile, |(_, tile)| tile);
+        let level = final_cell.level as u8;
+        final_levels.insert(at, level);
+        if level == old.level && tile == old_tile {
             continue;
         }
-        let sub = if c.tile != tile_id(&translated, old) {
-            0
-        } else {
-            c.sub_tile
-        };
+        let sub = if tile != old_tile { 0 } else { old.sub };
         let key = vera20k_core::map::theater::TileKey {
-            tile_id: u16::try_from(c.tile)?,
+            tile_id: u16::try_from(tile)?,
             sub_tile: sub,
             variant: 0,
         };
@@ -737,9 +759,9 @@ pub fn height_with_change(
         edits.push((
             at,
             TerrainValue {
-                tile: raw(scene, c.tile).context("坡面无法转换为地图编号")?,
+                tile: raw(scene, tile).context("坡面无法转换为地图编号")?,
                 sub,
-                level: c.level,
+                level,
                 ..old
             },
         ));
@@ -750,10 +772,10 @@ pub fn height_with_change(
     if mode != TerrainMode::Flatten {
         for &at in selected {
             let expected = target(value(doc, scene, at).level);
-            let actual = grid
-                .get(i32::from(at[0]), i32::from(at[1]))
-                .context("格子在 Size 之外")?
-                .level;
+            let actual = final_levels
+                .get(&at)
+                .copied()
+                .unwrap_or_else(|| value(doc, scene, at).level);
             ensure!(
                 actual == expected,
                 "{},{} 的目标高度 {} 与邻接坡面冲突；请缩小范围或关闭自动坡面，未修改地形",

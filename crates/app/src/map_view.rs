@@ -66,7 +66,7 @@ pub struct MapView {
 }
 enum Leave {
     Open(PathBuf, String),
-    New(PathBuf, MapCreation),
+    New(PathBuf, Box<MapCreation>),
     Close,
     Restore(PathBuf),
 }
@@ -170,7 +170,20 @@ impl MapView {
         self.status = tr!("正在刷新资源；地图修改与历史保留。").into();
     }
     pub fn create(&mut self, directory: PathBuf, options: crate::new_map::NewMapOptions) {
-        self.create_map(directory, MapCreation::Blank(options));
+        self.create_map(
+            directory,
+            MapCreation::Blank(options, self.current_map_resources()),
+        );
+    }
+    fn current_map_resources(&self) -> Option<ra2_map_assets::map_resources::MapResources> {
+        let path = Path::new(&self.name);
+        path.is_file()
+            .then(|| {
+                ra2_map_assets::map_resources::MapResources::read(path)
+                    .ok()
+                    .flatten()
+            })
+            .flatten()
     }
     fn create_map(&mut self, directory: PathBuf, options: MapCreation) {
         if !self.workbench.map_settings.allow_leave()
@@ -189,7 +202,7 @@ impl MapView {
             self.editor.pointer(scene, None, false, false, true, None);
         }
         if self.editor.dirty() || self.editor.saving {
-            self.pending = Some(Leave::New(directory, options));
+            self.pending = Some(Leave::New(directory, Box::new(options)));
             self.leave_after_save = false;
             return;
         }
@@ -435,27 +448,20 @@ impl MapView {
                     }
                     if message.preview.is_none() {
                         self.editor.attach(&scene);
-                        if let Ok(ini) = vera20k_core::rules::ini_parser::IniFile::from_bytes(
-                            scene.source.bytes(),
-                        ) && let Some(recipe) =
-                            ra2_map_document::random_map::RandomMapOptions::from_ini(
-                                &ini,
-                                &scene.source.title,
-                            )
-                        {
-                            self.workbench.random_options = recipe;
-                        }
+                        let recipe = ra2_map_document::random_map::RandomMapOptions::from_source(
+                            &scene.source,
+                        );
                         if message.created {
                             self.editor.mark_new();
-                            if let Ok(ini) = vera20k_core::rules::ini_parser::IniFile::from_bytes(
-                                scene.source.bytes(),
-                            ) && let Some(random) = ini.section("RandomMap")
-                            {
+                            if let Some(recipe) = &recipe {
                                 self.editor.status = tr!(
                                     "已生成随机地图，种子 {arg0}；Ctrl+S 选择保存位置。",
-                                    arg0 = random.read_int("Seed", 0)
+                                    arg0 = recipe.terrain.seed
                                 );
                             }
+                        }
+                        if let Some(recipe) = recipe {
+                            self.workbench.random_options = recipe;
                         }
                         self.center = scene.bounds.center();
                         self.fit = true;
@@ -1144,7 +1150,7 @@ impl MapView {
         match action {
             Leave::Open(directory, name) => self.open_now(directory, name),
             Leave::New(directory, options) => {
-                self.load_now(directory, "Untitled.yrm".into(), Some(options))
+                self.load_now(directory, "Untitled.yrm".into(), Some(*options))
             }
             Leave::Close => {
                 self.allow_close = true;

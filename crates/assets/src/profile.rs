@@ -132,11 +132,7 @@ pub(super) fn relocate_staged_hashes(from: &Path, to: &Path) {
     }
 }
 
-pub const SCHEMA: &str = if vera20k_core::rules::ARES_BUILD {
-    "vera20k-pinned-ares-v1"
-} else {
-    "vera20k-pinned-yr-v1"
-};
+pub const SCHEMA: &str = "vera20k-pinned-yr-v1";
 
 pub fn hash(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325, |h, b| {
@@ -320,7 +316,7 @@ impl Profile {
         ensure!(std::fs::metadata(path)?.len() <= 65536, "Profile 文件过大");
         let mut p: Self = serde_json::from_slice(&std::fs::read(path)?)?;
         ensure!(
-            p.version == 1 && p.schema == SCHEMA,
+            p.version == 1 && matches!(p.schema.as_str(), SCHEMA | "vera20k-pinned-ares-v1"),
             "不支持的 profile/schema；不会把未知引擎能力当作 VERA20k"
         );
         ensure!(!p.name.trim().is_empty(), "Profile 名称为空");

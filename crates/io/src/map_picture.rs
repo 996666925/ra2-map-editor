@@ -26,7 +26,6 @@ pub(crate) fn export_with_resources(
     root: &Path,
     path: &Path,
 ) -> Result<[u32; 2]> {
-    crate::editor_io::validate(bytes)?;
     let exe = fs::canonicalize(exe)
         .context("VERA20k 可执行文件不存在；请在试玩设置中选择支持 --map-picture 的版本")?;
     let folder = root.join("map-pictures").join(crate::editor_io::unique());

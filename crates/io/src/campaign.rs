@@ -210,6 +210,8 @@ pub(crate) fn prepare_with_maps(
     ordered.missions.insert(0, first);
     let project = &ordered;
     let install = Install::open(directory)?;
+    let reads_ares = install.manager.ships_ares();
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(reads_ares);
     let profile = ra2_map_assets::profile::Revision::scan(directory)?.id();
     let mut payload = BTreeMap::new();
     for a in &project.assets {
@@ -229,14 +231,16 @@ pub(crate) fn prepare_with_maps(
             read_bounded(&root.join(&m.source))?
         };
         let map = crate::editor_io::validate(&bytes)?;
-        for (name, value) in crate::mission_script::resource_payload(&bytes, &profile)? {
+        for (name, value) in
+            crate::mission_script::resource_payload_with_ares(&bytes, &profile, reads_ares)?
+        {
             ensure!(
                 payload.get(&name).is_none_or(|old| old == &value),
                 "关卡资源输出冲突：{name}"
             );
             payload.insert(name, value);
         }
-        for (label, value) in crate::mission_script::declared_texts(&bytes)? {
+        for (label, value) in crate::mission_script::declared_texts_with_ares(&bytes, reads_ares)? {
             let existing = declared_strings
                 .iter()
                 .find(|(key, _)| key.eq_ignore_ascii_case(&label));
@@ -395,7 +399,7 @@ pub fn audit_resources(
             .map(Vec::as_slice)
             .or_else(|| install.manager.get_ref(name))
     };
-    let table = CsfFile::load_active(install.manager.ares_form(), lookup)?.0;
+    let table = CsfFile::load_active(install.manager.ships_ares(), lookup)?.0;
     let sounds = SoundRegistry::from_ini(&IniFile::from_bytes(
         lookup("soundmd.ini").unwrap_or_default(),
     )?);

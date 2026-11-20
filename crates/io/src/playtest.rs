@@ -1,7 +1,7 @@
 //! VERA -SPAWN Battle options: one local player and up to 29 AI opponents.
 use anyhow::{Context, Result, ensure};
 use vera20k_core::map::map_file::MapFile;
-pub const MAX_PLAYTEST_PLAYERS: u8 = ra2_map_document::new_map::MAX_PLAYERS;
+pub const MAX_PLAYTEST_PLAYERS: u8 = vera20k_core::skirmish_launch::NETWORK_PLAYER_SLOT_COUNT as u8;
 pub const PLAYER_COLOR_COUNT: u8 = 8;
 
 pub use ra2_map_document::player_starts::indices as player_start_indices;
@@ -34,6 +34,9 @@ pub fn map_player_starts(map: &MapFile) -> Vec<u8> {
             })
             .filter_map(|w| u8::try_from(w.index).ok()),
     )
+    .into_iter()
+    .filter(|&slot| slot < MAX_PLAYTEST_PLAYERS)
+    .collect()
 }
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -109,7 +112,7 @@ impl PlayOptions {
     }
 
     pub fn spawn_ini(&self, map: &MapFile) -> Result<String> {
-        self.spawn_ini_with_ares(map, ra2_map_assets::assets::ARES_SETTING)
+        self.spawn_ini_with_ares(map, vera20k_core::util::ares_launch::AresSetting::Auto)
     }
     pub(crate) fn spawn_ini_with_ares(
         &self,
@@ -228,17 +231,47 @@ mod tests {
             let ini = vera20k_core::rules::ini_parser::IniFile::from_str(&text);
             assert_eq!(
                 ini.section_or_empty("Settings").read_string("Ares", "", 16),
-                if vera20k_core::rules::ARES_BUILD {
-                    "On"
-                } else {
-                    "Auto"
-                },
+                "Auto",
             );
             assert_eq!(
                 ini.section_or_empty("Settings").read_bool("Bases", true),
                 !setting.contains("Bases=no")
             );
         }
+    }
+
+    #[test]
+    fn a_120_start_map_only_offers_the_first_thirty_starts_to_spawn() {
+        let map = vera20k_core::map::map_file::load_from_bytes(
+            ra2_map_document::new_map::NewMapOptions {
+                players: ra2_map_document::new_map::MAX_PLAYERS,
+                ..Default::default()
+            }
+            .bytes()
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            map_player_starts(&map),
+            (0..MAX_PLAYTEST_PLAYERS).collect::<Vec<_>>()
+        );
+        assert!(
+            PlayOptions {
+                ai: MAX_PLAYTEST_PLAYERS - 1,
+                start: MAX_PLAYTEST_PLAYERS - 1,
+                ..Default::default()
+            }
+            .spawn_ini(&map)
+            .is_ok()
+        );
+        assert!(
+            PlayOptions {
+                start: MAX_PLAYTEST_PLAYERS,
+                ..Default::default()
+            }
+            .spawn_ini(&map)
+            .is_err()
+        );
     }
 
     #[test]
@@ -410,14 +443,7 @@ mod tests {
         let ini = vera20k_core::rules::ini_parser::IniFile::from_str(&o.spawn_ini(&map).unwrap());
         let s = ini.section_or_empty("Settings");
         assert!(s.read_bool("IsSinglePlayer", false));
-        assert_eq!(
-            s.read_string("Ares", "", 16),
-            if vera20k_core::rules::ARES_BUILD {
-                "On"
-            } else {
-                "Auto"
-            }
-        );
+        assert_eq!(s.read_string("Ares", "", 16), "Auto");
         assert_eq!(s.read_int("DifficultyModeComputer", -1), 0);
         assert!(!s.is_present("AIPlayers"));
         let fast = PlayOptions {

@@ -18,14 +18,22 @@ use std::{
 
 #[derive(Clone)]
 pub(crate) enum MapCreation {
-    Blank(crate::new_map::NewMapOptions),
-    Random(ra2_map_document::random_map::RandomMapOptions),
+    Blank(crate::new_map::NewMapOptions, Option<MapResources>),
+    Random(
+        ra2_map_document::random_map::RandomMapOptions,
+        Option<MapResources>,
+    ),
 }
 impl MapCreation {
     pub fn validate(&self) -> Result<()> {
         match self {
-            Self::Blank(options) => options.validate(),
-            Self::Random(options) => options.validate(),
+            Self::Blank(options, _) => options.validate(),
+            Self::Random(options, _) => options.validate(),
+        }
+    }
+    fn resources(&self) -> Option<&MapResources> {
+        match self {
+            Self::Blank(_, resources) | Self::Random(_, resources) => resources.as_ref(),
         }
     }
 }
@@ -113,10 +121,10 @@ impl MapLoader {
                     let result = (|| {
                         let invalidation = refresh_worker.swap(0, Ordering::AcqRel);
                         if invalidation == 2 { cached = None; previous=None; previous_gpu=None; }
-                        let resources = if new_map.is_none() {
-                            MapResources::read(std::path::Path::new(&name))?
+                        let resources = if let Some(creation) = new_map.as_ref() {
+                            creation.resources().cloned()
                         } else {
-                            None
+                            MapResources::read(std::path::Path::new(&name))?
                         };
                         if cached.as_ref().is_none_or(|(path, _)| path != &directory) {
                             cached = None; previous=None; previous_gpu=None;
@@ -146,11 +154,11 @@ impl MapLoader {
                         let install=&mut cached.as_mut().unwrap().1;
                         let scene = if let Some(options) = new_map {
                             let bytes = match options {
-                                MapCreation::Blank(options) => {
+                                MapCreation::Blank(options, _) => {
                                     stage("生成空白地图…");
                                     options.bytes()?
                                 },
-                                MapCreation::Random(options) => ra2_map_scene::random_map::generate(install, &options, &cancelled, &stage)?,
+                                MapCreation::Random(options, _) => ra2_map_scene::random_map::generate(install, &options, &cancelled, &stage)?,
                             };
                             load_scene_bytes_controlled(install, &name, "新建地图".into(), bytes, Instant::now(),profile,&cancelled)?
                         } else if let Some(snapshot)=snapshot {

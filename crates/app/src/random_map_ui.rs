@@ -160,7 +160,10 @@ impl MapView {
             self.workbench.random_map = false;
             self.create_map(
                 PathBuf::from(directory.trim()),
-                MapCreation::Random(self.workbench.random_options.clone()),
+                MapCreation::Random(
+                    self.workbench.random_options.clone(),
+                    self.current_map_resources(),
+                ),
             );
         } else if cancel || modal.should_close() {
             self.workbench.random_map = false;

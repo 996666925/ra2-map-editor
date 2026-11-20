@@ -61,7 +61,7 @@ fn build(install: &mut Install, root: &Path, name: &str) -> Result<Vec<u8>> {
         .wood_crate_img
         .as_deref()
         .context("land crate image")?;
-    let registry = &stock.resources.overlay_registry;
+    let registry = stock.resources.rules.overlay_registry();
     let id = registry.id_for_name(image).context("land crate overlay")?;
     let flags = registry.flags(id).context("land crate flags")?;
     std::fs::write(

@@ -23,7 +23,7 @@ cargo run --locked -- --game-dir 'D:/Games/YR' --playtest-exe 'D:/Games/YR/vera2
 | `--profile FILE` | 加载 Mod 资源配置 |
 | `--map PATH_OR_NAME` | 打开磁盘地图或 MIX 内地图；不能与 `--new-map` 同时使用 |
 | `--new-map WxH` | 新建空白地图，尺寸限制见 [使用指南](user-guide.md#空白地图) |
-| `--players N` | 新地图的起点数量，2～30，默认 2；须与 `--new-map` 一起使用 |
+| `--players N` | 新地图的起点数量，2～120，默认 2；须与 `--new-map` 一起使用 |
 | `--theater NAME` | 新地图环境，须与 `--new-map` 一起使用 |
 | `--playtest-exe PATH` | 用于独立试玩的 VERA20k 可执行文件 |
 | `--font PATH` | 优先使用指定字体 |

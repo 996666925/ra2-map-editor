@@ -8,7 +8,7 @@ pub const MAX_SOURCE_BYTES: usize = 32 * 1024 * 1024;
 /// Same launch default as the engine's INI reader; explicit resource loads
 /// pass their manager's mode instead of depending on another worker's launch.
 pub fn game_reads_ares() -> bool {
-    vera20k_core::rules::ARES_BUILD || vera20k_core::util::ares_launch::game_ships_ares()
+    vera20k_core::util::ares_launch::game_ships_ares()
 }
 
 #[derive(Clone)]
@@ -18,6 +18,7 @@ pub struct SourceMap {
     pub origin: String,
     pub header: MapHeader,
     pub title: String,
+    pub reads_ares: bool,
     pub edit_base: Result<Arc<crate::document::Baseline>, String>,
 }
 impl SourceMap {
@@ -60,6 +61,7 @@ impl SourceMap {
             bytes,
             name,
             origin,
+            reads_ares: ares,
             edit_base,
         };
         Ok((source, map))

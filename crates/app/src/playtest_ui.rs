@@ -54,6 +54,9 @@ pub(crate) const SPEEDS: [(&str, u8); 8] = [
 /// Query current document records, including pending edits, for launch starts.
 fn map_starts(doc: &MapDocument) -> Vec<u8> {
     ra2_map_document::player_starts::from_document(doc)
+        .into_iter()
+        .filter(|&slot| slot < ra2_map_io::playtest::MAX_PLAYTEST_PLAYERS)
+        .collect()
 }
 
 fn country(ui: &mut egui::Ui, id: &str, label: &str, value: &mut u8) {

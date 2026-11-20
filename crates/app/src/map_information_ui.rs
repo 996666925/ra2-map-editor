@@ -184,7 +184,7 @@ fn identity_fields(ui: &mut egui::Ui, identity: &mut IdentityFields<'_>, label_w
         }
     });
     ui.end_row();
-    field_label(ui, tr!("出生点数量"), label_width).on_hover_text(tr!("支持 2～30 个出生点，对应从 0 开始的连续航点。增加时补齐缺少的航点，保留已有位置；减少时删除多余出生点，其他任务航点保留。"));
+    field_label(ui, tr!("出生点数量"), label_width).on_hover_text(tr!("支持 2～120 个出生点，对应从 0 开始的连续航点。增加时补齐缺少的航点，保留已有位置；减少时删除多余出生点，其他任务航点保留。"));
     crate::form_edit::number(
         ui,
         egui::DragValue::new(identity.players).range(2..=ra2_map_document::new_map::MAX_PLAYERS),

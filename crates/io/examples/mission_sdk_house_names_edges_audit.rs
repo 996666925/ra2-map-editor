@@ -109,7 +109,7 @@ fn audit(
                 .find(|(_, e)| sim.interner().resolve(e.type_ref()) == "PDPLANE")
         {
             original_passengers = e
-                .passenger_role
+                .passenger_role()
                 .cargo()
                 .context("carrier cargo")?
                 .passengers()
@@ -126,7 +126,7 @@ fn audit(
             && original_passengers.iter().all(|id| {
                 sim.entities().get(*id).is_some_and(|e| {
                     !e.in_limbo()
-                        && e.passenger_role.inside_transport().is_none()
+                        && e.passenger_role().inside_transport().is_none()
                         && vera20k_core::sim::movement::ground_pose::object_location(
                             e,
                             sim.resolved_terrain(),
@@ -146,7 +146,7 @@ fn audit(
                 .entities()
                 .get(carrier)
                 .context("carrier")?
-                .passenger_role
+                .passenger_role()
                 .cargo()
                 .context("cargo")?
                 .passengers()
@@ -157,7 +157,7 @@ fn audit(
                 .simulation
                 .entities()
                 .get(carrier)
-                .and_then(|e| e.passenger_role.cargo())
+                .and_then(|e| e.passenger_role().cargo())
                 .is_some_and(|c| c.passengers() == cargo);
         }
     }

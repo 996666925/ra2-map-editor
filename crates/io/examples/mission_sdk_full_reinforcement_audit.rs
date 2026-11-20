@@ -21,7 +21,7 @@ mod checkpoint;
 fn state(runtime: &SimRuntime, team_type: &str) -> Value {
     let sim = &runtime.simulation;
     let actors = sim.entities().iter_sorted().map(|(id,e)| {
-        let cargo = e.passenger_role.cargo().map(|c|c.passengers().to_vec()).unwrap_or_default();
+        let cargo = e.passenger_role().cargo().map(|c|c.passengers().to_vec()).unwrap_or_default();
         let miner = e.miner.as_ref().map(|m|json!({"capacity":m.capacity_bales(),"bales":m.cargo()}));
         json!({"id":id,"type":sim.interner().resolve(e.type_ref()),"owner":sim.interner().resolve(e.owner()),"health":e.health.current(),"alive":e.lifecycle.object_alive(),"limbo":e.lifecycle.in_limbo(),"cell":sim.object_coords_cell(id),"cargo":cargo,"miner":miner})
     }).collect::<Vec<_>>();

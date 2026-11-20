@@ -593,13 +593,12 @@ fn launch_with_resources(
     root: &Path,
     options: &crate::playtest::PlayOptions,
 ) -> Result<PlayProcess> {
-    let map = validate(bytes)?;
     let exe = fs::canonicalize(exe).context("VERA20k 可执行文件不存在")?;
     let folder = root.join("playtest").join(unique());
     fs::create_dir_all(&folder)?;
     let folder = fs::canonicalize(folder)?;
     let game_dir = resources.prepare(bytes, &folder, options)?;
-    let spawn = options.spawn_ini_with_ares(&map, game_dir.ares)?;
+    let spawn = options.spawn_ini_with_ares(&game_dir.map, game_dir.ares)?;
     fs::write(folder.join("spawnmap.ini"), bytes)?;
     fs::write(folder.join("spawn.ini"), spawn)?;
     crate::provenance::write(
@@ -636,6 +635,7 @@ pub(crate) struct SessionResources {
 pub(crate) struct PreparedSession {
     pub directory: PathBuf,
     pub ares: vera20k_core::util::ares_launch::AresSetting,
+    pub map: vera20k_core::map::map_file::MapFile,
 }
 
 impl SessionResources {
@@ -676,6 +676,10 @@ impl SessionResources {
             self.revision.clone(),
             &|| false,
         )?;
+        // ResourceView resolves Auto with a mounted Ares archive to On.
+        // Another editor tab may have changed the process launch default.
+        let reads_ares = view.ares == vera20k_core::util::ares_launch::AresSetting::On;
+        let _dialect = vera20k_core::rules::ares_switch::read_ares_way(reads_ares);
         let map = validate(bytes)?;
         let root = view.materialize(&map.header.theater, &|| false)?;
         let mut payload = crate::mission_script::scoped_playtest_payload(
@@ -683,6 +687,7 @@ impl SessionResources {
             &self.directory,
             self.map.as_ref(),
             &self.revision.id(),
+            reads_ares,
         )?;
         if let Some(override_art) = payload.get("artmd.ini") {
             let manager = view.manager_for_theater(&map.header.theater)?;
@@ -739,6 +744,7 @@ impl SessionResources {
         Ok(PreparedSession {
             directory,
             ares: view.ares,
+            map,
         })
     }
 }

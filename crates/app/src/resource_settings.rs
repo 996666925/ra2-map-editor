@@ -11,7 +11,7 @@ pub(crate) fn show(ui: &mut egui::Ui, config: &mut MapResources) -> anyhow::Resu
     {
         *config = MapResources::import(&path)?;
     }
-    list(ui, tr!("资源目录"), &mut config.directories, false);
+    list(ui, tr!("附加资源目录"), &mut config.directories, false);
     ui.add_space(8.);
     list(ui, tr!("资源归档（MIX）"), &mut config.archives, true);
     ui.add_space(8.);

@@ -191,7 +191,10 @@ fn waypoint_copy_allocates_non_player_keys_and_hidden_layers_are_filtered() {
         .unwrap()
         .apply(&mut doc, true)
         .unwrap();
-    assert_eq!(doc.records()[&ids[0]].key, "30");
+    assert_eq!(
+        doc.records()[&ids[0]].key,
+        crate::new_map::MAX_PLAYERS.to_string()
+    );
     assert_eq!(doc.records()[&ids[0]].cell(), Some([23, 23]));
 }
 #[test]

@@ -295,7 +295,7 @@ fn audit(install: &Install, bytes: &[u8], root: &Path, mode: &str, restore: bool
                 "GAPILL",
                 cell.0,
                 cell.1,
-                Some(&runtime.resources.overlay_registry),
+                Some(runtime.resources.rules.overlay_registry()),
             )
             .context("preview")?;
             if !rejected_once {
@@ -549,7 +549,7 @@ fn ordinary_crate_probe(install: &Install, bytes: &[u8]) -> Result<Value> {
         .context("probe overlays")?
         .cell(42, 57)
         .overlay_id
-        .and_then(|id| runtime.resources.overlay_registry.flags(id))
+        .and_then(|id| runtime.resources.rules.overlay_registry().flags(id))
         .is_some_and(|flags| flags.crate_type);
     let checks = json!({"ordinary_crate_appeared":saw_crate,"ordinary_crate_collected":!original_cell_has_crate,
         "ordinary_native_miner_compensation":miners==1,"ordinary_crate_never_grants_lottery_variant":prizes==0});

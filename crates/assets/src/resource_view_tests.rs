@@ -282,7 +282,7 @@ fn ini_replace_roots_and_auto_ares_survives_staging() {
     let view = ResourceView::open(&f.0, Some(&config), &|| false).unwrap();
     assert_eq!(view.ares, AresSetting::On);
     let manager = view.manager().unwrap();
-    assert!(manager.ares_form());
+    assert!(manager.ships_ares());
     let art = crate::assets::read_ini(&manager, manager.ini_roots().art()).unwrap();
     assert_eq!(art.section_or_empty("CUSTOM").read_int("Height", 0), 7);
     assert_eq!(art.section_or_empty("BASE").read_int("Height", 0), 0);
@@ -292,7 +292,7 @@ fn ini_replace_roots_and_auto_ares_survives_staging() {
             .unwrap()
             .manager()
             .unwrap()
-            .ares_form()
+            .ships_ares()
     );
 }
 #[test]

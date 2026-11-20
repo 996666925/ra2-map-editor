@@ -123,7 +123,6 @@ fn main() -> Result<()> {
         launch.options.crates = false;
         launch.options.shroud = false;
         launch.options.fog_of_war = false;
-        launch.rebuild_house_roster();
         let mut timelines = Vec::new();
         for saved_at in [None, Some(165), Some(195)] {
             let mut scenario =

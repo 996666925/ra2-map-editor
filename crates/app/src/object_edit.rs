@@ -319,23 +319,19 @@ impl Editor {
                                     None,
                                     tr!("保持所属方"),
                                 );
-                                for slot in 0..ra2_map_document::new_map::MAX_PLAYERS {
-                                    if self.records.values().any(|r| {
-                                        r.section == "Waypoints" && r.key == slot.to_string()
-                                    }) {
-                                        ui.selectable_value(
-                                            &mut self.property_startup_owner,
-                                            Some(slot),
-                                            tr!("航点 {slot} 的玩家", slot = slot),
-                                        );
-                                    }
+                                for slot in ra2_map_document::player_starts::from_document(doc) {
+                                    ui.selectable_value(
+                                        &mut self.property_startup_owner,
+                                        Some(slot),
+                                        tr!("航点 {slot} 的玩家", slot = slot),
+                                    );
                                 }
                             })
                             .response
                             .accessible_name(tr!("开局交给"));
                     });
                     if startup_owner::available(doc, &r) {
-                        ui.small(tr!("开局由中立方转交给该起点的玩家或电脑；无人使用时保持中立。支持航点 0～29；扩展起点需配置地图出生点数量。"));
+                        ui.small(tr!("开局由中立方转交给该起点的玩家或电脑；无人使用时保持中立。支持航点 0～119；扩展起点需配置地图出生点数量。"));
                     } else {
                         ui.small(tr!("对象已有关联标签，请通过任务触发器设置开局归属。"));
                     }

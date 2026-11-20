@@ -7,7 +7,7 @@ use anyhow::{Context, Result, ensure};
 use std::collections::BTreeSet;
 use vera20k_core::map::playfield::PlayfieldBounds;
 
-/// TeamType House selector for a VERA player start (A..Z, AA..AD).
+/// TeamType House selector for a VERA player start (A through DP).
 pub fn house_token(slot: u32) -> Option<String> {
     (slot < u32::from(MAX_PLAYERS))
         .then(|| {
@@ -21,7 +21,7 @@ pub fn house_slot(value: &str) -> Option<u8> {
     let letters = value.strip_prefix("<Player @ ")?.strip_suffix('>')?;
     let slot = match letters.as_bytes() {
         [letter @ b'A'..=b'Z'] => letter - b'A',
-        [b'A', letter @ b'A'..=b'Z'] => 26 + letter - b'A',
+        [first @ b'A'..=b'D', letter @ b'A'..=b'Z'] => 26 + (first - b'A') * 26 + (letter - b'A'),
         _ => return None,
     };
     (slot < MAX_PLAYERS).then_some(slot)
@@ -48,10 +48,12 @@ pub fn from_document(doc: &MapDocument) -> Vec<u8> {
             .read_int("MaxPlayers", 0)
             .try_into()
             .ok(),
-        doc.records().values().filter_map(|r| {
+        doc.record_iter().filter_map(|(_, r)| {
+            if r.section != "Waypoints" {
+                return None;
+            }
             let slot = r.key.parse::<u8>().ok()?;
-            (r.section == "Waypoints"
-                && r.key == slot.to_string()
+            (r.key == slot.to_string()
                 && r.cell()
                     .is_some_and(|at| at != [0, 0] && doc.terrain(at).is_some()))
             .then_some(slot)
@@ -173,7 +175,7 @@ mod tests {
 
     #[test]
     fn house_selectors_match_vera_and_reject_noncanonical_tokens() {
-        for slot in 0..30 {
+        for slot in 0..u32::from(MAX_PLAYERS) {
             let text = house_token(slot).unwrap();
             assert_eq!(house_slot(&text), Some(slot as u8));
         }
@@ -184,15 +186,16 @@ mod tests {
             (25, "<Player @ Z>"),
             (26, "<Player @ AA>"),
             (29, "<Player @ AD>"),
+            (119, "<Player @ DP>"),
         ] {
             assert_eq!(house_token(slot).as_deref(), Some(text));
         }
-        for slot in [30, u32::MAX] {
+        for slot in [120, u32::MAX] {
             assert!(house_token(slot).is_none());
         }
         for text in [
-            "<Player @ AE>",
-            "<Player @ BA>",
+            "<Player @ DQ>",
+            "<Player @ EA>",
             "<Player @ a>",
             "<player @ A>",
             "<Player @ AAA>",
@@ -271,7 +274,7 @@ mod tests {
         doc.set_ini("Basic", "Name", Some(b"pending".to_vec()))
             .unwrap();
         let before = doc.snapshot().bytes().unwrap();
-        for count in [0, 1, 30, 31] {
+        for count in [0, 1, 30, MAX_PLAYERS + 1] {
             assert!(set_count(&mut doc, count).is_err());
             assert_eq!(doc.snapshot().bytes().unwrap(), before);
         }

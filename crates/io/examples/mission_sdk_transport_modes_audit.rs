@@ -110,7 +110,7 @@ export default defineMission(map,{id:'transport_modes',player:House.Americans},m
 }
 fn state(runtime: &SimRuntime, team_type: &str) -> Result<Value> {
     let sim = &runtime.simulation;
-    let actors=sim.entities().iter_sorted().map(|(id,e)|json!({"id":id,"type":sim.interner().resolve(e.type_ref()),"owner":sim.interner().resolve(e.owner()),"health":e.health.current(),"alive":e.lifecycle.object_alive(),"limbo":e.lifecycle.in_limbo(),"cell":sim.object_coords_cell(id),"passengers":e.passenger_role.passenger_count(),"archive":e.archive_target()})).collect::<Vec<_>>();
+    let actors=sim.entities().iter_sorted().map(|(id,e)|json!({"id":id,"type":sim.interner().resolve(e.type_ref()),"owner":sim.interner().resolve(e.owner()),"health":e.health.current(),"alive":e.lifecycle.object_alive(),"limbo":e.lifecycle.in_limbo(),"cell":sim.object_coords_cell(id),"passengers":e.passenger_role().passenger_count(),"archive":e.archive_target()})).collect::<Vec<_>>();
     let teams=sim.team_script_vm().teams_in_order().filter(|t|t.team_type_id().is_some_and(|id|sim.interner().resolve(id)==team_type)).map(|t|json!({"id":t.id(),"owner":sim.interner().resolve(t.owner()),"cursor":t.cursor(),"members":t.members().collect::<Vec<_>>()})).collect::<Vec<_>>();
     let house = sim
         .houses()

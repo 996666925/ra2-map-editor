@@ -43,7 +43,7 @@ fn run(install: &Install, bytes: &[u8], root: &std::path::Path, restore: bool) -
                 if sim.interner().resolve(entity.type_ref()) != "PDPLANE" {
                     continue;
                 }
-                let cargo = entity.passenger_role.cargo().context("carrier cargo")?;
+                let cargo = entity.passenger_role().cargo().context("carrier cargo")?;
                 passengers.extend(cargo.passengers().iter().copied());
                 carrier = Some(id);
                 initial_carrier = Some(json!({"frame":frame,"id":id,
@@ -66,19 +66,19 @@ fn run(install: &Install, bytes: &[u8], root: &std::path::Path, restore: bool) -
             let location = object_location(entity, sim.resolved_terrain());
             let owner = sim.interner().resolve(entity.owner());
             ownership_preserved &= owner == "Americans";
-            let cargo = entity.passenger_role.cargo().map(|c| c.passengers());
+            let cargo = entity.passenger_role().cargo().map(|c| c.passengers());
             if passengers.contains(&id) && !entity.in_limbo() {
                 if location.z > 0 {
                     falling.insert(id);
                     first_descent.get_or_insert(frame);
-                } else if entity.passenger_role.inside_transport().is_none() {
+                } else if entity.passenger_role().inside_transport().is_none() {
                     landed.insert(id);
                 }
             }
             entities.push(
                 json!({"id":id,"present":true,"type":sim.interner().resolve(entity.type_ref()),
                 "owner":owner,"xyz":[location.x,location.y,location.z],"limbo":entity.in_limbo(),
-                "inside":entity.passenger_role.inside_transport(),"cargo":cargo,
+                "inside":entity.passenger_role().inside_transport(),"cargo":cargo,
                 "mission":entity.mission.current().raw()}),
             );
         }
@@ -94,7 +94,7 @@ fn run(install: &Install, bytes: &[u8], root: &std::path::Path, restore: bool) -
         if frame == 40 {
             checkpoint_cargo = carrier
                 .and_then(|id| sim.entities().get(id))
-                .and_then(|e| e.passenger_role.cargo())
+                .and_then(|e| e.passenger_role().cargo())
                 .map(|c| c.passengers().to_vec());
             if restore {
                 let location = carrier
@@ -107,14 +107,14 @@ fn run(install: &Install, bytes: &[u8], root: &std::path::Path, restore: bool) -
                     .map(|entity| object_location(entity, loaded.resolved_terrain()))
                     == location;
                 checkpoint_preserved &= loaded_carrier
-                    .and_then(|entity| entity.passenger_role.cargo())
+                    .and_then(|entity| entity.passenger_role().cargo())
                     .map(|cargo| cargo.passengers().to_vec())
                     == checkpoint_cargo;
                 checkpoint_preserved &= passengers.iter().all(|id| {
                     loaded.entities().get(*id).is_some_and(|entity| {
                         entity.in_limbo()
                             && entity
-                                .passenger_role
+                                .passenger_role()
                                 .inside_transport()
                                 .map(|(transport, _)| transport)
                                 == carrier

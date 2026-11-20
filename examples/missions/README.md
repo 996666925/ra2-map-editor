@@ -2,7 +2,7 @@
 
 ## Ares 任务
 
-使用启用 `ares` feature 的编辑器和 VERA20k 客户端。该编辑器构建显式使用引擎 0.3.5 的 Ares On，挂载安装目录中的 `ares.mix`，试玩也写入 `Ares=On`。默认编辑器使用 Auto，忽略仅安装在目录中的 `ares.mix`，Ares SDK 创作入口仍关闭。支持的事件、动作、绑定和参数可从能力清单查询，`runtime: "ares"` 表示扩展能力，`enabled` 表示本次编辑器构建已启用它。事件 66 缺少运行时通知，仍不提供 SDK 方法。
+Ares 任务可直接用普通构建创作。在「地图资源」把 Ares 设置为「启用」，让编辑器载入 Ares 资源并在试玩写入 `Ares=On`。能力清单中的 `runtime: "ares"` 表示执行时需要 Ares，`enabled` 表示创作入口已提供。事件 66 缺少运行时通知，仍不提供 SDK 方法。
 
 ```ts
 import { ares } from './sdk';
@@ -247,11 +247,11 @@ export default defineMission(map, {
 点击“刷新类型”或“应用到地图”会更新包含新 API 的 `sdk.ts`。
 归属在游戏运行时按起点占用解析，随机起点也适用；空起点不会生成该小队，也不回退到中立方。
 VERA 的 TeamType 归属支持 `<Player @ A>`～`<Player @ Z>` 和 `<Player @ AA>`～`<Player @ AD>`，
-对应地图已有的 0～29 号起点。8～29 为扩展起点，需在地图设置中配置相应出生点数量；
-仅添加普通任务航点不会使其成为玩家起点。30 以上的航点只能作为增援或移动位置，不能传给 `playerAt()`。
+对应地图已有的 0～119 号起点。8～119 为扩展起点，需在地图设置中配置相应出生点数量；
+仅添加普通任务航点不会使其成为玩家起点；普通航点仍可作为增援或移动位置，但不能传给 `playerAt()`。
 这里的参数是地图起点编号，不是房间座位编号。
 
-外部代码编辑器的类型检查会提示单人模式调用 `playerAt()`、传入不存在或超出 0～29 的航点或多人模式指定固定 `player`；
+外部代码编辑器的类型检查会提示单人模式调用 `playerAt()`、传入不存在或超出 0～119 的航点或多人模式指定固定 `player`；
 Rust 还会校验伪造的引用。多人模式写入 `Basic/MultiplayerOnly=yes`，不覆盖原有 `Basic/Player`，
 生成规则使用中立所属方执行计时和增援。`winPlayer()` / `losePlayer()` 仅支持单人模式，
 目前没有按起点指定玩家胜负的动作。小队行为仍由原生脚本控制，赠送不会自动取消警戒等命令。
@@ -270,7 +270,7 @@ Rust 还会校验伪造的引用。多人模式写入 `Basic/MultiplayerOnly=yes
 - House：`m.createHouse(id, { country, color?, credits?, techLevel?, iq?, playerControl?, allies?, basePlan? })` 新建地图 House；`m.configureHouse(m.house(...), patch)` 只更新显式字段。颜色使用生成的 `HouseColor` 枚举，`credits` 每单位为 100 游戏资金；`allies` 是单向关系。`basePlan` 按顺序声明建筑节点或 `BasePlanControl` 控制点，节点需给出地图格坐标；`percentBuilt` 为 0～100。未声明时保留地图原计划。
 - AI 小队选择：`m.aiTrigger(id, options)` 声明主/副小队、Country、条件、类型比较、权重、多人/侧别、难度和初始启用状态。`condition` 使用 `AiTriggerCondition`，比较使用 `AiTriggerComparison`；`owner` 缺省代表 `<all>`，`side` 使用原生 0～3 编号，难度缺省为全开。引擎自动招募/出队的实际条件仍由地图工厂、House AI 和游戏状态共同决定。
 - Basic 开局：`m.configureBasic(options)` 可设置名称、已有航点的 HomeCell、片头/简报/行动/计分影片、主题、Win/Lose 胜负影片与原生终局选项；未声明字段沿用地图值。HomeCell 写入数字航点编号，Win/Lose 使用 Movie 引用。任务目标/简报文本属于战役目录，不是这两个字段。
-- 任务航点：`m.createWaypoint(30..701, x, y)` 新建普通航点并返回可立即引用的 `Waypoint`；不覆盖地图原有航点和 0～29 玩家起点。重建时会复用同一记录，外部移动会作为冲突报告。
+- 任务航点：`m.createWaypoint(30..701, x, y)` 新建普通航点并返回可立即引用的 `Waypoint`；不覆盖地图原有航点和已声明的玩家起点，超过 30 人的地图需避开完整的起点编号范围。重建时会复用同一记录，外部移动会作为冲突报告。
 - 起点对象归属：`m.assignObjectToPlayer(m.object(...), playerStart)` 通过编辑器托管的零秒一次性触发器，在开局普通帧中把已有对象交给该起点的实际占用玩家。加载时对象先属 Neutral，多个转交规则可能分帧执行；依赖新归属的剧情应留出启动时间。要求地图有对应起点，且对象不能同时有其他 Tag 绑定。
 - 规则控制：`enabled`、`owner`（Country）、`difficulties`、`linked`、`transferOnCapture`；动作 `enableRule`、`disableRule`、`forceRule`。
 - 状态：`m.globalFlag(0..49)`、`m.localFlag(0..99)`；全局事件 `globalSet` / `globalClear`，动作 `setGlobal` / `clearGlobal`；已有局部变量仍用 `flagSet` / `flagClear` 和 `setFlag` / `clearFlag`。
@@ -690,7 +690,7 @@ action.reduceTiberiumAt(at); // 连续减少航点中心矿石，不会清掉周
 `combatFlash` 只请求C4冲击光照，原版弹头是否发亮由规则决定；它不会直接伤害单位。
 
 固定引擎当前已提供具名接口的编号为事件 **58**、动作 **138**、小队命令 **54**。
-能力矩阵在 `capabilities::matrix()`，包括 308 个编号、空洞、模式与特性门控。默认可用事件 58、动作 138、小队命令 61 已暴露；事件 2/3 有条件处理器但缺少生产通知入口，未提供默认 API。Ares 事件、动作和命令保留独立特性标记，由 `enabled` 表示当前构建是否启用。接口覆盖与呈现验收分别记录在扩展计划中。
+能力矩阵在 `capabilities::matrix()`，包括 308 个编号、空洞和运行模式。默认可用事件 58、动作 138、小队命令 61 已暴露；事件 2/3 有条件处理器但缺少生产通知入口，未提供默认 API。Ares 事件、动作和命令标为 `runtime: "ares"`，由地图资源的 Ares 模式控制运行。接口覆盖与呈现验收分别记录在扩展计划中。
 
 | 类别 | 接口示例与语义 |
 | --- | --- |
@@ -1254,4 +1254,4 @@ export default defineMission(map, { id: 'lottery', player: House.Americans }, m 
 
 `order.changeTeamIndex(index)` 对应脚本 18，接收 AIMD 与地图合并后的 **TeamType 进程注册序号**，不是小队 ID，也不是界面排序。更换资源或重排注册表后须重新核对；无有效定义时引擎会停在此行。此命令将成员转入同 House 的新小队并销毁旧小队。
 
-默认构建也会跟随游戏的 `ares.mix` 选择 INI 语义、include 展开和扩展 CSF；Ares SDK 创作仍使用上文的 `ares` 构建选项。
+INI 语义、include 展开和扩展 CSF 跟随地图资源的 Ares 模式。Ares SDK 创作不再需要单独构建。

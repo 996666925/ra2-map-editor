@@ -26,6 +26,8 @@ export interface MapSchema {
   readonly houses: readonly string[];
   /** 当前地图已经定义的航点编号。 */
   readonly waypoints: readonly number[];
+  /** 地图配置的有效玩家起点；旧目录可省略，应用时仍以实际地图为准。 */
+  readonly playerStarts?: readonly number[];
   /** 当前资源配置可用的步兵、车辆和飞机类型 ID。 */
   readonly units: readonly string[];
   /** 支持 Tag 绑定的地图对象记录键，如 Structures:0、Units:3。 */
@@ -82,7 +84,16 @@ export type StartPlayer = Ref<"startPlayer", number>;
 /** VERA 支持的玩家起点编号；还须在当前地图中定义。 */
 export type PlayerStartId = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
   | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19
-  | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29;
+  | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29
+  | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 38 | 39
+  | 40 | 41 | 42 | 43 | 44 | 45 | 46 | 47 | 48 | 49
+  | 50 | 51 | 52 | 53 | 54 | 55 | 56 | 57 | 58 | 59
+  | 60 | 61 | 62 | 63 | 64 | 65 | 66 | 67 | 68 | 69
+  | 70 | 71 | 72 | 73 | 74 | 75 | 76 | 77 | 78 | 79
+  | 80 | 81 | 82 | 83 | 84 | 85 | 86 | 87 | 88 | 89
+  | 90 | 91 | 92 | 93 | 94 | 95 | 96 | 97 | 98 | 99
+  | 100 | 101 | 102 | 103 | 104 | 105 | 106 | 107 | 108 | 109
+  | 110 | 111 | 112 | 113 | 114 | 115 | 116 | 117 | 118 | 119;
 /** 地图运行模式，决定是否固定单人玩家及是否允许按起点选择玩家。 */
 export enum MissionMode {
   /** 单人任务；必须指定 player，并写入 Basic/Player。默认模式，兼容已有脚本。 */
@@ -660,7 +671,7 @@ export interface Mission {
   readonly specialFlags?: MissionSpecialFlagsOptions;
   readonly lighting?: MissionLightingOptions;
   readonly ranking?: MissionRankingOptions;
-  /** 本任务新增的普通任务航点；不覆盖现有航点或 0～29 玩家起点。 */
+  /** 本任务新增的普通任务航点；不能覆盖现有航点或地图声明的玩家起点。 */
   readonly waypoints?: readonly WaypointOptions[];
   /** 开局按实际玩家起点归属的对象；通过原生一次性触发器执行转移。 */
   readonly startOwners?: readonly StartOwnerOptions[];
@@ -889,19 +900,20 @@ export class MissionBuilder<S extends MapSchema, M extends MissionMode = Mission
   }
   /**
    * 取得开局占用指定玩家起点的实际所属方，包含人类和 AI，不绑定国家或玩家颜色。
-   * @param id 当前地图 Waypoint 枚举中的 WP0～WP29，仅接受地图已有的这些起点。
-   * @returns 可传入 TeamOptions.house 的 StartPlayer；生成 House=<Player @ A>～<Player @ Z>、<Player @ AA>～<Player @ AD>。
-   * @throws 单人模式、起点不存在或超出 0～29 时构建失败；Rust 会再次验证。
+   * @param id 当前地图 Waypoint 枚举中的 WP0～WP119，仅接受已配置的玩家起点。
+   * @returns 可传入 TeamOptions.house 的 StartPlayer；生成 House=<Player @ A> 到 <Player @ DP>。
+   * @throws 单人模式、起点不存在或超出 0～119 时构建失败；Rust 会再次验证。
    * @remarks 仅在 MissionMode.Multiplayer 中可用。玩家随机起点时按实际占位解析；
    * 该起点无人占用时游戏无法创建此小队，不会自动送给中立方。
    * 这里只选择归属，不决定出兵位置；位置仍由小队 waypoint 和 action.reinforce() 指定。
-   * 8～29 为 VERA 扩展起点；需在地图设置中配置相应出生点数量，普通任务航点不会因此成为玩家起点。
+   * 8～119 为 VERA 扩展起点；需在地图设置中配置相应出生点数量，普通任务航点不会因此成为玩家起点。
    * @example house: m.playerAt(Waypoint.WP0)
    */
   playerAt(this: MissionBuilder<S, MissionMode.Multiplayer>, id: Extract<S["waypoints"][number], PlayerStartId>): StartPlayer {
     if (this.mode !== MissionMode.Multiplayer) throw new Error("按起点选择玩家仅支持多人任务");
     this.member(this.schema.waypoints, id, "player start");
-    if (!Number.isInteger(id) || id < 0 || id > 29) throw new Error("玩家起点仅支持 0～29");
+    if (!Number.isInteger(id) || id < 0 || id > 119) throw new Error("玩家起点仅支持 0～119");
+    this.member(this.schema.playerStarts ?? this.schema.waypoints, id, "player start");
     return ref("startPlayer", id);
   }
   /**
@@ -931,7 +943,8 @@ export class MissionBuilder<S extends MapSchema, M extends MissionMode = Mission
    * 不能与该对象的其他 Tag 绑定并用。
    */
   assignObjectToPlayer(this: MissionBuilder<S, MissionMode.Multiplayer>, object: MapObject, player: number): void {
-    if (!Number.isInteger(player) || player < 0 || player > 29) throw new Error("对象开局归属仅支持玩家起点 0～29");
+    if (!Number.isInteger(player) || player < 0 || player > 119) throw new Error("对象开局归属仅支持玩家起点 0～119");
+    this.member(this.schema.playerStarts ?? this.schema.waypoints, player, "player start");
     if (this.startOwners.some(item => item.object.id === object.id)) throw new Error(`对象 ${object.id} 重复指定开局归属`);
     this.startOwners.push({ object, player });
   }
@@ -2028,7 +2041,7 @@ export function defineCampaign(options: CampaignOptions) {
   return {project:{version:1,id:options.id,entry:options.entry,missions,strings,assets:options.assets??[]},scripts,transitions};
 }
 
-/** Ares authoring requires --features ares and an Ares-enabled game client. */
+/** Ares authoring is always available; launch the game with Ares enabled to run these operations. */
 export type AresEvent =
   | { readonly kind: "underEmp" | "empEnded" | "driverKilled" | "vehicleTaken" | "abducted" | "abducts" | "objectReverseEngineered" | "attackedOrDestroyed"; readonly object: MapObject }
   | { readonly kind: "underEmpByHouse" | "empEndedByHouse" | "driverKilledByHouse" | "vehicleTakenByHouse" | "abductedByHouse" | "abductsFromHouse" | "attackedOrDestroyedByHouse"; readonly object: MapObject; readonly house: House }

@@ -3,17 +3,6 @@
 use super::*;
 use crate::catalog::ResourceKind;
 
-pub fn enabled() -> bool {
-    vera20k_core::rules::ARES_BUILD
-}
-fn require() -> Result<()> {
-    ensure!(
-        enabled(),
-        "此任务需要使用 --features ares 构建的编辑器及启用 Ares 的 VERA20k 客户端"
-    );
-    Ok(())
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum AresEvent {
@@ -149,7 +138,6 @@ pub enum AresOrder {
 }
 
 pub(super) fn event(event: &AresEvent, context: &mut rules::Events<'_>) -> Result<Vec<String>> {
-    require()?;
     if let Some(object) = event.object() {
         context.bind_object(object, context.tag)?;
     }
@@ -297,7 +285,6 @@ pub(super) fn action(
     catalog: &Catalog,
     mode: MissionMode,
 ) -> Result<Vec<String>> {
-    require()?;
     Ok(match action {
         AresAction::Firestorm { enabled } => action_row(if *enabled { 92 } else { 93 }, None, None),
         AresAction::AddAuxPower { house, amount } => action_row(
@@ -316,7 +303,6 @@ pub(super) fn action(
     })
 }
 pub(super) fn order(order: &AresOrder) -> Result<(i32, String)> {
-    require()?;
     Ok((
         match order {
             AresOrder::EnterOccupiableVehicle => 67,

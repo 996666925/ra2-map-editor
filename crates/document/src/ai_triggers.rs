@@ -128,7 +128,11 @@ mod tests {
         doc.commit("AI");
         let saved = doc.snapshot().bytes().unwrap();
         let map = map_file::load_from_bytes(saved.clone()).unwrap();
-        let registry = TeamAiIniRegistry::from_sources(&IniFile::from_str(""), &map.ini, false);
+        let registry = TeamAiIniRegistry::from_sources(
+            &IniFile::from_str(""),
+            &map.ini,
+            vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+        );
         let ai = registry
             .ai_triggers
             .iter()
@@ -149,11 +153,21 @@ mod tests {
             .unwrap()
             .ini;
         assert!(
-            !TeamAiIniRegistry::from_sources(&IniFile::from_str(""), &ini, false).ai_triggers[0]
+            !TeamAiIniRegistry::from_sources(
+                &IniFile::from_str(""),
+                &ini,
+                vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign
+            )
+            .ai_triggers[0]
                 .enabled
         );
         assert!(
-            TeamAiIniRegistry::from_sources(&IniFile::from_str(""), &ini, true).ai_triggers[0]
+            TeamAiIniRegistry::from_sources(
+                &IniFile::from_str(""),
+                &ini,
+                vera20k_core::rules::rule_policy::BootstrapRuleProfile::Multiplayer
+            )
+            .ai_triggers[0]
                 .enabled
         );
         doc.set_ini("AITriggerTypesEnable", "MAP_AI", None).unwrap();
@@ -161,7 +175,12 @@ mod tests {
             .unwrap()
             .ini;
         assert!(
-            !TeamAiIniRegistry::from_sources(&IniFile::from_str(""), &ini, false).ai_triggers[0]
+            !TeamAiIniRegistry::from_sources(
+                &IniFile::from_str(""),
+                &ini,
+                vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign
+            )
+            .ai_triggers[0]
                 .enabled
         );
     }

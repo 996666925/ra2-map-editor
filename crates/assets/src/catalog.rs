@@ -337,7 +337,7 @@ impl Catalog {
         }
         let mut catalog = Self {
             rules,
-            strings: CsfFile::load_active(manager.ares_form(), |name| manager.get_ref(name))
+            strings: CsfFile::load_active(manager.ships_ares(), |name| manager.get_ref(name))
                 .ok()
                 .map(|(table, _)| Arc::new(table)),
             art: Arc::new(vera20k_core::rules::art_data::ArtRegistry::from_ini(&art)),

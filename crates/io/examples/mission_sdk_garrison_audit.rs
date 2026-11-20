@@ -142,7 +142,7 @@ export default defineMission(map,{id:'garrison',player:'Americans'},m=>{
             .map(|id| {
                 sim.entities()
                     .get(*id)
-                    .map(|e| e.passenger_role.occupants().ids().to_vec())
+                    .map(|e| e.passenger_role().occupants().ids().to_vec())
                     .context("bunker survives")
             })
             .collect::<Result<_>>()?;

@@ -7,9 +7,8 @@ use ra2_map_io::{mission_script, publication::Publisher};
 use serde_json::json;
 use std::path::PathBuf;
 use vera20k_core::skirmish_launch::{
-    LaunchCountry, LaunchHumanRole, LaunchStartPosition, LaunchTeam, PreFillHouseRoster,
-    SkirmishHumanSlot, SkirmishLaunchMode, SkirmishLaunchOptions, SkirmishLaunchSession,
-    SkirmishLocalSlot,
+    LaunchCountry, LaunchHumanRole, LaunchStartPosition, LaunchTeam, SkirmishHumanSlot,
+    SkirmishLaunchMode, SkirmishLaunchOptions, SkirmishLaunchSession, SkirmishLocalSlot,
 };
 #[path = "support/campaign.rs"]
 mod campaign;
@@ -985,7 +984,12 @@ export default defineMission(map,__OPTIONS__,m=>{
             (!radar_control).then_some(index),
         )?;
     }
-    let payload = mission_script::playtest_payload(&bytes, &directory, &scene.revision.id())?;
+    let payload = mission_script::playtest_payload_with_ares(
+        &bytes,
+        &directory,
+        &scene.revision.id(),
+        scene.source.reads_ares,
+    )?;
     let font_bytes = install.manager.get_ref("game.fnt");
     if radar_movie || intro_media {
         std::fs::write(
@@ -1113,10 +1117,10 @@ export default defineMission(map,__OPTIONS__,m=>{
             "[Hotkey]\nCenterOnRadarEvent=74\n",
         )?;
     }
-    let launch = SkirmishLaunchSession {
-        mode: SkirmishLaunchMode::stock(1).context("Battle mode")?,
-        selected_map_file: Some(installed_map.to_string_lossy().into_owned()),
-        humans: vec![SkirmishHumanSlot {
+    let launch = SkirmishLaunchSession::from_rows(
+        SkirmishLaunchMode::stock(1).context("Battle mode")?,
+        Some(installed_map.to_string_lossy().into_owned()),
+        vec![SkirmishHumanSlot {
             raw_slot_index: Some(0),
             name: "SDK audit".into(),
             slot: SkirmishLocalSlot {
@@ -1129,11 +1133,9 @@ export default defineMission(map,__OPTIONS__,m=>{
             },
             role: LaunchHumanRole::default(),
         }],
-        local_player_index: 0,
-        ai_player_count: 0,
-        opponents: vec![],
-        pre_fill_house_roster: PreFillHouseRoster::from_compact_skirmish(0),
-        options: SkirmishLaunchOptions {
+        0,
+        vec![],
+        SkirmishLaunchOptions {
             unit_count: 0,
             short_game: false,
             crates: false,
@@ -1141,7 +1143,7 @@ export default defineMission(map,__OPTIONS__,m=>{
             fog_of_war: false,
             ..Default::default()
         },
-    };
+    );
     if visibility {
         // The GPU receipt intentionally has no LocalSize projection. Read
         // existing simulation authority through the production headless loader

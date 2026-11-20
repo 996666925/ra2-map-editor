@@ -152,7 +152,7 @@ fn pcm() -> Vec<u8> {
 }
 fn verify_metadata(install: &Install) -> Result<()> {
     let csf =
-        vera20k_core::assets::csf_file::CsfFile::load_active(install.manager.ares_form(), |n| {
+        vera20k_core::assets::csf_file::CsfFile::load_active(install.manager.ships_ares(), |n| {
             install.manager.get_ref(n)
         })?
         .0;

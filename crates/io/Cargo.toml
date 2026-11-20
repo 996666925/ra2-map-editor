@@ -18,5 +18,7 @@ serde_json.workspace = true
 vera20k-core.workspace = true
 
 [dev-dependencies]
+# Headless audit examples restore internal checkpoints, not player save files.
+vera20k-core = { workspace = true, features = ["test-support"] }
 ra2-map-document = { workspace = true, features = ["test-support"] }
 ra2-map-assets = { workspace = true, features = ["test-support"] }

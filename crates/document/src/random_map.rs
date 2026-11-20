@@ -52,10 +52,21 @@ impl Default for RandomMapOptions {
 
 impl RandomMapOptions {
     /// Restore the complete editor recipe when reopening a generated map.
-    pub fn from_ini(ini: &vera20k_core::rules::ini_parser::IniFile, title: &str) -> Option<Self> {
+    pub fn from_source(source: &crate::source::SourceMap) -> Option<Self> {
+        use vera20k_core::rules::{ares_switch::read_ares_way, ini_parser::IniFile};
+        let _dialect = read_ares_way(source.reads_ares);
+        let ini = IniFile::from_bytes(source.bytes()).ok()?;
+        Self::from_ini(&ini, &source.title, source.reads_ares)
+    }
+
+    fn from_ini(
+        ini: &vera20k_core::rules::ini_parser::IniFile,
+        title: &str,
+        reads_ares: bool,
+    ) -> Option<Self> {
         let section = ini.section("RandomMap")?;
         let mut options = Self::default();
-        options.terrain.apply_sed(ini);
+        options.terrain.apply_sed(ini, reads_ares);
         // The source owns decoded user-facing text; native INI strings widen
         // legacy bytes instead of decoding editor-authored UTF-8.
         options.title = title.to_owned();
@@ -65,8 +76,8 @@ impl RandomMapOptions {
         Some(options)
     }
     pub fn dimensions(&self) -> (u16, u16) {
-        let geometry = self.geometry();
-        (geometry.map_w as u16, geometry.map_h as u16)
+        let (width, height) = self.geometry().map_size();
+        (width as u16, height as u16)
     }
 
     /// Use Vera's native geometry, including extended player counts and sizes.
@@ -122,6 +133,7 @@ impl RandomMapOptions {
     pub fn map_bytes(
         &self,
         map: &MapFile,
+        reads_ares: bool,
         raw_tile: impl Fn(i32) -> Result<i32>,
     ) -> Result<Vec<u8>> {
         self.validate()?;
@@ -138,7 +150,7 @@ impl RandomMapOptions {
             h.local_left, h.local_top, h.local_width, h.local_height
         ).into_bytes();
         // Persist the recipe in a harmless INI section for reproducibility.
-        out.extend(self.terrain.to_sed_bytes());
+        out.extend(self.terrain.to_sed_bytes(reads_ares));
         out.extend_from_slice(
             format!(
                 "EditorOre={}\r\nEditorTechBuildings={}\r\n",
@@ -221,7 +233,11 @@ impl RandomMapOptions {
             {
                 let tail = match category {
                     EntityCategory::Structure => {
-                        format!("{},None,1,0,1,0,0,None,None,None,0", entity.facing)
+                        format!(
+                            "{},None,1,0,{},0,0,None,None,None,0",
+                            entity.facing,
+                            u8::from(entity.structure_online)
+                        )
                     }
                     EntityCategory::Infantry => {
                         format!("{},None,{},None,0,-1,0,1,1", entity.sub_cell, entity.facing)
@@ -249,6 +265,42 @@ mod tests {
     use vera20k_core::map::{map_file, overlay::OverlayEntry};
 
     #[test]
+    fn urban_areas_roundtrips_only_in_the_selected_map_dialect() {
+        let mut options = RandomMapOptions::default();
+        options.terrain.urban_areas = true;
+        let map = map_file::load_from_bytes(NewMapOptions::default().bytes().unwrap()).unwrap();
+        let ares_bytes = options.map_bytes(&map, true, Ok).unwrap();
+        let stock_bytes = options.map_bytes(&map, false, Ok).unwrap();
+        assert!(
+            ares_bytes
+                .windows(b"UrbanAreas=yes".len())
+                .any(|line| line == b"UrbanAreas=yes")
+        );
+        assert!(
+            !stock_bytes
+                .windows(b"UrbanAreas".len())
+                .any(|line| line == b"UrbanAreas")
+        );
+        for ares in [true, false] {
+            let (source, _) = SourceMap::parse_with_ares(
+                "recipe.map".into(),
+                "test".into(),
+                ares_bytes.clone(),
+                ares,
+            )
+            .unwrap();
+            let _other_map = vera20k_core::rules::ares_switch::read_ares_way(!ares);
+            assert_eq!(
+                RandomMapOptions::from_source(&source)
+                    .unwrap()
+                    .terrain
+                    .urban_areas,
+                ares
+            );
+        }
+    }
+
+    #[test]
     fn generated_map_roundtrip_keeps_terrain_overlays_objects_starts_and_recipe() {
         let mut bytes = NewMapOptions::default().bytes().unwrap();
         bytes.extend_from_slice(b"[Terrain]\r\n80080=TREE01\r\n[Structures]\r\n0=Neutral,CAOILD,256,85,85,0,None,1,0,1,0,0,None,None,None,0\r\n");
@@ -270,7 +322,7 @@ mod tests {
         options.terrain.urban_enabled = true;
         options.terrain.urban_presence = 73;
         let bytes = options
-            .map_bytes(&map, |tile| Ok(if tile == 100 { 97 } else { tile }))
+            .map_bytes(&map, false, |tile| Ok(if tile == 100 { 97 } else { tile }))
             .unwrap();
         let (source, reopened) =
             SourceMap::parse("random.map".into(), "test".into(), bytes.clone()).unwrap();
@@ -283,10 +335,10 @@ mod tests {
         assert_eq!(reopened.entities[0].type_id, "CAOILD");
         assert_eq!(reopened.waypoints.len(), 2);
         let mut recipe = RmgOptions::default();
-        recipe.apply_sed(&reopened.ini);
+        recipe.apply_sed(&reopened.ini, false);
         assert!(recipe.urban_enabled);
         assert_eq!(recipe.urban_presence, 73);
-        let restored = RandomMapOptions::from_ini(&reopened.ini, &source.title).unwrap();
+        let restored = RandomMapOptions::from_source(&source).unwrap();
         assert!(restored.terrain.urban_enabled);
         assert_eq!(restored.terrain.urban_presence, 73);
         assert_eq!(restored.terrain.seed, options.terrain.seed);
@@ -303,11 +355,11 @@ mod tests {
         assert_eq!(document.snapshot().bytes().unwrap(), bytes);
         assert!(
             options
-                .map_bytes(&map, |_| anyhow::bail!("unrepresentable tile"))
+                .map_bytes(&map, false, |_| anyhow::bail!("unrepresentable tile"))
                 .is_err()
         );
         map.waypoints.remove(&0);
-        assert!(options.map_bytes(&map, Ok).is_err());
+        assert!(options.map_bytes(&map, false, Ok).is_err());
     }
 
     #[test]
@@ -320,7 +372,9 @@ mod tests {
             [Aircraft]\r\n0=Neutral,ORCA,256,86,87,128,None,None,0,-1,1,1\r\n",
         );
         let map = map_file::load_from_bytes(bytes).unwrap();
-        let saved = RandomMapOptions::default().map_bytes(&map, Ok).unwrap();
+        let saved = RandomMapOptions::default()
+            .map_bytes(&map, false, Ok)
+            .unwrap();
         let (source, reopened) =
             SourceMap::parse("town.map".into(), "test".into(), saved.clone()).unwrap();
         assert_eq!(reopened.entities.len(), map.entities.len());
@@ -426,7 +480,7 @@ mod tests {
                 );
             }
         }
-        for players in [0, 1, 31, i32::MAX] {
+        for players in [0, 1, i32::from(MAX_PLAYERS) + 1, i32::MAX] {
             let mut bad = options.clone();
             bad.terrain.num_players = players;
             assert!(bad.validate().is_err());
@@ -445,7 +499,7 @@ mod tests {
             ..Default::default()
         };
         let map = map_file::load_from_bytes(blank.bytes().unwrap()).unwrap();
-        let bytes = options.map_bytes(&map, Ok).unwrap();
+        let bytes = options.map_bytes(&map, false, Ok).unwrap();
         let (source, map) =
             SourceMap::parse("extended.map".into(), "test".into(), bytes.clone()).unwrap();
         assert_eq!(

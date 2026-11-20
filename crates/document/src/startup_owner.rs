@@ -19,7 +19,7 @@ fn header(slot: u8) -> String {
     format!("Neutral,<none>,Editor startup owner {slot},0,1,1,1,0")
 }
 fn action(slot: u8) -> String {
-    // House510F60 selects the actual start occupant, extended by VERA to 30 slots.
+    // House510F60 selects the actual start occupant, including VERA's extended slots.
     format!("1,14,0,{},0,0,0,0,A", 4475 + u16::from(slot))
 }
 fn tag_value(id: &str, slot: u8) -> String {
@@ -56,7 +56,7 @@ pub fn available(doc: &MapDocument, record: &Record) -> bool {
 pub fn set(doc: &mut MapDocument, record_id: u64, slot: Option<u8>) -> Result<()> {
     ensure!(
         slot.is_none_or(|slot| slot < MAX_PLAYERS),
-        "开局归属仅支持玩家起点 0～29"
+        "开局归属的玩家起点超出范围"
     );
     let record = doc.records().remove(&record_id).context("对象不存在")?;
     let column = tag_column(&record.section).context("该对象不支持所属方")?;
@@ -70,10 +70,8 @@ pub fn set(doc: &mut MapDocument, record_id: u64, slot: Option<u8>) -> Result<()
     }
     if let Some(slot) = slot {
         ensure!(
-            doc.records()
-                .values()
-                .any(|r| r.section == "Waypoints" && r.key == slot.to_string()),
-            "航点 {slot} 不存在"
+            crate::player_starts::from_document(doc).contains(&slot),
+            "航点 {slot} 不是地图已配置的玩家起点"
         );
     }
     let old_tag = record.fields()[column].clone();

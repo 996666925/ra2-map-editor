@@ -39,8 +39,15 @@ fn audit() -> Result<()> {
         resources.map().map_hash() == snapshot.map_hash,
         "resource/map identity mismatch"
     );
-    let timer = snapshot.sim.session().scenario_timer_view();
-    let sim = &snapshot.sim;
+    let (tick, map_name, description, map_hash, rules_hash) = (
+        snapshot.tick,
+        snapshot.map_name.clone(),
+        snapshot.description.clone(),
+        snapshot.map_hash,
+        snapshot.rules_hash,
+    );
+    let sim = &snapshot.into_simulation_for_test();
+    let timer = sim.session().scenario_timer_view();
     let objects = sim
         .entities()
         .iter_sorted()
@@ -60,18 +67,18 @@ fn audit() -> Result<()> {
     })).collect::<Vec<_>>();
     let report = json!({
         "passed":true,"full_gui_restore":false,"save":save,"bytes":bytes.len(),
-        "tick":snapshot.tick,"map":snapshot.map_name,"description":snapshot.description,
-        "map_hash":snapshot.map_hash,"rules_hash":snapshot.rules_hash,
+        "tick":tick,"map":map_name,"description":description,
+        "map_hash":map_hash,"rules_hash":rules_hash,
         "saved_resources":true,"local_view_structure":true,"tactical_view":true,
         "local_player":resources.map().local_player_name(),
         "countdown":timer.map(|(frames,title)|json!({"frames":frames,"title":title})),
         "objects":objects,"teams":teams,
         "triggers":saved_field::read(sim,&["trigger_runtime"] )?,
-        "set_globals":snapshot.sim.global_variables().iter().enumerate()
+        "set_globals":sim.global_variables().iter().enumerate()
             .filter_map(|(index,set)|set.then_some(index)).collect::<Vec<_>>(),
         "limits":"Production envelope admission and local-view structure only; does not commit resources, simulation hierarchy or GPU presentation through the GUI loader."
     });
     std::fs::write(&output, serde_json::to_vec_pretty(&report)?)?;
-    println!("Admitted {} at tick {}", save.display(), snapshot.tick);
+    println!("Admitted {} at tick {tick}", save.display());
     Ok(())
 }

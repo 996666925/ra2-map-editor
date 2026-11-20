@@ -574,7 +574,8 @@ export default defineMission(map,{id:'audit_two',player:'Americans'},m=>{
     for _ in 0..6000 {
         for (_, entity) in next.simulation.entities().iter_sorted() {
             if next.simulation.interner().resolve(entity.type_ref()) == "HTK" {
-                passengers_loaded = passengers_loaded.max(entity.passenger_role.passenger_count());
+                passengers_loaded =
+                    passengers_loaded.max(entity.passenger_role().passenger_count());
             }
         }
         if passengers_loaded == 5 && checkpoint_bytes.is_none() {
@@ -608,7 +609,7 @@ export default defineMission(map,{id:'audit_two',player:'Americans'},m=>{
     let coord = vera20k_core::sim::movement::ground_pose::position_world_coord(&transport.position);
     let transport_cell = [coord.x / 256, coord.y / 256];
     ensure!(
-        transport.passenger_role.passenger_count() == 0
+        transport.passenger_role().passenger_count() == 0
             && (transport_cell[0] - 40).pow(2) + (transport_cell[1] - 48).pow(2) < 25,
         "transport must finish empty near the landing waypoint: {transport_cell:?}"
     );

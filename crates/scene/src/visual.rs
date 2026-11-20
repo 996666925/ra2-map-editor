@@ -32,15 +32,7 @@ pub fn object_anchor(
         i32::from(at[1]) * 256 + sub_y,
         world_z,
     );
-    let correction = if record.section == "Structures" {
-        ra2_map_voxel::building_terrain_correction(world_z / 104)
-    } else {
-        0
-    };
-    [
-        x + appearance.anchor[0],
-        y + appearance.anchor[1] - correction as f32,
-    ]
+    [x + appearance.anchor[0], y + appearance.anchor[1]]
 }
 
 pub fn object_on_bridge(record: &ra2_map_document::document::Record) -> bool {
@@ -480,15 +472,12 @@ impl VisualScene {
                                 i32::from(at[1]) * 256 + turret.world_offset[1],
                                 world_z,
                             );
-                            let correction =
-                                ra2_map_voxel::building_terrain_correction(i32::from(cell.z));
                             let lift =
-                                vera20k_core::util::native_x87::adjust_for_z_standard(world_z)
-                                    + correction;
+                                vera20k_core::util::native_x87::adjust_for_z_standard(world_z);
                             (
                                 [
                                     x - turret.pixel_offset[0] as f32,
-                                    y - turret.pixel_offset[1] as f32 - correction as f32,
+                                    y - turret.pixel_offset[1] as f32,
                                 ],
                                 DepthStyle::Animation {
                                     adjust: turret
@@ -581,8 +570,7 @@ impl VisualScene {
                         );
                         if !turret_part && let Some(turret) = &appearance.voxel_turret {
                             let lift =
-                                vera20k_core::util::native_x87::adjust_for_z_standard(world_z)
-                                    + ra2_map_voxel::building_terrain_correction(i32::from(cell.z));
+                                vera20k_core::util::native_x87::adjust_for_z_standard(world_z);
                             for part in &turret.parts {
                                 let image = &part[usize::from(
                                     ra2_map_voxel::vxl_raster::voxel_facing_step(facing),
@@ -611,10 +599,7 @@ impl VisualScene {
                                 usize::from(ra2_map_voxel::vxl_raster::voxel_facing_step(facing));
                             if let Some(shadow) = &turret.shadows[step] {
                                 let lift =
-                                    vera20k_core::util::native_x87::adjust_for_z_standard(world_z)
-                                        + ra2_map_voxel::building_terrain_correction(i32::from(
-                                            cell.z,
-                                        ));
+                                    vera20k_core::util::native_x87::adjust_for_z_standard(world_z);
                                 out.add_sprite(
                                     &mut cache,
                                     shadow,
@@ -729,13 +714,17 @@ impl VisualScene {
                 ..
             } = style
             {
-                if foundation.0 <= 7 {
+                if foundation.0 <= 7
+                    && let Some(frame) = shape.frames.first()
+                {
                     Some((
-                        shape,
+                        frame,
                         native_z::zshape_origin(
+                            native_z::ZSHAPE_ANCHOR,
                             (point[0].round() as i32, point[1].round() as i32 - row),
                             foundation,
                             move_point,
+                            (i32::from(frame.frame_x), i32::from(frame.frame_y)),
                         ),
                     ))
                 } else {
@@ -746,29 +735,16 @@ impl VisualScene {
             };
             for y in 0..height {
                 for x in 0..image.info.width as i32 {
-                    let z = if let Some((shape, origin)) = shape {
+                    let z = if let Some((frame, origin)) = shape {
                         let sx = position[0] as i32 + x - origin.0;
                         let sy = top + y - origin.1;
-                        let byte = shape
-                            .frames
-                            .first()
-                            .and_then(|frame| {
-                                let fx = sx - i32::from(frame.frame_x);
-                                let fy = sy - i32::from(frame.frame_y);
-                                if fx < 0
-                                    || fy < 0
-                                    || fx >= i32::from(frame.frame_width)
-                                    || fy >= i32::from(frame.frame_height)
-                                {
-                                    None
-                                } else {
-                                    frame
-                                        .pixels
-                                        .get((fy * i32::from(frame.frame_width) + fx) as usize)
-                                        .copied()
-                                }
-                            })
-                            .unwrap_or(0);
+                        let byte = if (0..i32::from(frame.frame_width)).contains(&sx)
+                            && (0..i32::from(frame.frame_height)).contains(&sy)
+                        {
+                            frame.pixels[(sy * i32::from(frame.frame_width) + sx) as usize]
+                        } else {
+                            0
+                        };
                         32768 - height - top + 1 + adjust - i32::from(native_z::zshape_remap(byte))
                     } else {
                         if let DepthStyle::Foot { split: true, .. } = style {

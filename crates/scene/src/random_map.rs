@@ -20,6 +20,8 @@ pub fn generate(
     options.validate()?;
     ensure!(!cancelled(), "随机地图生成已取消");
     install.activate_theater(rmg::emit::theater_name(options.terrain.theater))?;
+    let ares = install.manager.ships_ares();
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(ares);
     progress("准备随机地图地形模板…");
     let processed = RulesLayerStack::new(install.catalog.rules.clone()).process()?;
     let mut rules = RuleSet::from_processed_rules(&processed)?;
@@ -27,6 +29,8 @@ pub fn generate(
         ra2_map_assets::assets::read_ini(&install.manager, install.manager.ini_roots().art())?;
     rules.install_art_data(vera20k_core::rules::art_data::ArtRegistry::from_ini(&art));
     let mut settings = rmg::RmgSettings::load(&install.manager);
+    let ares_urban = (ares && options.terrain.urban_areas)
+        .then(|| rmg::tech_catalog::resolve_ares_urban(&settings, &processed, &art));
     let resolved = ResolvedTheaterInputs::from_theater(
         &install.theater,
         &rules.terrain_rules,
@@ -67,8 +71,26 @@ pub fn generate(
                 |file| install.manager.contains(file),
             );
         }
-        let candidate =
-            generate_candidate(&recipe, &settings, &resolved, &blocks, tech, &mut |stage| {
+        // Keep the editor's retry seeds reproducible without borrowing the
+        // running game's Main stream for Ares' urban unit picks.
+        let main = vera20k_core::sim::rng::MainRng::new(u64::from(recipe.terrain.seed_u16()));
+        let main_draw = || main.next_u32();
+        let candidate = generate_candidate(
+            &recipe,
+            &settings,
+            &resolved,
+            &blocks,
+            build::GenerationObjects {
+                tech_types: tech,
+                urban_areas: ares_urban.as_ref().map(|catalog| {
+                    rmg::phases::urban_areas::UrbanInputs {
+                        catalog,
+                        main_draw: &main_draw,
+                    }
+                }),
+                ares,
+            },
+            &mut |stage| {
                 if cancelled() {
                     return;
                 }
@@ -79,7 +101,8 @@ pub fn generate(
                     GenerationPoint::After(Stage::Hills) => "生成树林与地表细节…",
                     _ => return,
                 });
-            });
+            },
+        );
         if valid_starts(&candidate, recipe.terrain.num_players) {
             accepted = Some(candidate);
             break;
@@ -108,7 +131,7 @@ pub fn generate(
         }
     }
     progress("编码随机地图…");
-    let bytes = recipe.map_bytes(&generated.map_file, |tile| {
+    let bytes = recipe.map_bytes(&generated.map_file, ares, |tile| {
         let tile = if tile < 0 { resolved.ids.clear } else { tile };
         u16::try_from(tile)
             .ok()
@@ -209,17 +232,18 @@ fn generate_candidate(
     settings: &rmg::RmgSettings,
     resolved: &ResolvedTheaterInputs,
     blocks: &(dyn TileBlocks + Sync),
-    tech: &[rmg::phases::tech_buildings::TechType],
+    objects: build::GenerationObjects<'_>,
     observe: &mut dyn FnMut(GenerationPoint),
 ) -> Candidate {
-    let generated = build::generate_map_observed(
+    let (generated, _) = build::generate_map_observed(
         &recipe.terrain,
         settings,
         resolved,
         blocks,
-        &build::GenerationObjects::tech(tech),
+        &objects,
         &mut |view| observe(view.point()),
-    );
+    )
+    .into_parts();
     Candidate {
         map_file: generated.map_file,
         unfilled_start_slots: generated.unfilled_start_slots,

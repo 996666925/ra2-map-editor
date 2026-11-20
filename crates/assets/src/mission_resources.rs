@@ -47,7 +47,7 @@ pub(crate) fn load(manager: &AssetManager) -> MissionResources {
             .map(|t| (t.key.clone(), t.key.clone()))
             .collect(),
     );
-    match CsfFile::load_active(manager.ares_form(), |name| manager.get_ref(name)) {
+    match CsfFile::load_active(manager.ships_ares(), |name| manager.get_ref(name)) {
         Ok((table, _)) => {
             if let Some(choices) = out.choices.get_mut("Theme") {
                 for ((_, label), theme) in choices.iter_mut().zip(themes.entries()) {

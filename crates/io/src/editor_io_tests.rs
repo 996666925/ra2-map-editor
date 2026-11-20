@@ -112,7 +112,7 @@ fn playtest_config_loads_mission_overrides_and_base_assets_without_changing_inst
     assert_eq!(config.paths.ra2_dir, game_dir);
     let manager = AssetManager::from_ini_probe_root(&config.paths.ra2_dir).unwrap();
     let (loaded, _) =
-        CsfFile::load_active(manager.ares_form(), |name| manager.get_ref(name)).unwrap();
+        CsfFile::load_active(manager.ships_ares(), |name| manager.get_ref(name)).unwrap();
     assert_eq!(loaded.get("TSTX12345678"), Some("苏军正在逼近！"));
     assert_eq!(loaded.get("BASE:TEXT"), Some("原版文本"));
     assert_eq!(
@@ -613,6 +613,58 @@ fn recovery_roundtrip_is_independent_and_truncation_is_rejected() {
 }
 
 #[test]
+fn playtest_spawn_and_preview_use_the_map_resources_dialect() {
+    use ra2_map_assets::map_resources::{AresMode, MapResources};
+    use vera20k_core::rules::{ares_switch::read_ares_way, ini_parser::IniFile};
+
+    let game = ra2_map_assets::test_support::Fixture::new();
+    let root = root();
+    let source = root.join("mission.map");
+    let mut bytes = fixture();
+    bytes.extend_from_slice(b"\n[Basic]\nPlayer=Missing\nPlayer=Americans\n[Houses]\n0=Americans\n[Americans]\nCountry=Americans\n");
+    let options = crate::playtest::PlayOptions {
+        mission: true,
+        ..Default::default()
+    };
+    for (mode, outer_ares) in [(AresMode::On, false), (AresMode::Off, true)] {
+        MapResources {
+            ares: mode,
+            ..Default::default()
+        }
+        .write(&source)
+        .unwrap();
+        let session = root.join(mode.setting().ini_value());
+        fs::create_dir(&session).unwrap();
+        let _other_map = read_ares_way(outer_ares);
+        let prepared = SessionResources::read(&game.0, Some(&source), None)
+            .unwrap()
+            .prepare(&bytes, &session, &options)
+            .unwrap();
+        let ini = prepared.map.ini.section_or_empty("Basic");
+        assert_eq!(
+            ini.read_name("Player", 64),
+            Some(if outer_ares { "Missing" } else { "Americans" })
+        );
+        let spawn = options.spawn_ini_with_ares(&prepared.map, prepared.ares);
+        if mode == AresMode::On {
+            let spawn = IniFile::from_str(&spawn.unwrap());
+            assert_eq!(
+                spawn.section_or_empty("Settings").read_name("Ares", 16),
+                Some("On")
+            );
+        } else {
+            assert!(spawn.unwrap_err().to_string().contains("Missing"));
+        }
+        assert!(
+            fs::read_to_string(session.join("settings/VERA.INI"))
+                .unwrap()
+                .contains(&format!("Ares={}", mode.setting().ini_value()))
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn session_config_uses_selected_ini_roots_and_keeps_original_art_available() {
     use ra2_map_assets::map_resources::{AresMode, MapResources, ResourcePath};
     let game = ra2_map_assets::test_support::Fixture::new();
@@ -668,6 +720,7 @@ fn session_config_uses_selected_ini_roots_and_keeps_original_art_available() {
         None,
         vera20k_core::assets::asset_manager::MediaArchiveMode::STOCK_DIGITAL,
         prepared.ares,
+        Default::default(),
     )
     .unwrap()
     .with_selected_ini_roots(roots);

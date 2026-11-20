@@ -25,15 +25,6 @@ pub fn preview_mix(first: u16, second: u16, amount: u32) -> u16 {
     native_surface_format::RGB565.mix_packed_rgb16(first, second, amount)
 }
 
-/// Native building presentation correction beyond the stock terrain range.
-pub fn building_terrain_correction(level: i32) -> i32 {
-    if !(15..=127).contains(&level) {
-        return 0;
-    }
-    level * native_z::HEIGHT_LEVEL_PX
-        - util::native_x87::adjust_for_z_standard(level * util::lepton::GROUND_LEVEL_HEIGHT_LEPTONS)
-}
-
 /// The palette-index blitter's packed RGB565 translucency stages.
 /// `stage` is the native flags & 6: 2=25%, 4=50%, 6=75% transparent.
 pub fn packed_blend(destination: [u8; 3], source: [u8; 3], stage: u8) -> [u8; 3] {

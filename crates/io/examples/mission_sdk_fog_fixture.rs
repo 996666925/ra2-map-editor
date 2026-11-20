@@ -105,7 +105,12 @@ fn main() -> Result<()> {
                 folder.join("runtime.json"),
                 serde_json::to_vec_pretty(&observations)?,
             )?;
-            let payload = mission_script::playtest_payload(&bytes, &game, &scene.revision.id())?;
+            let payload = mission_script::playtest_payload_with_ares(
+                &bytes,
+                &game,
+                &scene.revision.id(),
+                scene.source.reads_ares,
+            )?;
             let assets = folder.join("install");
             std::fs::create_dir(&assets)?;
             for source in std::fs::read_dir(&game)? {

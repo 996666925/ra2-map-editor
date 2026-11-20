@@ -79,7 +79,7 @@ fn startup_archives_and_ini_dialect_follow_the_editor_build() {
     .unwrap();
     std::fs::write(fixture.0.join("custom.ini"), b"[Base]\nX=first\nX=last\n").unwrap();
     let install = crate::assets::Install::open(&fixture.0).unwrap();
-    let ares = vera20k_core::rules::ARES_BUILD;
+    let ares = false;
     assert_eq!(
         install.manager.ares_setting(),
         if ares {
@@ -188,7 +188,7 @@ fn mounted_ares_selects_ini_syntax_and_includes_without_the_build_feature() {
     .unwrap();
     let mut install = fixture.install();
     install.manager.load_nested("ares.mix").unwrap();
-    assert!(install.manager.ares_form());
+    assert!(install.manager.ships_ares());
     let ini = crate::assets::read_ini(&install.manager, "custom.ini").unwrap();
     assert_eq!(
         ini.section_or_empty("Child").read_string("X", "", 64),
@@ -205,24 +205,33 @@ fn selected_ini_dialect_expands_ares_includes_and_preserves_input_files() {
     let child = b"[Preamble]\nMarker=1\n[Child]:[Base]\nHealth=2\n[Names]\n+=A\n+=B\n";
     std::fs::write(fixture.0.join("custom.ini"), root).unwrap();
     std::fs::write(fixture.0.join("child.ini"), child).unwrap();
-    let install = fixture.install();
-    let ini = crate::assets::read_ini(&install.manager, "custom.ini").unwrap();
-    if vera20k_core::rules::ARES_BUILD {
-        let section = ini.section_or_empty("Child");
-        assert_eq!(section.read_int("Health", 0), 2);
-        assert_eq!(section.read_int("Other", 0), 7);
-        let section = ini.section_or_empty("Names");
-        assert_eq!(
-            section
-                .keys()
-                .map(|key| section.read_string(key, "", 64))
-                .collect::<Vec<_>>(),
-            ["A", "B"]
-        );
-        assert_eq!(ini.section_or_empty("Base").read_int("Health", 0), 9);
-    } else {
-        assert!(ini.section("Child").is_none());
-        assert_eq!(ini.section_or_empty("Base").read_int("Health", 0), 1);
+    for ares in [false, true] {
+        let manager = if ares {
+            vera20k_core::assets::asset_manager::AssetManager::from_loose_root_with_ares_for_test(
+                &fixture.0,
+            )
+        } else {
+            vera20k_core::assets::asset_manager::AssetManager::from_ini_probe_root(&fixture.0)
+                .unwrap()
+        };
+        let ini = crate::assets::read_ini(&manager, "custom.ini").unwrap();
+        if ares {
+            let section = ini.section_or_empty("Child");
+            assert_eq!(section.read_int("Health", 0), 2);
+            assert_eq!(section.read_int("Other", 0), 7);
+            let section = ini.section_or_empty("Names");
+            assert_eq!(
+                section
+                    .keys()
+                    .map(|key| section.read_string(key, "", 64))
+                    .collect::<Vec<_>>(),
+                ["A", "B"]
+            );
+            assert_eq!(ini.section_or_empty("Base").read_int("Health", 0), 9);
+        } else {
+            assert!(ini.section("Child").is_none());
+            assert_eq!(ini.section_or_empty("Base").read_int("Health", 0), 1);
+        }
     }
     assert_eq!(std::fs::read(fixture.0.join("custom.ini")).unwrap(), root);
     assert_eq!(std::fs::read(fixture.0.join("child.ini")).unwrap(), child);

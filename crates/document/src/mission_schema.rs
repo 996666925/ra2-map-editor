@@ -1205,7 +1205,7 @@ pub const ACTIONS: &[Opcode] = &[
         "改变附着对象所属方",
         0,
         [COUNTRY],
-        "改变挂接此触发器的全部有效对象；4475～4504 分别为航点 0～29 的玩家（8 以上为 VERA 扩展），8997 为保留 House。"
+        "改变挂接此触发器的全部有效对象；4475～4594 分别为航点 0～119 的玩家（8 以上为 VERA 扩展），8997 为保留 House。"
     ),
     opcode!(
         19,
@@ -1320,11 +1320,9 @@ pub const ACTIONS: &[Opcode] = &[
 pub mod ares;
 
 pub fn opcodes(event: bool) -> impl Iterator<Item = &'static Opcode> {
-    (if event { EVENTS } else { ACTIONS }).iter().chain(
-        (if event { ares::EVENTS } else { ares::ACTIONS })
-            .iter()
-            .filter(|_| vera20k_core::rules::ARES_BUILD),
-    )
+    (if event { EVENTS } else { ACTIONS })
+        .iter()
+        .chain((if event { ares::EVENTS } else { ares::ACTIONS }).iter())
 }
 
 pub fn opcode(event: bool, id: i32) -> Option<&'static Opcode> {

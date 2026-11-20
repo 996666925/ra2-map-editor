@@ -283,11 +283,8 @@ fn different_theaters_import_all_spatial_layers_and_preserve_bridge_flags_and_fo
     assert_eq!(leader.cell().unwrap(), at);
     assert!(after.ini_text("Tags", "FOREIGNTAG").is_empty());
     assert!(after.record_iter().any(|(_, r)| r.section == "Terrain"));
-    assert!(
-        after
-            .record_iter()
-            .any(|(_, r)| r.section == "Waypoints" && r.key.parse::<u32>().unwrap() >= 30)
-    );
+    assert!(after.record_iter().any(|(_, r)| r.section == "Waypoints"
+        && r.key.parse::<u32>().unwrap() >= u32::from(crate::new_map::MAX_PLAYERS)));
     assert_eq!(
         target.snapshot().bytes().unwrap(),
         before,
@@ -351,7 +348,8 @@ fn later_maps_replace_terrain_overlays_and_objects_but_keep_current_waypoint_ids
     assert!(
         result
             .record_iter()
-            .any(|(_, r)| r.section == "Waypoints" && r.key == "30")
+            .any(|(_, r)| r.section == "Waypoints"
+                && r.key == crate::new_map::MAX_PLAYERS.to_string())
     );
 }
 

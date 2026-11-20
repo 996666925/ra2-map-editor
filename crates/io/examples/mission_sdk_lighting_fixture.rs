@@ -10,9 +10,8 @@ use ra2_map_io::mission_script::{self, Sources, Worker};
 use serde_json::json;
 use std::path::PathBuf;
 use vera20k_core::skirmish_launch::{
-    LaunchCountry, LaunchHumanRole, LaunchStartPosition, LaunchTeam, PreFillHouseRoster,
-    SkirmishHumanSlot, SkirmishLaunchMode, SkirmishLaunchOptions, SkirmishLaunchSession,
-    SkirmishLocalSlot,
+    LaunchCountry, LaunchHumanRole, LaunchStartPosition, LaunchTeam, SkirmishHumanSlot,
+    SkirmishLaunchMode, SkirmishLaunchOptions, SkirmishLaunchSession, SkirmishLocalSlot,
 };
 
 fn main() -> Result<()> {
@@ -159,10 +158,10 @@ fn main() -> Result<()> {
             .apply(&mut doc)?;
         ensure!(unchanged, "{name} changed on identical rebuild");
         std::fs::write(&map, doc.snapshot().bytes()?)?;
-        let launch = SkirmishLaunchSession {
-            mode: SkirmishLaunchMode::stock(1).context("Battle mode")?,
-            selected_map_file: Some(map.to_string_lossy().into_owned()),
-            humans: vec![SkirmishHumanSlot {
+        let launch = SkirmishLaunchSession::from_rows(
+            SkirmishLaunchMode::stock(1).context("Battle mode")?,
+            Some(map.to_string_lossy().into_owned()),
+            vec![SkirmishHumanSlot {
                 raw_slot_index: Some(0),
                 name: "SDK lighting".into(),
                 slot: SkirmishLocalSlot {
@@ -175,11 +174,9 @@ fn main() -> Result<()> {
                 },
                 role: LaunchHumanRole::default(),
             }],
-            local_player_index: 0,
-            ai_player_count: 0,
-            opponents: vec![],
-            pre_fill_house_roster: PreFillHouseRoster::from_compact_skirmish(0),
-            options: SkirmishLaunchOptions {
+            0,
+            vec![],
+            SkirmishLaunchOptions {
                 unit_count: 0,
                 short_game: false,
                 crates: false,
@@ -187,7 +184,7 @@ fn main() -> Result<()> {
                 fog_of_war: false,
                 ..Default::default()
             },
-        };
+        );
         // Independently retain the production simulation lighting trajectory;
         // GPU receipts expose cell lighting rather than Scenario lighting.
         let mut scenario = vera20k_core::headless_scenario::load_session(

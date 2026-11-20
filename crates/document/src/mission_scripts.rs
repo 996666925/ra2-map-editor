@@ -346,11 +346,7 @@ pub fn opcode(id: i32) -> Option<&'static Opcode> {
     opcodes().find(|s| s.id == id)
 }
 pub fn opcodes() -> impl Iterator<Item = &'static Opcode> {
-    OPCODES.iter().chain(
-        super::ares::ORDERS
-            .iter()
-            .filter(|_| vera20k_core::rules::ARES_BUILD),
-    )
+    OPCODES.iter().chain(super::ares::ORDERS.iter())
 }
 
 #[derive(Clone, Copy)]

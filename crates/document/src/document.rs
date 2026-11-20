@@ -172,8 +172,7 @@ impl Baseline {
     pub fn parse(bytes: Arc<[u8]>, map: &MapFile) -> Result<Arc<Self>> {
         Self::parse_with_ares(bytes, map, crate::source::game_reads_ares())
     }
-    pub fn parse_with_ares(bytes: Arc<[u8]>, map: &MapFile, ares: bool) -> Result<Arc<Self>> {
-        let reads_ares = vera20k_core::rules::ARES_BUILD || ares;
+    pub fn parse_with_ares(bytes: Arc<[u8]>, map: &MapFile, reads_ares: bool) -> Result<Arc<Self>> {
         let _dialect = vera20k_core::rules::ares_switch::read_ares_way(reads_ares);
         let raw = RawIni::parse(bytes)?;
         if reads_ares {
@@ -677,7 +676,11 @@ impl MapDocument {
                         .map(|r| r.key.clone()),
                 )
                 .collect();
-            let start = if record.section == "Waypoints" { 30 } else { 0 };
+            let start = if record.section == "Waypoints" {
+                u32::from(crate::new_map::MAX_PLAYERS)
+            } else {
+                0
+            };
             let end = if record.section == "Waypoints" {
                 702
             } else {
@@ -733,7 +736,7 @@ impl MapDocument {
                     let keys = reserved.entry(record.section.clone()).or_default();
                     let index = next.entry(record.section.clone()).or_insert(
                         if record.section == "Waypoints" {
-                            30u32
+                            u32::from(crate::new_map::MAX_PLAYERS)
                         } else {
                             0
                         },

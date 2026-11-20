@@ -283,8 +283,7 @@ pub fn capability(family: Family, id: i32) -> Capability {
         opcode: id,
         name: schema.map(|s| s.name),
         runtime,
-        enabled: runtime != RuntimeSupport::Unsupported
-            && (runtime != RuntimeSupport::Ares || vera20k_core::rules::ARES_BUILD),
+        enabled: runtime != RuntimeSupport::Unsupported,
         sdk,
         schema_audited: schema.is_some(),
         binding,
@@ -532,10 +531,7 @@ mod tests {
             RuntimeSupport::Unsupported
         );
         for id in [62, 77, 88] {
-            assert_eq!(
-                capability(Family::Event, id).enabled,
-                vera20k_core::rules::ARES_BUILD
-            );
+            assert!(capability(Family::Event, id).enabled);
         }
     }
 

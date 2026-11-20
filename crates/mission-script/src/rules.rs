@@ -16,12 +16,10 @@ pub(super) fn action_house(
         )?,
         ActionHouse::StartPlayer { id } => {
             ensure!(
-                mode == MissionMode::Multiplayer
-                    && *id < u32::from(MAX_PLAYERS)
-                    && catalog.waypoints.contains(id),
-                "动作玩家起点须为多人地图已有的 0～29 号航点"
+                mode == MissionMode::Multiplayer && catalog.has_player_start(*id),
+                "航点 {id} 不是多人地图已配置的玩家起点"
             );
-            // HouseClass::GetPlayerAtFromString510FB0, shared selectors117B..1198.
+            // HouseClass::GetPlayerAtFromString510FB0, shared selectors from 0x117B.
             0x117B + *id as i32
         }
         ActionHouse::RetainedHouse { id } => {

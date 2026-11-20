@@ -4,8 +4,8 @@
 The editor pins the engine through its Git tree entry, rather than a moving branch.
 Use `git submodule status` for the revision selected by your editor checkout.
 
-The current integration targets VERA20k 0.3.5 at
-`5a880675d6bc530154705a2b2f6783a061333092` (updated 2026-11-16).
+The current integration targets VERA20k 0.3.7 at
+`c33de0916c34578e0d3f531962ba389ffc806558` (updated 2026-11-19).
 The engine mounts `ECACHE*.MIX` and `ELOCAL*.MIX` through the shared asset
 manager. Editor building previews use its RULES slot-9 configuration and
 32-facing frame table for healthy SHP turrets; ART `TurretAnim` is ignored.
@@ -17,7 +17,8 @@ VXL guns retain separate turret/barrel crops and Z seeds. SHP selection adds
 ART `Start`, uses the selected animation palette, and retains directional shadow
 frames. Packed RGB565 translucency reads the existing framebuffer on both CPU
 and GPU. Placement previews use the same offset projection as the scene, and
-building art and turrets share the engine's correction for extended terrain heights.
+building art and turrets follow the engine's default (no optional high-terrain
+lift). ZShape sampling uses the source frame offset rather than the canvas offset.
 Mission audit loaders follow the engine's nonfatal Team AI diagnostics API.
 Random-map inputs share the engine's loaded Extras settings for theater fences
 and town catalogs, and allow its parallel generation to borrow tile blocks.
@@ -26,26 +27,18 @@ Building voxel guns use the engine's bound physical model slots, including an
 explicit `VoxelBarrelFile`, instead of reconstructing filenames in the editor.
 Stock team script actions 18, 28, 29, 35, 36, 44 and 45 are available in the
 authoring schema and TypeScript SDK. Extended player starts require an explicit
-MaxPlayers declaration and all declared waypoints, as in the engine map format
+MaxPlayers declaration and all declared waypoints (up to 120). Direct `-SPAWN`
+playtests still address only the first 30. See the engine map format
 [specification](vera20k/docs/map-format.md). Overlay pack dimensions already
 follow the map header cell grid, including extended maps with overlays below 512.
 
-The editor selects INI syntax, include expansion and supplemental CSF tables
-from the resource manager's `ares_form()`. Engine 0.3.5 opens an installation in
-Auto mode without a selected mod: an installed `ares.mix` is ignored. The
-editor's `ares` build explicitly selects On, mounting that archive and selecting
-Ares syntax and supplemental CSF tables. Theater switches keep this choice;
-both campaign and skirmish spawn files write the same Auto/On setting.
-Neither build selects an engine mod, so optional `LANGRULE.INI` is ignored.
-The resource profile selects a complete resource directory, not a client `Mods`
-overlay or the client's saved Ares option.
-A document retains its selected syntax for duplicate keys, physical records,
-structural edits, scene refresh, save workers and recovery snapshots. Inherited and iterator-key maps remain
-read-only until flattened. The authoring schema and Ares SDK still follow the
-editor's `ares` build feature. The engine also detects some Ares behavior
-from game data in either build, so the default
-editor does not imply that Ares keys in a mod are ignored at runtime. Full Ares
-authoring still requires the editor and client to be built with `ares`.
+The editor uses a single build. Ares mission authoring is always available;
+the per-map resource setting controls the launched game. INI syntax, include
+expansion and supplemental CSF tables follow the resource manager's `ships_ares()`.
+Auto does not mount an installation-only `ares.mix` without a selected mod; On
+explicitly selects Ares, and Off disables it. The map document preserves its
+dialect across edits, background saves and recovery. Inherited and iterator-key
+maps remain read-only until flattened.
 Static voxel vehicles use the production Rules owner's Ares `WaterImage`
 reference on water off bridges; the actual type still supplies `UseBuffer`.
 The scene, picking, export, selection and paste ghosts share this choice.
