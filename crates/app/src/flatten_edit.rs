@@ -156,6 +156,7 @@ impl Editor {
                 steep: self.brush_shift && !force,
                 vertices: self.height_vertices && self.smooth_heights,
                 force,
+                ..Default::default()
             };
             let level = if self.flatten_fixed {
                 self.flatten_level

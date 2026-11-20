@@ -80,14 +80,20 @@ impl HeightEdit {
                     })
                     .transpose()?
                     .flatten();
+                let options = ra2_map_scene::flatten_tools::Options {
+                    steep: settings.steep && !settings.force,
+                    vertices: settings.vertices,
+                    force: settings.force,
+                    paved_roads: true,
+                };
                 let mut vertex_cells = cells.clone();
                 vertex_cells.extend(settings.origin);
                 let vertex_heights = if settings.vertices {
-                    ra2_map_scene::flatten_tools::vertex_heights(
+                    ra2_map_scene::flatten_tools::vertex_heights_with_options(
                         doc,
                         scene,
                         &vertex_cells,
-                        settings.force,
+                        options,
                     )?
                 } else {
                     BTreeMap::new()
@@ -107,11 +113,8 @@ impl HeightEdit {
                             .copied()
                             .collect()
                     } else {
-                        ra2_map_scene::flatten_tools::editable_cells_with_force(
-                            doc,
-                            scene,
-                            cells,
-                            settings.force,
+                        ra2_map_scene::flatten_tools::editable_cells_with_options(
+                            doc, scene, cells, options,
                         )?
                     }
                 } else {
@@ -144,24 +147,18 @@ impl HeightEdit {
                     .collect();
                 let selected = cliff_cells.as_ref().unwrap_or(&ground);
                 let smooth_ground = settings.smooth && cliff_cells.is_none();
+                let mut road_slopes = Vec::new();
                 let mut changed: BTreeSet<_> = if smooth_ground {
                     let target = match settings.change {
                         terrain_tools::HeightChange::To(level) => level,
                         _ => settings.change.target(settings.mode, source.unwrap_or(0)),
                     };
-                    ra2_map_scene::flatten_tools::plan_with_options(
-                        doc,
-                        scene,
-                        selected,
-                        target,
-                        true,
-                        ra2_map_scene::flatten_tools::Options {
-                            steep: settings.steep && !settings.force,
-                            vertices: settings.vertices,
-                            force: settings.force,
-                        },
-                    )?
-                    .apply(&mut copy)?
+                    let plan = ra2_map_scene::flatten_tools::plan_with_options(
+                        doc, scene, selected, target, true, options,
+                    )?;
+                    let changed = plan.apply(&mut copy)?;
+                    road_slopes = plan.cliffs;
+                    changed
                 } else {
                     terrain_tools::height_with_change(
                         &mut copy,
@@ -180,11 +177,8 @@ impl HeightEdit {
                 }
                 if smooth_ground && matches!(settings.change, terrain_tools::HeightChange::To(_)) {
                     let next_vertices = if settings.vertices {
-                        ra2_map_scene::flatten_tools::vertex_heights(
-                            &copy,
-                            scene,
-                            &editable,
-                            settings.force,
+                        ra2_map_scene::flatten_tools::vertex_heights_with_options(
+                            &copy, scene, &editable, options,
                         )?
                     } else {
                         BTreeMap::new()
@@ -214,7 +208,7 @@ impl HeightEdit {
                 Ok(Arc::new(PlateauPlan {
                     edits,
                     overlays: BTreeMap::new(),
-                    cliffs: vec![],
+                    cliffs: road_slopes,
                     interior: cells.clone(),
                     base: 0,
                 }))
@@ -347,6 +341,57 @@ impl Editor {
         let (message, color) = match result {
             Ok(plan) => {
                 let world = camera.world_rect(rect);
+                if !self.flat_view {
+                    let mut road_cells = Vec::new();
+                    for stamp in &plan.cliffs {
+                        let template = &scene.palette.templates[&(stamp.tile, 0)];
+                        for (sub, _) in template.cells.iter().enumerate() {
+                            let sub = sub as u16;
+                            let at = [
+                                stamp.origin[0] + sub % template.width,
+                                stamp.origin[1] + sub / template.width,
+                            ];
+                            let key = vera20k_core::map::theater::TileKey {
+                                tile_id: stamp.tile,
+                                sub_tile: sub as u8,
+                                variant: 0,
+                            };
+                            road_cells.push((at, key, stamp.base));
+                        }
+                    }
+                    road_cells
+                        .sort_by_key(|(at, _, _)| (u32::from(at[0]) + u32::from(at[1]), at[0]));
+                    for (at, key, level) in road_cells {
+                        let Some(image) = scene.palette.images.get(&key) else {
+                            continue;
+                        };
+                        let (x, y) = vera20k_core::map::terrain::iso_to_screen(at[0], at[1], level);
+                        let origin = egui::pos2(
+                            x + image.info.offset[0] as f32,
+                            y + image.info.offset[1] as f32,
+                        );
+                        let target = egui::Rect::from_min_size(
+                            rect.min + (origin - world.min) * camera.zoom,
+                            egui::vec2(image.info.width as f32, image.info.height as f32)
+                                * camera.zoom,
+                        );
+                        if target.intersects(rect)
+                            && let Some(texture) = super::terrain_ui::subtile_texture(
+                                &mut self.ui_state,
+                                painter.ctx(),
+                                scene,
+                                key,
+                            )
+                        {
+                            painter.image(
+                                texture.id(),
+                                target,
+                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                                Color32::from_white_alpha(225),
+                            );
+                        }
+                    }
+                }
                 for (&at, v) in &plan.edits {
                     let (x, y) = vera20k_core::map::terrain::iso_to_screen(
                         at[0],

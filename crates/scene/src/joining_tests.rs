@@ -753,3 +753,212 @@ fn wide_coastal_cliff_splits_when_only_one_half_touches_water() {
         assert_eq!(value(&doc, &scene, at).tile, raw_water);
     }
 }
+
+fn check_paved_road_slopes(
+    mut doc: MapDocument,
+    scene: &MapScene,
+    axis: usize,
+    positive: bool,
+    slope: Option<u8>,
+) -> Option<(Vec<u8>, PlateauPlan)> {
+    use crate::flatten_tools::{Options, plan_with_options};
+    let cell = |i, j| if axis == 0 { [i, j] } else { [j, i] };
+    let road = road_tools::plan(&doc, scene, cell(40, 50), cell(56, 50), false).unwrap();
+    road.apply(&mut doc).unwrap();
+    doc.commit("paved road");
+    let before = doc.snapshot().bytes().unwrap();
+    let edit = |a, b| cliff_tools::rectangle(cell(a, 47), cell(b, 53));
+    let selection = if positive { edit(49, 53) } else { edit(43, 47) };
+    let options = Options {
+        paved_roads: true,
+        ..Default::default()
+    };
+    let result = plan_with_options(&doc, scene, &selection, 5, true, options);
+    let Some(slope) = slope else {
+        assert!(
+            result
+                .err()
+                .expect("unsupported direction must be rejected")
+                .to_string()
+                .contains("没有匹配的公路坡面")
+        );
+        assert_eq!(doc.snapshot().bytes().unwrap(), before);
+        return None;
+    };
+    let plan = result.unwrap();
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    assert_eq!(
+        plan.cliffs.len(),
+        2,
+        "both ends of the raised stretch have a ramp"
+    );
+    let stamp = plan
+        .cliffs
+        .iter()
+        .find(|s| s.origin == cell(48, 49))
+        .unwrap();
+    assert_eq!(stamp.base, 4);
+    let t = &scene.palette.templates[&(stamp.tile, 0)];
+    assert!(t.cells.iter().all(|sub| sub.unwrap().slope == slope));
+    assert_eq!(t.cells.len(), 3);
+    undoable(&mut doc, &plan);
+    complete(&doc, scene, &plan);
+    for j in 49..=51 {
+        assert_eq!(
+            value(&doc, scene, cell(if positive { 49 } else { 47 }, j)).level,
+            5
+        );
+        assert_eq!(
+            value(&doc, scene, cell(if positive { 47 } else { 49 }, j)).level,
+            4
+        );
+    }
+    let changed =
+        crate::terrain_tools::recalculate(&mut doc, scene, &plan.edits.keys().copied().collect())
+            .unwrap();
+    assert!(
+        changed.iter().all(|at| !road.edits.contains_key(at)),
+        "LAT must preserve the planned road"
+    );
+    let center = |x| cell(x, 50);
+    let (high_from, high_to, cut_from, cut_to) = if positive {
+        (49, 51, 42, 43)
+    } else {
+        (44, 46, 54, 55)
+    };
+    let mut protected = BTreeSet::new();
+    for stamp in &plan.cliffs {
+        let x = stamp.origin[axis];
+        protected.extend(edit(x - 1, x + 1));
+    }
+    for (from, to, cut) in [
+        (40, 36, false),
+        (56, 60, false),
+        (high_from, high_to, false),
+        (cut_from, cut_to, true),
+    ] {
+        let edit = road_tools::plan(&doc, scene, center(from), center(to), cut).unwrap();
+        assert!(
+            edit.edits.keys().all(|p| !protected.contains(p)),
+            "editing the flat network changed a slope or one of its approach tiles"
+        );
+        if from != high_from {
+            assert!(!edit.edits.is_empty(), "flat editing should still succeed");
+        }
+    }
+    for cut in [false, true] {
+        assert!(road_tools::plan(&doc, scene, center(48), center(46), cut).is_err());
+    }
+    Some((doc.snapshot().bytes().unwrap(), plan))
+}
+
+#[test]
+fn raising_across_paved_roads_places_complete_ramps_and_rejects_partial_strokes() {
+    for (axis, positive, slope) in [(0, true, 1), (0, false, 3), (1, true, 2), (1, false, 4)] {
+        let (doc, scene) = setup();
+        check_paved_road_slopes(doc, &scene, axis, positive, Some(slope));
+    }
+    let (mut doc, scene) = setup();
+    let road = road_tools::plan(&doc, &scene, [40, 50], [56, 50], false).unwrap();
+    road.apply(&mut doc).unwrap();
+    let before = doc.snapshot().bytes().unwrap();
+    assert!(
+        crate::flatten_tools::plan_with_options(
+            &doc,
+            &scene,
+            &BTreeSet::from([[48, 50]]),
+            5,
+            true,
+            crate::flatten_tools::Options {
+                paved_roads: true,
+                ..Default::default()
+            },
+        )
+        .is_err()
+    );
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+#[ignore = "requires stock YR assets in RA2_DIR"]
+fn retail_paved_road_slopes_survive_map_reload() {
+    let root = std::env::var_os("RA2_DIR").expect("RA2_DIR required");
+    let mut install = ra2_map_assets::assets::Install::open(std::path::Path::new(&root)).unwrap();
+    for theater in ["TEMPERATE", "SNOW", "URBAN", "DESERT", "NEWURBAN"] {
+        let scene = load_scene_bytes(
+            &mut install,
+            "retail-road.map",
+            "test".into(),
+            NewMapOptions {
+                theater: theater.into(),
+                level: 4,
+                ..Default::default()
+            }
+            .bytes()
+            .unwrap(),
+            Instant::now(),
+        )
+        .unwrap();
+        for (axis, positive, slope) in [(0, true, 1), (0, false, 3), (1, true, 2), (1, false, 4)] {
+            let doc = MapDocument::new(scene.source.edit_base.as_ref().unwrap().clone());
+            let slope = (theater != "NEWURBAN" || axis == 0).then_some(slope);
+            let Some((bytes, plan)) = check_paved_road_slopes(doc, &scene, axis, positive, slope)
+            else {
+                continue;
+            };
+            let reloaded = load_scene_bytes(
+                &mut install,
+                "retail-road-edited.map",
+                "test".into(),
+                bytes,
+                Instant::now(),
+            )
+            .unwrap();
+            for stamp in plan.cliffs {
+                let template = &scene.palette.templates[&(stamp.tile, 0)];
+                for sub in 0..3u16 {
+                    let at = [
+                        stamp.origin[0] + sub % template.width,
+                        stamp.origin[1] + sub / template.width,
+                    ];
+                    let cell = reloaded.cells.iter().find(|c| [c.rx, c.ry] == at).unwrap();
+                    assert_eq!(
+                        (cell.tile_id, cell.sub_tile, cell.z),
+                        (stamp.tile, sub as u8, stamp.base),
+                        "{theater} {at:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_paved_road_height_edits_keep_stamps_and_existing_seams_intact() {
+    use crate::terrain_tools::{TerrainMode, height};
+
+    let (mut doc, scene) = setup();
+    let road = road_tools::plan(&doc, &scene, [40, 50], [56, 50], false).unwrap();
+    road.apply(&mut doc).unwrap();
+    doc.commit("paved road");
+    let before = doc.snapshot().bytes().unwrap();
+    for mode in [TerrainMode::Raise, TerrainMode::Lower] {
+        let mut failed = doc.fork();
+        for (brush, error) in [
+            (BTreeSet::from([[48, 50], [45, 45]]), "整块公路"),
+            (cliff_tools::rectangle([48, 49], [48, 51]), "断开相连公路"),
+        ] {
+            let result = height(&mut failed, &scene, &brush, mode, 0, false);
+            assert!(result.unwrap_err().to_string().contains(error));
+            assert_eq!(failed.snapshot().bytes().unwrap(), before);
+        }
+        let mut complete = doc.fork();
+        let all = road.edits.keys().copied().collect();
+        let changed = height(&mut complete, &scene, &all, mode, 0, false).unwrap();
+        assert_eq!(changed.len(), road.edits.len());
+        let level = if mode == TerrainMode::Raise { 5 } else { 3 };
+        for (&at, &cell) in &road.edits {
+            assert_eq!(value(&complete, &scene, at), TerrainValue { level, ..cell });
+        }
+    }
+}

@@ -206,3 +206,77 @@ fn height_preview_clamps_raw_ground_and_rejects_a_partial_cliff_before_release()
     drop(e);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn raise_preview_draws_paved_slope_textures_and_commits_the_same_tiles() {
+    let (mut e, ctx, root) = editor();
+    let fixture = ra2_map_assets::test_support::Fixture::with_joining();
+    let mut install = fixture.install();
+    install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
+    let scene = crate::map::load_scene_bytes(
+        &mut install,
+        "road-height.map",
+        "test".into(),
+        crate::new_map::NewMapOptions {
+            level: 4,
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap(),
+        Instant::now(),
+    )
+    .unwrap();
+    e.attach(&scene);
+    let doc = e.doc.as_mut().unwrap();
+    let road = ra2_map_scene::road_tools::plan(doc, &scene, [40, 50], [56, 50], false).unwrap();
+    road.apply(doc).unwrap();
+    doc.commit("paved road");
+    let before = doc.snapshot().bytes().unwrap();
+    e.activate_terrain_mode(TerrainMode::Raise);
+    e.height_step = 1;
+    e.radius = 7;
+    e.smooth_heights = true;
+    e.auto_lat = true;
+    let at = [50, 50];
+    e.pointer(&scene, Some(at), true, true, false, None);
+    let plan = e.raise_lower_plan(&scene, None).unwrap();
+    assert_eq!(plan.cliffs.len(), 2);
+    let (x, y) = vera20k_core::map::terrain::iso_to_screen(at[0], at[1], 4);
+    let output = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+        e.terrain_preview(
+            ui.painter(),
+            &scene,
+            ui.max_rect(),
+            &crate::camera::MapCamera {
+                center: egui::pos2(x, y),
+                zoom: 1.,
+            },
+            None,
+        )
+    });
+    for stamp in &plan.cliffs {
+        for sub in 0..3 {
+            let texture = e.ui_state.textures[&(stamp.tile, sub, 0)].id();
+            assert!(output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == texture)
+            }));
+        }
+    }
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.pointer(&scene, None, false, false, true, None);
+    for (&at, &v) in &plan.edits {
+        assert_eq!(e.doc.as_ref().unwrap().terrain(at), Some(v));
+    }
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+
+    e.smooth_heights = false;
+    e.radius = 1;
+    e.pointer(&scene, Some(at), true, true, false, None);
+    let error = e.raise_lower_plan(&scene, None).err().unwrap();
+    assert!(error.contains("整块公路"));
+    e.pointer(&scene, None, false, false, true, None);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}

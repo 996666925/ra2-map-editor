@@ -289,6 +289,9 @@ pub(crate) fn raw(
         .min(127);
         edits.insert(at, TerrainValue { level: next, ..old });
     }
+    if matches!(mode, TerrainMode::Raise | TerrainMode::Lower) {
+        crate::road_tools::HeightRoads::new(scene).validate_raw_levels(doc, scene, &edits)?;
+    }
     Ok(edits)
 }
 

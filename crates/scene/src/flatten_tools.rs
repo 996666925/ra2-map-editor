@@ -2,6 +2,7 @@
 use crate::{
     map::MapScene,
     placement,
+    road_tools::HeightRoads,
     terrain_tools::{self, value},
 };
 use anyhow::ensure;
@@ -14,6 +15,8 @@ pub struct Options {
     pub steep: bool,
     pub vertices: bool,
     pub force: bool,
+    /// Include paved road templates when solving a height stroke.
+    pub paved_roads: bool,
 }
 
 fn morphable(doc: &MapDocument, scene: &MapScene, at: Cell) -> bool {
@@ -58,6 +61,24 @@ pub fn editable_cells_with_force(
     cells: &BTreeSet<Cell>,
     force: bool,
 ) -> Result<BTreeSet<Cell>> {
+    editable_cells_with_options(
+        doc,
+        scene,
+        cells,
+        Options {
+            force,
+            ..Default::default()
+        },
+    )
+}
+
+pub fn editable_cells_with_options(
+    doc: &MapDocument,
+    scene: &MapScene,
+    cells: &BTreeSet<Cell>,
+    options: Options,
+) -> Result<BTreeSet<Cell>> {
+    let roads = options.paved_roads.then(|| HeightRoads::new(scene));
     let mut blocked = BTreeSet::new();
     for (_, record) in doc
         .record_iter()
@@ -69,7 +90,9 @@ pub fn editable_cells_with_force(
         .iter()
         .copied()
         .filter(|&at| {
-            (morphable(doc, scene, at) || force && doc.check_cell(at).is_ok())
+            (morphable(doc, scene, at)
+                || doc.check_cell(at).is_ok()
+                    && (options.force || paved_road(roads.as_ref(), scene, value(doc, scene, at))))
                 && doc.overlay(at).0 == 255
                 && !blocked.contains(&at)
         })
@@ -152,7 +175,7 @@ pub fn window_with_force(
 
 // The stock slope patterns in the game's NW/NE/SE/SW corner order. FA2's
 // GetRampType also permits the duplicated saddle tiles at offsets 18 and 19.
-const RAMPS: [[u8; 4]; 21] = [
+pub(crate) const RAMPS: [[u8; 4]; 21] = [
     [0, 0, 0, 0],
     [0, 1, 1, 0],
     [0, 0, 1, 1],
@@ -189,7 +212,14 @@ struct Ground {
     value: TerrainValue,
     slope: u8,
     replace: bool,
+    road: bool,
 }
+fn paved_road(roads: Option<&HeightRoads>, scene: &MapScene, v: TerrainValue) -> bool {
+    roads.is_some_and(|roads| {
+        crate::shore_tools::id(scene, v).is_some_and(|tile| roads.contains(scene, tile))
+    })
+}
+
 struct Surface<'a> {
     doc: &'a MapDocument,
     scene: &'a MapScene,
@@ -197,6 +227,7 @@ struct Surface<'a> {
     ground: HashMap<Cell, Option<Ground>>,
     steep: bool,
     force: bool,
+    roads: Option<HeightRoads>,
 }
 impl Surface<'_> {
     fn ground(&mut self, x: i32, y: i32) -> Option<Ground> {
@@ -205,9 +236,10 @@ impl Surface<'_> {
             return cached;
         }
         let v = value(self.doc, self.scene, at);
+        let road = paved_road(self.roads.as_ref(), self.scene, v);
         let result = if v.level <= 12
             && self.doc.check_cell(at).is_ok()
-            && (self.force || morphable(self.doc, self.scene, at))
+            && (road || self.force || morphable(self.doc, self.scene, at))
             && self.doc.overlay(at).0 == 255
             && !self.blocked.contains(&at)
         {
@@ -239,7 +271,8 @@ impl Surface<'_> {
             Some(Ground {
                 value: v,
                 slope,
-                replace: self.force && !morphable(self.doc, self.scene, at),
+                replace: self.force && !road && !morphable(self.doc, self.scene, at),
+                road,
             })
         } else {
             None
@@ -327,6 +360,7 @@ fn surface<'a>(doc: &'a MapDocument, scene: &'a MapScene, options: Options) -> R
         ground: HashMap::new(),
         steep: options.steep,
         force: options.force,
+        roads: options.paved_roads.then(|| HeightRoads::new(scene)),
     })
 }
 
@@ -361,14 +395,24 @@ pub fn vertex_heights(
     cells: &BTreeSet<Cell>,
     force: bool,
 ) -> Result<BTreeMap<Cell, u8>> {
-    let mut s = surface(
+    vertex_heights_with_options(
         doc,
         scene,
+        cells,
         Options {
             force,
             ..Default::default()
         },
-    )?;
+    )
+}
+
+pub fn vertex_heights_with_options(
+    doc: &MapDocument,
+    scene: &MapScene,
+    cells: &BTreeSet<Cell>,
+    options: Options,
+) -> Result<BTreeMap<Cell, u8>> {
+    let mut s = surface(doc, scene, options)?;
     Ok(cells
         .iter()
         .copied()
@@ -491,6 +535,7 @@ pub fn plan_with_options(
         }
     }
     let mut edits = BTreeMap::new();
+    let mut road_goals = BTreeMap::new();
     for at in affected {
         let (x, y) = (i32::from(at[0]), i32::from(at[1]));
         let Some(g) = surface.ground(x, y) else {
@@ -504,6 +549,17 @@ pub fn plan_with_options(
         });
         let level = *corners.iter().min().unwrap();
         let relative = corners.map(|h| h - level);
+        if g.road {
+            let slope = RAMPS[..=4]
+                .iter()
+                .position(|pattern| *pattern == relative)
+                .context("公路需要整排同向的直线坡面，请调整抬高范围")?
+                as u8;
+            if level != g.value.level || slope != g.slope {
+                road_goals.insert(at, (level, slope));
+            }
+            continue;
+        }
         let slope = if relative == [0; 4] {
             0
         } else {
@@ -545,13 +601,57 @@ pub fn plan_with_options(
             edits.insert(at, next);
         }
     }
-    Ok(PlateauPlan {
+    let mut plan = PlateauPlan {
         edits,
         overlays: BTreeMap::new(),
         cliffs: vec![],
         interior: selected.clone(),
         base: target,
-    })
+    };
+    if surface.roads.is_some() {
+        // Occupied road cells are holes in the solver, but a road cannot end
+        // at the resulting height discontinuity next to the protected cell.
+        for (&at, &(level, slope)) in &road_goals {
+            for (dx, dy, edge, opposite) in [
+                (-1, 0, [0, 3], [1, 2]),
+                (1, 0, [1, 2], [0, 3]),
+                (0, -1, [0, 1], [3, 2]),
+                (0, 1, [3, 2], [0, 1]),
+            ] {
+                let Some(next) = crate::shore_tools::offset(at, dx, dy) else {
+                    continue;
+                };
+                if !paved_road(surface.roads.as_ref(), scene, value(doc, scene, next))
+                    || surface
+                        .ground(i32::from(next[0]), i32::from(next[1]))
+                        .is_some()
+                {
+                    continue;
+                }
+                let v = value(doc, scene, next);
+                let tile = scene.palette.raw_ids[&v.tile];
+                let geometry = scene
+                    .palette
+                    .templates
+                    .get(&(tile, 0))
+                    .and_then(|t| t.cells.get(usize::from(v.sub)))
+                    .and_then(|c| *c)
+                    .context("相邻公路模板不完整")?;
+                let pattern = RAMPS
+                    .get(usize::from(geometry.slope))
+                    .context("相邻公路坡面无效")?;
+                ensure!(
+                    edge.map(|i| u16::from(level) + u16::from(RAMPS[usize::from(slope)][i]))
+                        == opposite.map(|i| u16::from(v.level) + u16::from(pattern[i])),
+                    "相邻公路受保护，无法衔接坡面"
+                );
+            }
+        }
+    }
+    if let Some(roads) = &surface.roads {
+        roads.plan(doc, scene, &road_goals, &mut plan)?;
+    }
+    Ok(plan)
 }
 
 #[cfg(test)]

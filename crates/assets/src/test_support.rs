@@ -266,6 +266,28 @@ impl Fixture {
                 &[14; 3],
             );
         }
+        // Deliberately omit the General key, as with the stock snow theater.
+        let ini_path = f.0.join("temperatmd.ini");
+        let ini = std::fs::read_to_string(&ini_path).unwrap();
+        std::fs::write(
+            ini_path,
+            format!(
+                "{ini}\n[TileSet0011]\nSetName=Paved Road Slopes\nFileName=prslpe\nTilesInSet=4\n"
+            ),
+        )
+        .unwrap();
+        for slope in 1..=4 {
+            let path = f.0.join(format!("prslpe{slope:02}.tem"));
+            write_surface(&path, if slope % 2 == 1 { 1 } else { 3 }, &[11; 3]);
+            let mut bytes = std::fs::read(&path).unwrap();
+            for sub in 0..3 {
+                let offset =
+                    u32::from_le_bytes(bytes[16 + sub * 4..20 + sub * 4].try_into().unwrap())
+                        as usize;
+                bytes[offset + 42] = slope;
+            }
+            std::fs::write(path, bytes).unwrap();
+        }
         for n in 1..=22 {
             std::fs::copy(
                 f.0.join(format!("cliff{n:02}.tem")),
