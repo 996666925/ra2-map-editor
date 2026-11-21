@@ -38,6 +38,63 @@ fn game() -> crate::test_support::Fixture {
     }
     f
 }
+#[test]
+fn stock_city_buildings_share_corrected_palette_in_preview_and_map() {
+    let fixture = game();
+    let shp = fs::read(fixture.0.join("gi.shp")).unwrap();
+    let theater_mix = fixture.0.join("isotemp.mix");
+    mix(
+        &theater_mix,
+        &[
+            ("CITY01.SHP", &shp),
+            ("CITY06.SHP", &shp),
+            ("CITY05.SHP", &shp),
+        ],
+    );
+    let theater_bytes = fs::read(&theater_mix).unwrap();
+    fs::remove_file(theater_mix).unwrap();
+    mix(
+        &fixture.0.join("ra2.mix"),
+        &[("isotemp.mix", &theater_bytes)],
+    );
+    fs::write(fixture.0.join("CITY02.SHP"), &shp).unwrap(); // Mod replacement.
+    let mut city = [0; 768];
+    city[3..6].copy_from_slice(&[25, 15, 5]);
+    fs::write(fixture.0.join("citytem.pal"), city).unwrap();
+    let mut custom = [0; 768];
+    custom[3..6].copy_from_slice(&[12, 17, 21]);
+    fs::write(fixture.0.join("customtem.pal"), custom).unwrap();
+    fs::write(
+        fixture.0.join("rulesmd.ini"),
+        b"[BuildingTypes]\n0=CITY01\n1=CITY02\n2=CITY05\n3=CITY06\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.0.join("artmd.ini"),
+        b"[CITY01]\nFoundation=3x3\n[CITY02]\nFoundation=3x3\n\
+          [CITY05]\nPalette=custom\n[CITY06]\nTerrainPalette=yes\n",
+    )
+    .unwrap();
+    let install = crate::assets::Install::open(&fixture.0).unwrap();
+    let sprites = install.sprite_palette(&install.catalog);
+    for (id, color) in [
+        ("CITY01", [100, 60, 20, 255]),
+        ("CITY02", [60, 80, 100, 255]),
+        ("CITY05", [48, 68, 84, 255]),
+        ("CITY06", [60, 80, 100, 255]),
+    ] {
+        let preview = sprites
+            .get("Structures", id)
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap();
+        let sprite = sprites.objects[&("Structures".into(), id.into())].image(0);
+        assert_eq!(&preview.rgba[..4], &color, "preview of {id}");
+        assert_eq!(&sprite.rgba[..4], &color, "map sprite of {id}");
+    }
+}
+
 fn dir(parent: &Path, name: &str) -> PathBuf {
     let p = parent.join(name);
     fs::create_dir(&p).unwrap();

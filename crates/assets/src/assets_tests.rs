@@ -322,6 +322,69 @@ fn building_shadow_uses_companion_crop_and_nonzero_indices_and_respects_no_shado
 }
 
 #[test]
+fn building_with_empty_body_uses_only_uncharged_super_art_for_thumbnail_and_map() {
+    let fixture = Fixture::new();
+    // NAMISL's generic body has a frame table but no rectangles or pixels.
+    let mut blank = vec![0; 8 + 6 * 24];
+    blank[2..8].copy_from_slice(&[4, 0, 4, 0, 6, 0]);
+    std::fs::write(fixture.0.join("ngmisl.shp"), &blank).unwrap();
+    std::fs::write(fixture.0.join("bare.shp"), &blank).unwrap();
+    std::fs::write(fixture.0.join("broken.shp"), &blank[..8]).unwrap();
+    write_shp_frames(
+        &fixture,
+        "ngmisl_e.shp",
+        &[([1, 2], [1, 0]), ([3, 2], [1, 0])],
+    );
+    for phase in ["f", "g", "h"] {
+        write_shp_frames(
+            &fixture,
+            &format!("ngmisl_{phase}.shp"),
+            &[([0, 0], [2, 2]), ([0, 0], [2, 2])],
+        );
+    }
+    std::fs::write(
+        fixture.0.join("rulesmd.ini"),
+        b"[BuildingTypes]\n0=NAMISL\n1=BARE\n2=BROKEN\n\
+          [Animations]\n0=NAMISL_E\n1=NAMISL_F\n2=NAMISL_G\n3=NAMISL_H\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.0.join("artmd.ini"),
+        b"[NAMISL]\nFoundation=3x3\nNewTheater=yes\nSuperAnim=NAMISL_E\nSuperAnimX=3\nSuperAnimY=2\n\
+          SuperAnimTwo=NAMISL_F\nSuperAnimThree=NAMISL_G\nSuperAnimFour=NAMISL_H\n\
+          [BROKEN]\nSuperAnim=NAMISL_E\n[NAMISL_E]\nNewTheater=yes\nShadow=yes\n\
+          [NAMISL_F]\nShadow=yes\n[NAMISL_G]\nShadow=yes\n[NAMISL_H]\nShadow=yes\n",
+    )
+    .unwrap();
+    let install = fixture.install();
+    let catalog = crate::catalog::Catalog::load(&install.manager, &install.theater);
+    let sprites = crate::sprites::SpritePalette::load(&install, &catalog);
+    let building = &sprites.objects[&("Structures".into(), "NAMISL".into())];
+    let image = building.image(0);
+    let preview = sprites.get("Structures", "NAMISL").unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        preview.image.as_ref().unwrap(),
+        image
+    ));
+    assert!(image.info.name.eq_ignore_ascii_case("ngmisl_e.shp"));
+    assert_eq!(image.info.offset, [2, 2]);
+    assert_eq!(building.anchor, [0., -15.]);
+    assert_eq!(image.rgba[..4], [60, 80, 100, 255]);
+    assert_eq!(building.shadow.as_ref().unwrap().info.offset, [4, 2]);
+    for phase in ["NAMISL_F", "NAMISL_G", "NAMISL_H"] {
+        assert!(sprites.get("Animations", phase).unwrap().image.is_some());
+    }
+    for id in ["BARE", "BROKEN"] {
+        assert!(sprites.get("Structures", id).unwrap().image.is_none());
+        assert!(
+            !sprites
+                .objects
+                .contains_key(&("Structures".into(), id.into()))
+        );
+    }
+}
+
+#[test]
 fn building_bib_and_opted_in_animation_shadows_keep_layer_offsets_without_double_darkening() {
     let fixture = Fixture::new();
     let frames = [([1, 2], [1, 0]), ([2, 2], [2, 0])];

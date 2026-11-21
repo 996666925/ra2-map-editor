@@ -21,6 +21,7 @@ pub struct SpritePreview {
     pub image: Option<Arc<DecodedImage>>,
     pub detail: String,
     pub voxel: bool,
+    pub(crate) empty_building_body: bool,
 }
 impl SpritePalette {
     pub fn get(&self, section: &str, id: &str) -> Option<&SpritePreview> {
@@ -57,6 +58,15 @@ impl SpritePalette {
                 .insert(("Overlay".into(), id.clone()), entry);
         }
         palette.objects = crate::map_sprites::load(install, catalog, &palette);
+        for (key, object) in &palette.objects {
+            if let Some(preview) = palette.entries.get_mut(key)
+                && preview.empty_building_body
+            {
+                let image = object.image(0);
+                preview.detail = format!("{} · 建筑附属图层", image.info.name);
+                preview.image = Some(image.clone());
+            }
+        }
         palette.water_objects = crate::map_sprites::load_water(install, catalog, &palette);
         palette
     }
@@ -121,6 +131,9 @@ fn preview(install: &Install, catalog: &Catalog, section: &str, id: &str) -> Spr
             &install.theater_name,
         )
     };
+    let selected = candidates
+        .iter()
+        .find(|name| install.manager.contains(name));
     let loaded = if voxel {
         voxel_image(
             install,
@@ -130,26 +143,22 @@ fn preview(install: &Install, catalog: &Catalog, section: &str, id: &str) -> Spr
                 .exact_entry(id)
                 .is_some_and(|art| art.use_buffer),
         )
+        .map(Some)
     } else {
-        let selected = candidates
-            .iter()
-            .find(|name| install.manager.contains(name));
         selected
             .context(format!("未找到图像：{}", candidates.join(" / ")))
             .and_then(|name| {
-                let mut custom_palette = entry
-                    .and_then(|_| catalog.art.techno_palette(&image))
-                    .and_then(|name| {
-                        let file = if name.to_ascii_lowercase().ends_with(".pal") {
-                            name.to_owned()
-                        } else {
-                            format!("{name}{}.pal", install.theater.extension)
-                        };
-                        install
-                            .manager
-                            .get_ref(&file)
-                            .and_then(|bytes| Palette::from_bytes(bytes).ok())
-                    });
+                if section == "Structures" {
+                    let source = install.manager.resolve_ref(name);
+                    let palette = building_palette(
+                        install,
+                        catalog,
+                        &image,
+                        source.map(|source| (name.as_str(), source.source_archive)),
+                    );
+                    return decode_shp(install, name, &palette);
+                }
+                let mut custom_palette = techno_palette(install, catalog, &image);
                 if section == "Animations" && custom_palette.is_none() {
                     custom_palette = install
                         .manager
@@ -174,7 +183,7 @@ fn preview(install: &Install, catalog: &Catalog, section: &str, id: &str) -> Spr
                     catalog
                         .infantry_frame(id, 0)
                         .and_then(|frame| decode_shp_frame(install, name, pal, frame).ok())
-                        .map(Ok)
+                        .map(|frame| Ok(Some(frame)))
                         .unwrap_or_else(|| decode_shp(install, name, pal))
                 } else {
                     decode_shp(install, name, pal)
@@ -182,7 +191,7 @@ fn preview(install: &Install, catalog: &Catalog, section: &str, id: &str) -> Spr
             })
     };
     match loaded {
-        Ok(image) => SpritePreview {
+        Ok(Some(image)) => SpritePreview {
             detail: format!(
                 "{} · 帧 {} / {}{}",
                 image.info.name,
@@ -192,14 +201,82 @@ fn preview(install: &Install, catalog: &Catalog, section: &str, id: &str) -> Spr
             ),
             image: Some(Arc::new(image)),
             voxel,
+            empty_building_body: false,
+        },
+        Ok(None) => SpritePreview {
+            image: None,
+            detail: format!("{} 没有可见帧", selected.map_or("SHP", String::as_str)),
+            voxel,
+            empty_building_body: section == "Structures",
         },
         Err(error) => SpritePreview {
             image: None,
             detail: format!("{error:#}"),
             voxel,
+            empty_building_body: false,
         },
     }
 }
+pub(crate) fn techno_palette(install: &Install, catalog: &Catalog, image: &str) -> Option<Palette> {
+    let name = catalog.art.techno_palette(image)?;
+    let file = if name.to_ascii_lowercase().ends_with(".pal") {
+        name.to_owned()
+    } else {
+        format!("{name}{}.pal", install.theater.extension)
+    };
+    load_palette(install, &file)
+}
+
+fn load_palette(install: &Install, name: &str) -> Option<Palette> {
+    Palette::from_bytes(install.manager.get_ref(name)?).ok()
+}
+
+pub(crate) fn building_palette(
+    install: &Install,
+    catalog: &Catalog,
+    image: &str,
+    body: Option<(&str, &str)>,
+) -> Palette {
+    if let Some(palette) = techno_palette(install, catalog, image) {
+        return palette;
+    }
+    if let Some((name, source)) = body
+        && catalog.art.techno_palette(image).is_none()
+        && matches!(
+            source,
+            "ra2.mix -> isotemp.mix"
+                | "ra2.mix -> isourb.mix"
+                | "ra2md.mix -> isoubn.mix"
+                | "ra2md.mix -> isodes.mix"
+                | "ra2md.mix -> isolun.mix"
+        )
+    {
+        // The stock legacy CITY01–05 shapes were indexed for CITY*.PAL.
+        // CITY06 uses the unit palette even though stock ART says TerrainPalette.
+        match name {
+            "CITY01.SHP" | "CITY02.SHP" | "CITY03.SHP" | "CITY04.SHP" | "CITY05.SHP" => {
+                if let Some(palette) =
+                    load_palette(install, &format!("city{}.pal", install.theater.extension))
+                        .or_else(|| load_palette(install, "citytem.pal"))
+                {
+                    return palette;
+                }
+            }
+            "CITY06.SHP" => return install.theater.unit_palette.clone(),
+            _ => {}
+        }
+    }
+    if catalog
+        .art
+        .get(image)
+        .is_some_and(|art| art.terrain_palette)
+    {
+        install.theater.iso_palette.clone()
+    } else {
+        install.theater.unit_palette.clone()
+    }
+}
+
 fn overlay_palette<'a>(install: &'a Install, catalog: &Catalog, id: &str) -> &'a Palette {
     let rules = catalog.rules.section_or_empty(id);
     if rules.read_bool("Tiberium", false) {
@@ -213,7 +290,7 @@ fn overlay_palette<'a>(install: &'a Install, catalog: &Catalog, id: &str) -> &'a
         &install.theater.iso_palette
     }
 }
-fn decode_shp(install: &Install, name: &str, palette: &Palette) -> Result<DecodedImage> {
+fn decode_shp(install: &Install, name: &str, palette: &Palette) -> Result<Option<DecodedImage>> {
     let source = install
         .manager
         .resolve_ref(name)
@@ -225,9 +302,9 @@ fn decode_shp(install: &Install, name: &str, palette: &Palette) -> Result<Decode
         if !indices.iter().any(|&i| i != 0) {
             continue;
         }
-        return decode_shp_frame(install, name, palette, index);
+        return decode_shp_frame(install, name, palette, index).map(Some);
     }
-    anyhow::bail!("{name} 没有可见帧")
+    Ok(None)
 }
 pub(crate) fn decode_shp_frame(
     install: &Install,

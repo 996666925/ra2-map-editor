@@ -2,6 +2,7 @@ use super::*;
 use crate::i18n::tr;
 use crate::ui_theme::{self as theme, Icon};
 use egui::{RichText, TextureHandle};
+use ra2_map_document::region::OBJECT_SECTIONS;
 
 #[derive(Default)]
 pub(super) struct EditorUi {
@@ -10,6 +11,7 @@ pub(super) struct EditorUi {
     pub(super) tab: u8,
     pub(super) terrain_page: tool_palette::TerrainPage,
     filters: [String; 5],
+    object_category: Option<&'static str>,
     pub sprite_source: Option<Arc<ra2_map_assets::sprites::SpritePalette>>,
     pub sprites: HashMap<(String, String), TextureHandle>,
     pub map_sprites: HashMap<usize, TextureHandle>,
@@ -81,6 +83,9 @@ impl Editor {
             self.ui_state.terrain_group = None;
             self.ui_state.terrain_category = None;
             self.ui_state.terrain_variants = filter.starts_with('v');
+        }
+        if tab == 1 {
+            self.ui_state.object_category = OBJECT_SECTIONS.into_iter().find(|id| *id == section);
         }
         if !section.is_empty() {
             self.section = section.into();
@@ -215,36 +220,38 @@ impl Editor {
                 if !animations {
                     egui::ComboBox::from_id_salt("palette-object-category")
                         .width(ui.available_width())
-                        .selected_text(category(&self.section))
+                        .selected_text(category(self.ui_state.object_category))
                         .show_ui(ui, |ui| {
-                            for (id, label) in [
-                                ("Structures", tr!("建筑")),
-                                ("Units", tr!("车辆")),
-                                ("Infantry", tr!("步兵")),
-                                ("Aircraft", tr!("飞机")),
-                                ("Terrain", tr!("树木 / 地形对象")),
-                                ("Smudge", tr!("弹坑 / 污迹")),
-                            ] {
-                                ui.selectable_value(&mut self.section, id.into(), label);
+                            for section in std::iter::once(None).chain(OBJECT_SECTIONS.map(Some)) {
+                                ui.selectable_value(
+                                    &mut self.ui_state.object_category,
+                                    section,
+                                    category(section),
+                                );
                             }
                         });
                 }
-                let section = if animations {
-                    "Animations"
+                let sections: &[&str] = if animations {
+                    &["Animations"]
+                } else if let Some(section) = &self.ui_state.object_category {
+                    std::slice::from_ref(section)
                 } else {
-                    &self.section
+                    &OBJECT_SECTIONS
                 };
-                let types = scene
-                    .catalog
-                    .object_types
-                    .get(section)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default();
-                let mut matching: Vec<_> = types
-                    .iter()
-                    .filter(|id| scene.catalog.object_matches(id, &filter))
-                    .collect();
-                matching.sort_by_key(|id| {
+                let mut total = 0;
+                let mut matching = Vec::new();
+                for &section in sections {
+                    if let Some(types) = scene.catalog.object_types.get(section) {
+                        total += types.len();
+                        matching.extend(
+                            types
+                                .iter()
+                                .filter(|id| scene.catalog.object_matches(id, &filter))
+                                .map(|id| (section, id)),
+                        );
+                    }
+                }
+                matching.sort_by_key(|&(section, id)| {
                     scene
                         .sprites
                         .get(section, id)
@@ -254,7 +261,7 @@ impl Editor {
                     RichText::new(tr!(
                         "{arg0} / {arg1} 个对象",
                         arg0 = matching.len(),
-                        arg1 = types.len()
+                        arg1 = total
                     ))
                     .color(theme::MUTED)
                     .size(11.),
@@ -267,12 +274,7 @@ impl Editor {
                     .max_height((ui.clip_rect().bottom() - ui.cursor().top() - 12.).max(90.))
                     .show_rows(ui, 40., matching.len(), |ui, rows| {
                         for index in rows {
-                            let id = matching[index];
-                            let section = if animations {
-                                "Animations"
-                            } else {
-                                self.section.as_str()
-                            };
+                            let (section, id) = matching[index];
                             let texture = sprite_texture(
                                 &mut self.ui_state.sprites,
                                 ui.ctx(),
@@ -292,7 +294,10 @@ impl Editor {
                                         [ui.available_width(), 40.],
                                         egui::Button::new(scene.catalog.object_label(id))
                                             .truncate()
-                                            .selected(self.type_id == *id),
+                                            .selected(
+                                                self.type_id == *id
+                                                    && (animations || self.section == section),
+                                            ),
                                     )
                                     .on_hover_ui(|ui| {
                                         ui.label(scene.catalog.object_label(id));
@@ -316,6 +321,9 @@ impl Editor {
                                     .clicked()
                                 {
                                     self.type_id = id.clone();
+                                    if !animations {
+                                        self.section = section.into();
+                                    }
                                     self.tool = if animations {
                                         Tool::Select
                                     } else {
@@ -728,15 +736,16 @@ impl Editor {
         }
     }
 }
-fn category(section: &str) -> &str {
+fn category(section: Option<&str>) -> &str {
     match section {
-        "Structures" => tr!("建筑"),
-        "Units" => tr!("车辆"),
-        "Infantry" => tr!("步兵"),
-        "Aircraft" => tr!("飞机"),
-        "Terrain" => tr!("树木 / 地形对象"),
-        "Smudge" => tr!("弹坑 / 污迹"),
-        _ => section,
+        None => tr!("全部"),
+        Some("Structures") => tr!("建筑"),
+        Some("Units") => tr!("车辆"),
+        Some("Infantry") => tr!("步兵"),
+        Some("Aircraft") => tr!("飞机"),
+        Some("Terrain") => tr!("树木 / 地形对象"),
+        Some("Smudge") => tr!("弹坑 / 污迹"),
+        Some(section) => section,
     }
 }
 

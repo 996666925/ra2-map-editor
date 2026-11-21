@@ -293,6 +293,57 @@ fn terrain_shortcuts_reveal_the_workspace_and_preserve_text_entry_and_copy() {
 }
 
 #[test]
+fn object_library_defaults_to_all_and_selects_vehicle_placement_from_the_mixed_list() {
+    use egui_kittest::kittest::Queryable as _;
+
+    let (mut editor, _, root) = editor();
+    let mut scene = terrain_scene();
+    let catalog = std::sync::Arc::make_mut(&mut scene.catalog);
+    catalog.object_types.extend([
+        ("Structures".into(), vec!["TEST-BUILDING".into()]),
+        ("Units".into(), vec!["TEST-TRUCK".into()]),
+        ("Animations".into(), vec!["TEST-ANIMATION".into()]),
+    ]);
+
+    {
+        let mut harness = crate::test_support::harness()
+            .with_context_setup(|ctx| {
+                crate::ui_theme::install(ctx);
+                ctx.add_font_provider(std::sync::Arc::new(
+                    egui_system_font_provider::SystemFontProvider::new(),
+                ));
+            })
+            .with_accessibility_check(false)
+            .with_size([360., 650.])
+            .build_ui(|ui| editor.toolbox(ui, Some(&scene)));
+        harness.get_by_label("对象").click();
+        harness.run();
+        harness.get_by_value("全部");
+        harness.get_by_label("2 / 2 个对象");
+        harness.get_by_label("TEST-BUILDING");
+        harness.get_by_label("TEST-TRUCK").click();
+        harness.run();
+        harness.get_by_value("全部").click();
+        harness.run();
+        harness.get_by_label("建筑").click();
+        harness.run();
+        harness.get_by_value("建筑").click();
+        harness.get_by_label("1 / 1 个对象");
+        harness.run();
+        harness.get_by_label("全部").click();
+        harness.run();
+        harness.get_by_value("全部");
+        harness.get_by_label("2 / 2 个对象");
+    }
+
+    assert_eq!(editor.section, "Units");
+    assert_eq!(editor.type_id, "TEST-TRUCK");
+    assert_eq!(editor.tool, Tool::Place);
+    drop(editor);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn choosing_fill_material_keeps_fill_active_and_cannot_change_an_active_stroke() {
     let (mut e, _, root) = editor();
     let scene = terrain_scene();

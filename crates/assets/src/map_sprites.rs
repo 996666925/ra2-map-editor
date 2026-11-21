@@ -2,7 +2,7 @@
 use crate::{
     assets::{AssetInfo, DecodedImage, Install},
     catalog::Catalog,
-    sprites::{SpritePalette, decode_shp_frame},
+    sprites::{SpritePalette, building_palette, decode_shp_frame, techno_palette},
 };
 use anyhow::{Context, Result, ensure};
 use ra2_map_voxel::vxl_raster::{self, VxlRenderParams, VxlSprite};
@@ -154,6 +154,10 @@ pub(crate) fn load(
                     Ok(frames) => frames,
                     Err(_) => continue,
                 }
+            } else if section == "Structures"
+                && let Some(base) = &preview.image
+            {
+                vec![base.clone()]
             } else if let Some(base) = &preview.image {
                 let palette = object_palette(install, catalog, &image_id, section, id);
                 let mut frames = HashMap::new();
@@ -199,6 +203,9 @@ pub(crate) fn load(
                             .clone()
                     })
                     .collect()
+            } else if preview.empty_building_body {
+                // Stock NAMISL can have a blank body and visible attached art.
+                Vec::new()
             } else {
                 continue;
             };
@@ -240,13 +247,23 @@ pub(crate) fn load(
                 anchor[1] = -16.;
             }
             if section == "Structures" {
-                let palette = object_palette(install, catalog, &image_id, section, id);
+                let palette = building_palette(
+                    install,
+                    catalog,
+                    &image_id,
+                    preview
+                        .image
+                        .as_ref()
+                        .map(|image| (image.info.name.as_str(), image.info.source.as_str())),
+                );
                 let casts_shadow = !catalog
                     .rules
                     .section_or_empty(id)
                     .read_bool("NoShadow", false);
                 let mut shadows = Vec::new();
-                if casts_shadow && let Some(mask) = embedded_shadow(install, &facings[0], &palette)
+                if casts_shadow
+                    && let Some(body) = facings.first()
+                    && let Some(mask) = embedded_shadow(install, body, &palette)
                 {
                     shadows.push((Arc::new(mask), [0, 0]));
                 }
@@ -256,8 +273,8 @@ pub(crate) fn load(
                 // never for centring the SHP canvas (body, bib or shadow).
                 anchor[1] = -15.;
                 if let Some(art) = art {
-                    // Completed building art includes static idle/active/super layers.
-                    // Production/special effects require gameplay state and are excluded.
+                    // Static map art uses the uncharged SuperAnim slot. The
+                    // other super slots are mutually exclusive gameplay phases.
                     let mut layers = Vec::new();
                     if let Some(bib) = &art.bib_shape {
                         let image_id = catalog.art.resolve_anim_image_id(bib);
@@ -279,16 +296,19 @@ pub(crate) fn load(
                             layers.push((Arc::new(bib), [0, 0]));
                         }
                     }
-                    layers.push((facings[0].clone(), [0, 0]));
+                    if let Some(body) = facings.first() {
+                        layers.push((body.clone(), [0, 0]));
+                    }
                     for anim in &art.building_anims {
-                        if matches!(
-                            anim.kind,
-                            BuildingAnimKind::Active
-                                | BuildingAnimKind::Idle
-                                | BuildingAnimKind::Super
-                        ) && let Some(image) = library
-                            .get("Animations", &anim.anim_type)
-                            .and_then(|p| p.image.as_ref())
+                        let visible_at_rest = match anim.kind {
+                            BuildingAnimKind::Active | BuildingAnimKind::Idle => true,
+                            BuildingAnimKind::Super => anim.is_primary,
+                            _ => false,
+                        };
+                        if visible_at_rest
+                            && let Some(image) = library
+                                .get("Animations", &anim.anim_type)
+                                .and_then(|p| p.image.as_ref())
                         {
                             // Attached building art uses the parent's palette; ANIM.PAL
                             // produces wrong colours for power plants, radars and flags.
@@ -318,11 +338,15 @@ pub(crate) fn load(
                             }
                         }
                     }
-                    if layers.len() > 1
+                    if (facings.is_empty() || layers.len() > 1)
                         && let Some(image) = composite(&layers)
+                        && image.indices.iter().any(|&pixel| pixel != 0)
                     {
                         facings = vec![Arc::new(image)];
                     }
+                }
+                if facings.is_empty() {
+                    continue;
                 }
                 if let Some(guns) = building_rules.as_ref().and_then(|rules| {
                     building_gun_frames(install, catalog, rules, id, &image_id)
@@ -703,39 +727,23 @@ fn object_palette(
     section: &str,
     id: &str,
 ) -> Palette {
-    catalog
-        .art
-        .techno_palette(image)
-        .and_then(|name| {
-            let name = if name.to_ascii_lowercase().ends_with(".pal") {
-                name.to_owned()
-            } else {
-                format!("{name}{}.pal", install.theater.extension)
-            };
-            install
-                .manager
-                .get_ref(&name)
-                .and_then(|b| Palette::from_bytes(b).ok())
-        })
-        .unwrap_or_else(|| {
-            if section == "Terrain" {
-                if catalog
-                    .rules
-                    .section_or_empty(id)
-                    .read_bool("SpawnsTiberium", false)
-                {
-                    install.theater.unit_palette.clone()
-                } else {
-                    install.theater.iso_palette.clone()
-                }
-            } else if section == "Smudge"
-                || catalog.art.get(image).is_some_and(|a| a.terrain_palette)
+    techno_palette(install, catalog, image).unwrap_or_else(|| {
+        if section == "Terrain" {
+            if catalog
+                .rules
+                .section_or_empty(id)
+                .read_bool("SpawnsTiberium", false)
             {
-                install.theater.iso_palette.clone()
-            } else {
                 install.theater.unit_palette.clone()
+            } else {
+                install.theater.iso_palette.clone()
             }
-        })
+        } else if section == "Smudge" || catalog.art.get(image).is_some_and(|a| a.terrain_palette) {
+            install.theater.iso_palette.clone()
+        } else {
+            install.theater.unit_palette.clone()
+        }
+    })
 }
 
 pub(crate) fn voxel_frames(
