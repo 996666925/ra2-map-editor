@@ -66,6 +66,7 @@ pub struct EditorApp {
     resource_compact_started: Option<Instant>,
     started: Instant,
     p2_smoke: bool,
+    updater: Option<crate::update::Updater>,
 }
 
 impl EditorApp {
@@ -142,6 +143,11 @@ impl EditorApp {
             renderer,
             gpu,
             cameras: Default::default(),
+            updater: if options.smoke_output.is_none() {
+                Some(crate::update::Updater::new(&cc.egui_ctx))
+            } else {
+                None
+            },
             smoke_output: options.smoke_output,
             smoke_outcome: outcome,
             screenshot_requested: false,
@@ -454,6 +460,9 @@ impl eframe::App for EditorApp {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let _language = crate::i18n::enter(crate::i18n::selected(ctx));
+        if let Some(updater) = &mut self.updater {
+            updater.poll(ctx);
+        }
         self.poll_loader();
         self.map.poll(ctx);
         let dropped = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()));
@@ -531,6 +540,9 @@ impl eframe::App for EditorApp {
                         }
                     }
                     theme::right_to_left(ui, |ui| {
+                        if let Some(updater) = &mut self.updater {
+                            updater.button(ui);
+                        }
                         ui.label(
                             egui::RichText::new(tr!("尤里的复仇  /  VERA20k"))
                                 .size(11.)
@@ -637,6 +649,9 @@ impl eframe::App for EditorApp {
             });
         if self.show_map {
             self.map.finish_save(ui.ctx());
+        }
+        if let Some(updater) = &mut self.updater {
+            updater.dialog(ui.ctx());
         }
     }
 

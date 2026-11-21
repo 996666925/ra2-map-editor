@@ -2,12 +2,12 @@
 resolver = "3"
 # The root package is an implicit member. Listing "." explicitly makes Cargo
 # treat every nested path as an explicit member and defeats vendor exclusion.
-members = ["crates/document", "crates/assets", "crates/scene", "crates/render", "crates/io", "crates/app", "crates/voxel", "crates/mission-script"]
+members = ["crates/document", "crates/assets", "crates/scene", "crates/render", "crates/io", "crates/app", "crates/voxel", "crates/mission-script", "crates/release"]
 default-members = ["."]
 exclude = ["vendor/vera20k"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.98"
 publish = false

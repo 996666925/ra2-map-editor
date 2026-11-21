@@ -27,6 +27,7 @@ mod mission_ui;
 mod resource_settings;
 mod screen_capture;
 mod ui_theme;
+mod update;
 
 #[cfg(test)]
 mod test_support;

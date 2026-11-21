@@ -1,5 +1,6 @@
 # Cargo build output and machine-specific configuration
 /target/
+/dist/
 /.cargo/
 
 # Private development documents (kept locally), except public guides
