@@ -3,11 +3,12 @@ use super::*;
 use crate::i18n::tr;
 use ra2_map_scene::cliff_authoring;
 use ra2_map_scene::cliff_tools::{self, PlateauPlan};
+use ra2_map_scene::road_tools::{self, RoadStyle};
 
 fn click_polyline(mode: TerrainMode) -> bool {
     matches!(
         mode,
-        TerrainMode::CliffPolyline | TerrainMode::WaterPolyline
+        TerrainMode::CliffPolyline | TerrainMode::WaterPolyline | TerrainMode::RoadPolyline
     )
 }
 
@@ -15,6 +16,7 @@ fn click_polyline(mode: TerrainMode) -> bool {
 pub(super) struct PlateauEdit {
     gesture: Option<Gesture>,
     preview: Option<Preview>,
+    road_draft: RoadDraft,
 }
 struct Gesture {
     mode: TerrainMode,
@@ -23,6 +25,18 @@ struct Gesture {
     base: u8,
     high_left: bool,
     bridge: ra2_map_scene::bridge_tools::BridgeKind,
+    road: RoadStyle,
+    road_axis_lock: bool,
+    road_leg_pressed: bool,
+}
+impl Gesture {
+    fn road_endpoint(&self, at: Cell) -> Cell {
+        if self.road_axis_lock {
+            road_tools::axis_endpoint(*self.path.last().unwrap(), at)
+        } else {
+            at
+        }
+    }
 }
 #[derive(PartialEq)]
 struct Key {
@@ -34,16 +48,145 @@ struct Key {
     base: u8,
     high_left: bool,
     bridge: ra2_map_scene::bridge_tools::BridgeKind,
+    road: RoadStyle,
+    road_axis_lock: bool,
 }
 struct Preview {
     key: Key,
     result: std::result::Result<Arc<PlateauPlan>, String>,
     bridge_draft: Option<Arc<PlateauPlan>>,
 }
+#[derive(PartialEq, Eq)]
+struct RoadDraftKey {
+    document: u64,
+    palette: usize,
+    state: u64,
+    style: RoadStyle,
+}
+
+struct RoadCandidate {
+    route: road_tools::RoadRoute,
+    plan: Arc<PlateauPlan>,
+}
+type RoadResult = std::result::Result<RoadCandidate, String>;
+
+#[derive(Default)]
+struct RoadDraft {
+    key: Option<RoadDraftKey>,
+    // One checkpoint per placed endpoint after the start, including invalid
+    // ones. A later segment can finish a pending connection (e.g. off a slope).
+    confirmed: Vec<RoadResult>,
+    hover: Option<(Cell, RoadResult)>,
+}
+impl RoadDraft {
+    fn last_valid(&self) -> Option<(usize, &RoadCandidate)> {
+        self.confirmed
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, result)| result.as_ref().ok().map(|plan| (index + 2, plan)))
+    }
+
+    fn truncate(&mut self, vertices: usize) {
+        self.confirmed.truncate(vertices.saturating_sub(1));
+        self.hover = None;
+    }
+
+    fn candidate(
+        &self,
+        doc: &MapDocument,
+        scene: &MapScene,
+        vertices: &[Cell],
+        end: Cell,
+        style: RoadStyle,
+    ) -> RoadResult {
+        let (resolved, previous) = self.last_valid().unzip();
+        let mut ends = vertices[resolved.unwrap_or(0)..].to_vec();
+        ends.push(end);
+        let (route, plan) = match previous {
+            Some(previous) => previous.route.extend(doc, scene, &ends),
+            None => road_tools::plan_route(doc, scene, &ends, style),
+        }
+        .map_err(|e| format!("{e:#}"))?;
+        Ok(RoadCandidate {
+            route,
+            plan: Arc::new(plan),
+        })
+    }
+
+    fn generate(
+        &mut self,
+        doc: &MapDocument,
+        scene: &MapScene,
+        vertices: &[Cell],
+        end: Cell,
+        style: RoadStyle,
+    ) -> std::result::Result<Arc<PlateauPlan>, String> {
+        let key = RoadDraftKey {
+            document: doc.id,
+            palette: Arc::as_ptr(&scene.palette) as usize,
+            state: doc.edit_revision(),
+            style,
+        };
+        if self.key.as_ref() != Some(&key) {
+            *self = Self {
+                key: Some(key),
+                ..Self::default()
+            };
+        }
+        while self.confirmed.len() + 1 < vertices.len() {
+            let index = self.confirmed.len() + 1;
+            let placed = vertices[index];
+            let result = self
+                .hover
+                .take()
+                .filter(|(at, _)| *at == placed)
+                .map_or_else(
+                    || self.candidate(doc, scene, &vertices[..index], placed, style),
+                    |(_, result)| result,
+                );
+            self.confirmed.push(result);
+        }
+        let result = if vertices.last() == Some(&end) {
+            self.confirmed
+                .last()
+                .ok_or_else(|| tr!("连续道路至少需要两个不同的点").to_owned())?
+        } else {
+            if self.hover.as_ref().is_none_or(|(at, _)| *at != end) {
+                self.hover = Some((end, self.candidate(doc, scene, vertices, end, style)));
+            }
+            &self.hover.as_ref().unwrap().1
+        };
+        result
+            .as_ref()
+            .map(|candidate| Arc::clone(&candidate.plan))
+            .map_err(Clone::clone)
+    }
+}
 impl PlateauEdit {
     pub fn cancel(&mut self) {
         *self = Self::default();
     }
+    pub(super) fn road_draft_end(&self) -> Option<Cell> {
+        let g = self.gesture.as_ref()?;
+        (g.mode == TerrainMode::RoadPolyline).then(|| *g.path.last().unwrap())
+    }
+
+    fn displayed_plan(
+        &self,
+        result: std::result::Result<Arc<PlateauPlan>, String>,
+    ) -> Option<Arc<PlateauPlan>> {
+        result.ok().or_else(|| {
+            if self.road_draft_end().is_some() {
+                self.road_draft
+                    .last_valid()
+                    .map(|(_, draft)| Arc::clone(&draft.plan))
+            } else {
+                self.preview.as_ref()?.bridge_draft.clone()
+            }
+        })
+    }
+
     fn generate(
         &mut self,
         doc: &MapDocument,
@@ -51,6 +194,11 @@ impl PlateauEdit {
         at: Cell,
     ) -> std::result::Result<Arc<PlateauPlan>, String> {
         let g = self.gesture.as_ref().ok_or(tr!("按下并拖动绘制高台"))?;
+        if g.mode == TerrainMode::RoadPolyline {
+            return self
+                .road_draft
+                .generate(doc, scene, &g.path, g.road_endpoint(at), g.road);
+        }
         let mut path = g.path.clone();
         // Water previews show the exact closure Enter will commit. Hover
         // only draws a guide for the next edge until that point is clicked.
@@ -82,6 +230,8 @@ impl PlateauEdit {
             base: g.base,
             high_left: g.high_left,
             bridge: g.bridge,
+            road: g.road,
+            road_axis_lock: g.road_axis_lock,
         };
         if self.preview.as_ref().is_none_or(|p| p.key != key) {
             let result = (|| -> Result<Arc<PlateauPlan>> {
@@ -108,12 +258,14 @@ impl PlateauEdit {
                     )?));
                 }
                 if matches!(key.mode, TerrainMode::Road | TerrainMode::RoadCut) {
-                    return Ok(Arc::new(ra2_map_scene::road_tools::plan(
+                    return Ok(Arc::new(road_tools::plan_segment(
                         doc,
                         scene,
                         g.start,
                         at,
+                        key.road,
                         key.mode == TerrainMode::RoadCut,
+                        key.road_axis_lock,
                     )?));
                 }
                 if key.mode.joining() {
@@ -210,6 +362,7 @@ impl Editor {
             if g.path.len() > 1 {
                 g.path.pop();
                 self.plateau.preview = None;
+                self.plateau.road_draft.truncate(g.path.len());
             } else {
                 self.cancel_active(scene);
             }
@@ -276,14 +429,25 @@ impl Editor {
         {
             return false;
         }
-        if self
-            .plateau
-            .gesture
-            .as_ref()
-            .is_some_and(|g| click_polyline(g.mode))
+        if let Some(g) = self.plateau.gesture.as_mut()
+            && click_polyline(g.mode)
         {
+            if g.mode == TerrainMode::RoadPolyline {
+                g.road_axis_lock = self.brush_shift;
+                if press && at.is_some() {
+                    g.road_leg_pressed = true;
+                }
+                if release || !down {
+                    if std::mem::take(&mut g.road_leg_pressed)
+                        && let Some(at) = at.map(|at| g.road_endpoint(at))
+                        && g.path.last() != Some(&at)
+                    {
+                        g.path.push(at);
+                    }
+                }
+                return true;
+            }
             if press && let Some(at) = at {
-                let g = self.plateau.gesture.as_mut().unwrap();
                 if g.mode == TerrainMode::WaterPolyline && at == g.start {
                     // The planner already closes the path. Keep the stored
                     // vertices editable if the attempted closure is invalid.
@@ -312,6 +476,13 @@ impl Editor {
                 path: vec![at],
                 high_left: self.cliff_high_left,
                 bridge: self.bridge_kind,
+                road: self.road_style,
+                road_axis_lock: self.brush_shift,
+                // The first click sets the start. Only a press still held
+                // after this frame can also drag out the first leg.
+                road_leg_pressed: self.terrain_mode == TerrainMode::RoadPolyline
+                    && down
+                    && !release,
                 base: if self.terrain_mode == TerrainMode::HeightFill {
                     self.flatten_level
                 } else if self.terrain_mode == TerrainMode::CliffHeightRepair {
@@ -337,6 +508,9 @@ impl Editor {
             }
         }
         if let Some(g) = self.plateau.gesture.as_mut() {
+            if g.mode == TerrainMode::Road {
+                g.road_axis_lock = self.brush_shift;
+            }
             if (down || press || release)
                 && let Some(at) = at
                 && g.path.last() != Some(&at)
@@ -371,6 +545,8 @@ impl Editor {
                     tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。")
                 } else if self.terrain_mode == TerrainMode::WaterPolyline {
                     tr!("点击添加折点，点击起点或按 Enter 闭合填水。Backspace 撤回折点，Esc 取消。")
+                } else if self.terrain_mode == TerrainMode::RoadPolyline {
+                    tr!("点击或拖动添加路段。Enter 铺设路线，Backspace 撤回一段，Esc 取消。")
                 } else {
                     crate::i18n::text(self.terrain_mode.name())
                 },
@@ -380,19 +556,26 @@ impl Editor {
             return;
         }
         let world = camera.world_rect(rect);
+        let starting_road = self.plateau.gesture.as_ref().is_some_and(|g| {
+            g.mode == TerrainMode::RoadPolyline
+                && g.path.len() == 1
+                && g.road_endpoint(at) == g.start
+        });
         let result = self.plateau.generate(doc, scene, at);
         let error = result
             .as_ref()
             .err()
+            .filter(|_| !starting_road)
             .map(|e| crate::i18n::text(e).to_owned());
-        let plan = result
-            .ok()
-            .or_else(|| self.plateau.preview.as_ref()?.bridge_draft.clone());
-        let color = if error.is_none() {
-            Color32::from_rgb(80, 220, 170)
+        let plan = self.plateau.displayed_plan(result);
+        let road_draft = self.plateau.road_draft_end().is_some();
+        let valid_color = Color32::from_rgb(80, 220, 170);
+        let guide_color = if error.is_none() {
+            valid_color
         } else {
             Color32::LIGHT_RED
         };
+        let color = if road_draft { valid_color } else { guide_color };
         let outline = |painter: &egui::Painter, at: Cell, level: u8| {
             let (x, y) = vera20k_core::map::terrain::iso_to_screen(
                 at[0],
@@ -661,6 +844,9 @@ impl Editor {
                     error
                         .as_ref()
                         .map(|e| {
+                            if road_draft {
+                                return e.clone();
+                            }
                             tr!(
                                 "预览 {arg0} 排桥面 · {e}；红色时松开不会放置，Esc 取消",
                                 arg0 = plan.overlays.len() / 3,
@@ -672,6 +858,8 @@ impl Editor {
                                 format!("{heights} · {}", tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。"))
                             } else if g.mode == TerrainMode::WaterPolyline {
                                 tr!("点击添加折点，点击起点或按 Enter 闭合填水。Backspace 撤回折点，Esc 取消。").into()
+                            } else if g.mode == TerrainMode::RoadPolyline {
+                                tr!("点击或拖动添加路段。Enter 铺设路线，Backspace 撤回一段，Esc 取消。").into()
                             } else { tr!(
                                 "{arg0} 格修改 · {arg1} 个地形模板 · {arg2}；松开放置，Esc 取消",
                                 arg0 = plan.edits.len() + plan.overlays.len(),
@@ -702,7 +890,10 @@ impl Editor {
                     for cell in cliff_tools::rectangle(g.start, at) {
                         outline(painter, cell, g.base);
                     }
-                } else if g.mode != TerrainMode::WaterPolyline {
+                } else if !matches!(
+                    g.mode,
+                    TerrainMode::WaterPolyline | TerrainMode::RoadPolyline
+                ) {
                     for (a, b) in g
                         .path
                         .iter()
@@ -717,23 +908,58 @@ impl Editor {
                 painter.text(
                     rect.left_top() + egui::vec2(12., 12.),
                     egui::Align2::LEFT_TOP,
-                    error.unwrap_or_else(|| tr!("无法生成预览").into()),
+                    error.unwrap_or_else(|| {
+                        if starting_road {
+                            tr!(
+                                "点击或拖动添加路段。Enter 铺设路线，Backspace 撤回一段，Esc 取消。"
+                            )
+                            .into()
+                        } else {
+                            tr!("无法生成预览").into()
+                        }
+                    }),
                     egui::FontId::proportional(13.),
-                    Color32::LIGHT_RED,
+                    guide_color,
                 );
             }
+        }
+        if let Some(g) = self.plateau.gesture.as_ref()
+            && g.mode == TerrainMode::Road
+        {
+            let point = |at: Cell| {
+                let level = if self.flat_view {
+                    0
+                } else {
+                    terrain_tools::value(doc, scene, at).level
+                };
+                let (x, y) = vera20k_core::map::terrain::iso_to_screen(at[0], at[1], level);
+                rect.min + (egui::pos2(x + 30., y + 15.) - world.min) * camera.zoom
+            };
+            let end = if g.road_axis_lock {
+                road_tools::axis_endpoint(g.start, at)
+            } else {
+                at
+            };
+            painter.extend(egui::Shape::dashed_line(
+                &[point(g.start), point(end)],
+                egui::Stroke::new(1.5, color),
+                6.,
+                4.,
+            ));
         }
         if let Some(g) = self.plateau.gesture.as_ref()
             && click_polyline(g.mode)
         {
             let water = g.mode == TerrainMode::WaterPolyline;
+            let road = g.mode == TerrainMode::RoadPolyline;
+            let at = if road { g.road_endpoint(at) } else { at };
             let position = |at: Cell| {
                 let (x, y) = vera20k_core::map::terrain::iso_to_screen(
                     at[0],
                     at[1],
                     if self.flat_view {
                         0
-                    } else if water {
+                    } else if water || road {
                         terrain_tools::value(doc, scene, at).level
                     } else {
                         g.base
@@ -761,12 +987,12 @@ impl Editor {
                 } else if !water || at != g.start || g.path.len() < 3 {
                     painter.extend(egui::Shape::dashed_line(
                         &[a, b],
-                        egui::Stroke::new(2., Color32::YELLOW),
+                        egui::Stroke::new(2., if road { guide_color } else { Color32::YELLOW }),
                         6.,
                         4.,
                     ));
                 }
-                if !water && a.distance(b) > 12. {
+                if !water && !road && a.distance(b) > 12. {
                     let d = (b - a).normalized();
                     let normal = egui::vec2(d.y, -d.x) * if g.high_left { 1. } else { -1. };
                     painter.arrow(
@@ -829,6 +1055,32 @@ impl Editor {
             return;
         }
         if self.terrain_mode.joining() {
+            if matches!(
+                self.terrain_mode,
+                TerrainMode::Road | TerrainMode::RoadPolyline | TerrainMode::RoadCut
+            ) {
+                let styles: Vec<_> = road_tools::supported_styles(scene).collect();
+                let Some(&first) = styles.first() else {
+                    ui.colored_label(Color32::LIGHT_RED, tr!("当前环境没有可自动绘制的道路素材"));
+                    return;
+                };
+                if !styles.contains(&self.road_style) {
+                    self.road_style = first;
+                }
+                let label = |style| match style {
+                    RoadStyle::Paved => tr!("铺装公路（3 格宽）"),
+                    RoadStyle::Dirt => tr!("土路（2 格宽）"),
+                };
+                ui.add_enabled_ui(self.plateau.road_draft_end().is_none(), |ui| {
+                    egui::ComboBox::from_id_salt("road_style")
+                        .selected_text(label(self.road_style))
+                        .show_ui(ui, |ui| {
+                            for style in styles {
+                                ui.selectable_value(&mut self.road_style, style, label(style));
+                            }
+                        });
+                });
+            }
             let text = match self.terrain_mode {
                 TerrainMode::Water => {
                     tr!("拖动矩形绘制水域；自动生成直岸、内角和外角，与已有水域合并。")
@@ -853,11 +1105,13 @@ impl Editor {
                     )
                 }
                 TerrainMode::Road => {
-                    tr!(
-                        "沿地图轴向拖出三格宽道路。从已有路端继续画可生成弯道；接入道路中部生成 T 字或十字路口。"
-                    )
+                    tr!("拖出一条线段，松开生成道路。斜线自动拼接弯道，按住 Shift 锁定轴向。")
                 }
-                _ => tr!("沿道路中心线拖动切除，修复剩余路段的端点和路口。"),
+                TerrainMode::RoadPolyline => {
+                    tr!("点击或拖动添加路段。Enter 铺设路线，Backspace 撤回一段，Esc 取消。")
+                }
+                TerrainMode::RoadCut => tr!("切除所选类型的平路，并修复相连路段的端点和路口。"),
+                _ => unreachable!("joining mode without sidebar instructions"),
             };
             ui.small(text);
             if self.terrain_mode == TerrainMode::WaterPolyline {
@@ -865,11 +1119,31 @@ impl Editor {
                     "自动连接末点与起点，保留凹形轮廓。岸线无法拼接时按 2×2 格向外规整。"
                 ));
             }
-            if matches!(self.terrain_mode, TerrainMode::Road | TerrainMode::RoadCut) {
+            if self.terrain_mode == TerrainMode::RoadPolyline {
+                ui.small(tr!("按住 Shift 锁定下一段的轴向。"));
+                let ready = self
+                    .plateau
+                    .gesture
+                    .as_ref()
+                    .is_some_and(|g| g.path.len() >= 2);
+                if ui
+                    .add_enabled(ready, egui::Button::new(tr!("铺设路线")))
+                    .clicked()
+                {
+                    self.finish_plateau(scene);
+                }
+            }
+            if matches!(
+                self.terrain_mode,
+                TerrainMode::Road | TerrainMode::RoadPolyline
+            ) {
                 ui.small(tr!(
-                    "中心线吸附附近道路；路口与转角之间请保留至少 4 格直道。切除后恢复为平地。"
+                    "接入同类型道路可生成转角和路口。道路沿匹配的一层直坡升降，坡道两端需接到平地。"
                 ));
-            } else if self.terrain_mode != TerrainMode::CoastalCliff {
+            } else if !matches!(
+                self.terrain_mode,
+                TerrainMode::RoadCut | TerrainMode::CoastalCliff
+            ) {
                 ui.small(tr!(
                     "水道和陆地至少宽 2 格；狭窄急转角请适当加宽。水域保持原高度，岸线两侧需等高。"
                 ));

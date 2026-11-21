@@ -6,7 +6,13 @@ fn scene() -> MapScene {
 }
 
 fn scene_at_level(level: u8) -> MapScene {
-    let f = ra2_map_assets::test_support::Fixture::with_authoring();
+    scene_from_fixture(
+        &ra2_map_assets::test_support::Fixture::with_authoring(),
+        level,
+    )
+}
+
+fn scene_from_fixture(f: &ra2_map_assets::test_support::Fixture, level: u8) -> MapScene {
     let mut install = f.install();
     install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
     crate::map::load_scene_bytes(
@@ -38,6 +44,228 @@ fn polyline_key(e: &mut Editor, ctx: &egui::Context, scene: &MapScene, key: egui
         ..Default::default()
     };
     let _ = crate::test_support::run_ui(ctx, input, |ui| e.shortcuts(ui.ctx(), scene));
+}
+
+#[test]
+fn road_line_respects_shift_and_commits_the_rendered_plan_in_one_edit() {
+    let (mut editor, _, root) = editor();
+    let scene = scene_from_fixture(&ra2_map_assets::test_support::Fixture::with_joining(), 4);
+    editor.attach(&scene);
+    editor.activate_terrain_mode(TerrainMode::Road);
+    let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    let start = [26, 26];
+    let end = [46, 42];
+    editor.pointer(&scene, Some(start), true, true, false, None);
+    editor.brush_modifiers(egui::Modifiers::SHIFT);
+    editor.pointer(&scene, Some(end), false, true, false, None);
+    let straight = editor.plateau_preview_plan(&scene, end).unwrap();
+    assert!(straight.interior.contains(&[46, 26]));
+    assert!(straight.interior.iter().all(|at| at[1] == 26));
+    editor.brush_modifiers(egui::Modifiers::NONE);
+    editor.pointer(&scene, Some(end), false, true, false, None);
+    let diagonal = editor.plateau_preview_plan(&scene, end).unwrap();
+    assert!(diagonal.interior.contains(&start) && diagonal.interior.contains(&end));
+    assert_ne!(straight.edits, diagonal.edits);
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        before
+    );
+    editor.pointer(&scene, Some(end), false, false, true, None);
+    assert!(!editor.stroking, "{}", editor.status);
+    for (&at, &v) in &diagonal.edits {
+        assert_eq!(editor.doc.as_ref().unwrap().terrain(at), Some(v));
+    }
+    editor.history(false, &scene);
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        before
+    );
+    drop(editor);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn road_route_start_clicked_in_one_frame_does_not_confirm_a_hover_leg() {
+    let (mut editor, ctx, root) = editor();
+    let scene = scene_from_fixture(&ra2_map_assets::test_support::Fixture::with_joining(), 4);
+    editor.attach(&scene);
+    editor.activate_terrain_mode(TerrainMode::RoadPolyline);
+    let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    let start = [25, 27];
+    let hover = [39, 27];
+
+    // A complete click can arrive between two canvas frames.
+    editor.pointer(&scene, Some(start), true, false, true, None);
+    editor.pointer(&scene, Some(hover), false, false, false, None);
+    assert_eq!(editor.plateau.gesture.as_ref().unwrap().path, [start]);
+    assert!(editor.plateau_preview_plan(&scene, hover).is_ok());
+    polyline_key(&mut editor, &ctx, &scene, egui::Key::Enter);
+    assert!(editor.stroking);
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        before
+    );
+
+    editor.pointer(&scene, Some(hover), true, false, true, None);
+    assert_eq!(
+        editor.plateau.gesture.as_ref().unwrap().path,
+        [start, hover]
+    );
+    polyline_key(&mut editor, &ctx, &scene, egui::Key::Enter);
+    assert!(!editor.stroking, "{}", editor.status);
+    assert_ne!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        before
+    );
+    drop(editor);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn road_route_hover_keeps_confirmed_diagonal_and_displays_it_behind_an_error() {
+    let (mut editor, ctx, root) = editor();
+    let scene = scene_from_fixture(&ra2_map_assets::test_support::Fixture::with_joining(), 4);
+    editor.attach(&scene);
+    editor.activate_terrain_mode(TerrainMode::RoadPolyline);
+    let start = [38, 28];
+    let first = [48, 38];
+    let blocked = [48, 48];
+    let doc = editor.doc.as_mut().unwrap();
+    doc.set(Target::Overlay(blocked), Some(Value::Overlay(0, 0)))
+        .unwrap();
+    doc.commit("block hover");
+    let before = doc.snapshot().bytes().unwrap();
+
+    editor.pointer(&scene, Some(start), true, true, false, None);
+    let first_preview = editor.plateau_preview_plan(&scene, first).unwrap();
+    editor.pointer(&scene, Some(first), false, false, true, None);
+    let confirmed = editor.plateau_preview_plan(&scene, first).unwrap();
+    assert!(Arc::ptr_eq(&first_preview, &confirmed));
+
+    // The second endpoint crosses to the other side of the start. Planning
+    // all vertices at once can flip the first staircase's traversal here.
+    for end in [[48, 43], [28, 44], [48, 44]] {
+        let preview = editor.plateau_preview_plan(&scene, end).unwrap();
+        assert!(preview.interior.contains(&end));
+        assert!(confirmed.interior.is_subset(&preview.interior));
+        assert_eq!(
+            confirmed
+                .edits
+                .iter()
+                .filter(|(at, _)| at[1] <= 32)
+                .collect::<Vec<_>>(),
+            preview
+                .edits
+                .iter()
+                .filter(|(at, _)| at[1] <= 32)
+                .collect::<Vec<_>>()
+        );
+    }
+    let result = editor
+        .plateau
+        .generate(editor.doc.as_ref().unwrap(), &scene, blocked);
+    assert!(result.is_err());
+    assert!(Arc::ptr_eq(
+        &confirmed,
+        &editor.plateau.displayed_plan(result).unwrap()
+    ));
+
+    // A blocked click stays editable. Removing it restores the exact draft
+    // before it, including the already resolved staircase.
+    editor.pointer(&scene, Some(blocked), true, true, false, None);
+    editor.pointer(&scene, Some(blocked), false, false, true, None);
+    assert!(editor.plateau_preview_plan(&scene, blocked).is_err());
+    polyline_key(&mut editor, &ctx, &scene, egui::Key::Backspace);
+    assert!(Arc::ptr_eq(
+        &confirmed,
+        &editor.plateau_preview_plan(&scene, first).unwrap()
+    ));
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        before
+    );
+    drop(editor);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn road_route_connects_dragged_and_clicked_legs_and_commits_confirmed_points() {
+    let (mut editor, ctx, root) = editor();
+    let scene = scene_from_fixture(&ra2_map_assets::test_support::Fixture::with_joining(), 4);
+    editor.attach(&scene);
+    editor.activate_terrain_mode(TerrainMode::RoadPolyline);
+    let before = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    let start = [25, 27];
+    let first = [37, 27];
+    let second = [37, 39];
+    let third = [49, 39];
+    editor.pointer(&scene, Some(start), true, true, false, None);
+    editor.pointer(&scene, Some(first), false, false, true, None);
+    assert!(editor.stroking);
+    assert_eq!(
+        editor.plateau.gesture.as_ref().unwrap().path,
+        [start, first]
+    );
+
+    editor.brush_modifiers(egui::Modifiers::SHIFT);
+    editor.pointer(&scene, Some([40, 39]), true, true, false, None);
+    editor.pointer(&scene, Some([40, 39]), false, false, true, None);
+    editor.brush_modifiers(egui::Modifiers::NONE);
+    assert_eq!(
+        editor.plateau.gesture.as_ref().unwrap().path,
+        [start, first, second]
+    );
+
+    editor.pointer(&scene, Some(third), true, true, false, None);
+    editor.pointer(&scene, Some(third), false, false, true, None);
+    polyline_key(&mut editor, &ctx, &scene, egui::Key::Backspace);
+    assert_eq!(
+        editor.plateau.gesture.as_ref().unwrap().path,
+        [start, first, second]
+    );
+    editor.pointer(&scene, Some(third), true, true, false, None);
+    editor.pointer(&scene, Some(third), false, false, true, None);
+    let confirmed = editor.plateau_preview_plan(&scene, third).unwrap();
+    let hover = [49, 48];
+    assert_ne!(
+        editor.plateau_preview_plan(&scene, hover).unwrap().edits,
+        confirmed.edits
+    );
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        before
+    );
+    polyline_key(&mut editor, &ctx, &scene, egui::Key::Enter);
+    assert!(!editor.stroking, "{}", editor.status);
+    for (&at, &v) in &confirmed.edits {
+        assert_eq!(editor.doc.as_ref().unwrap().terrain(at), Some(v));
+    }
+    assert_eq!(
+        terrain_tools::value(editor.doc.as_ref().unwrap(), &scene, hover).tile,
+        scene.catalog.raw_tiles[&(scene.palette.tile_ids.unwrap().clear as u16)]
+    );
+    let after = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    editor.history(false, &scene);
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        before
+    );
+    editor.history(true, &scene);
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        after
+    );
+
+    editor.pointer(&scene, Some(third), true, true, false, None);
+    editor.pointer(&scene, Some(hover), false, false, true, None);
+    polyline_key(&mut editor, &ctx, &scene, egui::Key::Escape);
+    assert!(!editor.stroking);
+    assert_eq!(
+        editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+        after
+    );
+    drop(editor);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

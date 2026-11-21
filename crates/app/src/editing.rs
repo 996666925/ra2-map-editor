@@ -142,6 +142,7 @@ pub struct Editor {
     terrain_hover: Option<Cell>,
     cliff_repair_base: u8,
     cliff_high_left: bool,
+    road_style: ra2_map_scene::road_tools::RoadStyle,
     pub bridge_kind: ra2_map_scene::bridge_tools::BridgeKind,
     pub auto_walls: bool,
     stroke: Option<Stroke>,
@@ -249,6 +250,7 @@ impl Editor {
             terrain_hover: None,
             cliff_repair_base: 0,
             cliff_high_left: true,
+            road_style: Default::default(),
             bridge_kind: Default::default(),
             auto_walls: true,
             stroke: None,
@@ -1389,7 +1391,10 @@ impl Editor {
         } else {
             at
         };
-        let (Some(at), Some(doc)) = (at, self.doc.as_ref()) else {
+        let (Some(at), Some(doc)) = (
+            at.or_else(|| self.plateau.road_draft_end()),
+            self.doc.as_ref(),
+        ) else {
             return;
         };
         if self.terrain_mode.planned() {

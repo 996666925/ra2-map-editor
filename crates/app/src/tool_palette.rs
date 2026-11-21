@@ -36,7 +36,10 @@ impl TerrainPage {
             | TerrainMode::LandFill
             | TerrainMode::ShoreRepair
             | TerrainMode::CoastalCliff => Self::Water,
-            TerrainMode::Road | TerrainMode::RoadCut | TerrainMode::Bridge => Self::Roads,
+            TerrainMode::Road
+            | TerrainMode::RoadPolyline
+            | TerrainMode::RoadCut
+            | TerrainMode::Bridge => Self::Roads,
         }
     }
 
@@ -72,6 +75,7 @@ impl TerrainPage {
             ],
             Self::Roads => &[
                 (Road, "绘制道路"),
+                (RoadPolyline, "连续画路"),
                 (RoadCut, "切除道路"),
                 (Bridge, "架设桥梁"),
             ],

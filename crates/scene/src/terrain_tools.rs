@@ -66,11 +66,12 @@ pub enum TerrainMode {
     LandFill,
     ShoreRepair,
     Road,
+    RoadPolyline,
     RoadCut,
     CoastalCliff,
 }
 impl TerrainMode {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Subtile,
         Self::Template,
         Self::Fill,
@@ -93,6 +94,7 @@ impl TerrainMode {
         Self::LandFill,
         Self::ShoreRepair,
         Self::Road,
+        Self::RoadPolyline,
         Self::RoadCut,
         Self::CoastalCliff,
     ];
@@ -120,6 +122,7 @@ impl TerrainMode {
             Self::LandFill => "回填陆地（修补岸线）",
             Self::ShoreRepair => "修复岸线（矩形）",
             Self::Road => "道路（自动转角 / 路口）",
+            Self::RoadPolyline => "连续画路",
             Self::RoadCut => "切除道路（修补端点）",
             Self::CoastalCliff => "匹配临水悬崖（矩形）",
         }
@@ -152,6 +155,7 @@ impl TerrainMode {
                 | Self::LandFill
                 | Self::ShoreRepair
                 | Self::Road
+                | Self::RoadPolyline
                 | Self::RoadCut
                 | Self::CoastalCliff
         )

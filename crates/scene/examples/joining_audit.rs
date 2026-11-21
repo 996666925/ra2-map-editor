@@ -114,6 +114,165 @@ fn verify(
         serde_json::json!({"case":name,"terrain_cells":p.edits.len(),"overlay_cells":p.overlays.len(),"engine_reload":true,"undo_redo":true}),
     )
 }
+fn road_segments(
+    install: &mut Install,
+    scene: &MapScene,
+    theater: &str,
+    out: &Path,
+) -> Result<Vec<serde_json::Value>> {
+    use road_tools::{RoadStyle, plan_polyline, plan_segment};
+    let mut cases = Vec::new();
+    let styles: Vec<_> = road_tools::supported_styles(scene).collect();
+    ensure!(
+        styles.len() == if theater == "LUNAR" { 0 } else { 2 },
+        "stock road styles missing"
+    );
+    for style in styles {
+        let (name, width) = match style {
+            RoadStyle::Paved => ("paved", 3),
+            RoadStyle::Dirt => ("dirt", 2),
+        };
+        let mut d = document(scene);
+        let route = [[51, 58], [65, 58], [77, 72], [77, 88], [91, 88]];
+        let p = plan_polyline(&d, scene, &route, style)?;
+        ensure!(
+            route.iter().all(|at| p.interior.contains(at)),
+            "road route lost a waypoint"
+        );
+        cases.push(verify(
+            install,
+            scene,
+            &mut d,
+            &p,
+            out,
+            &format!("{name}-road-polyline"),
+            true,
+        )?);
+
+        let mut d = document(scene);
+        let a = [54, 54];
+        let b = [86, 80];
+        let p = plan_segment(&d, scene, a, b, style, false, false)?;
+        ensure!(
+            p.interior.contains(&a) && p.interior.contains(&b),
+            "line lost an endpoint"
+        );
+        ensure!(
+            p.edits == plan_segment(&d, scene, b, a, style, false, false)?.edits,
+            "reversed line changed the road"
+        );
+        ensure!(
+            p.cliffs
+                .iter()
+                .filter(|s| {
+                    let t = &scene.palette.templates[&(s.tile, 0)];
+                    t.width > 1 && t.height > 1
+                })
+                .count()
+                >= 2,
+            "diagonal did not use stock bends"
+        );
+        cases.push(verify(
+            install,
+            scene,
+            &mut d,
+            &p,
+            out,
+            &format!("{name}-segment-diagonal"),
+            true,
+        )?);
+
+        let mut d = document(scene);
+        for (suffix, a, b, cut) in [
+            ("flat", [54, 70], [86, 70], false),
+            ("cross", [70, 54], [70, 86], false),
+            ("cut", [62, 70], [78, 70], true),
+        ] {
+            let p = plan_segment(&d, scene, a, b, style, cut, false)
+                .with_context(|| format!("{name}-{suffix}"))?;
+            cases.push(verify(
+                install,
+                scene,
+                &mut d,
+                &p,
+                out,
+                &format!("{name}-segment-{suffix}"),
+                true,
+            )?);
+        }
+
+        let ids = scene.palette.tile_ids.unwrap();
+        for (axis, positive, slope) in [(0, true, 1), (1, true, 2), (0, false, 3), (1, false, 4)] {
+            let mut d = document(scene);
+            let at = |long: u16, across: u16| {
+                if axis == 0 {
+                    [long, across]
+                } else {
+                    [across, long]
+                }
+            };
+            let ramp_tile = ids.ramp_base as u16 + slope - 1;
+            let ramp = scene.catalog.raw_tiles[&ramp_tile];
+            let clear = scene.catalog.raw_tiles[&(ids.clear as u16)];
+            let lateral_offset = u16::from(style == RoadStyle::Paved);
+            for across in 69..=69 + width - 1 {
+                for long in 53..=87 {
+                    d.set(
+                        Target::Terrain(at(long, across)),
+                        Some(Value::Terrain(TerrainValue {
+                            tile: if long == 70 { ramp } else { clear },
+                            sub: 0,
+                            level: 4 + u8::from(if positive { long > 70 } else { long < 70 }),
+                            ice: 0,
+                        })),
+                    )?;
+                }
+            }
+            d.commit("graded base");
+            let a = at(54, 69 + lateral_offset);
+            let b = at(86, 69 + lateral_offset);
+            let before = d.snapshot().bytes()?;
+            let p = plan_segment(&d, scene, a, b, style, false, false);
+            if theater == "NEWURBAN" && style == RoadStyle::Paved && axis == 1 {
+                // The shipped 3x1 TMPs encode X-axis slopes instead of Y-axis slopes.
+                ensure!(
+                    p.is_err() && d.snapshot().bytes()? == before,
+                    "incompatible retail ramp should be rejected atomically"
+                );
+                continue;
+            }
+            let p = p.with_context(|| format!("{name}-segment-slope-{slope}"))?;
+            ensure!(
+                p.edits == plan_segment(&d, scene, b, a, style, false, false)?.edits,
+                "reversed grade changed the road"
+            );
+            let stamp = p
+                .cliffs
+                .iter()
+                .find(|s| s.origin == at(70, 69))
+                .context("road ramp missing")?;
+            let t = &scene.palette.templates[&(stamp.tile, 0)];
+            ensure!(
+                t.cells.len() == usize::from(width)
+                    && t.cells
+                        .iter()
+                        .all(|c| c.is_some_and(|c| u16::from(c.slope) == slope)),
+                "incorrect road ramp template"
+            );
+            cases.push(verify(
+                install,
+                scene,
+                &mut d,
+                &p,
+                out,
+                &format!("{name}-segment-slope-{slope}"),
+                true,
+            )?);
+        }
+    }
+    Ok(cases)
+}
+
 fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json::Value> {
     std::fs::create_dir_all(out)?;
     let scene = load_scene_bytes(
@@ -132,6 +291,7 @@ fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json:
     )?;
     let mut doc = document(&scene);
     let ids = scene.palette.tile_ids.unwrap();
+    let road_cases = road_segments(install, &scene, theater, out)?;
     if ids.water_base < 0 || ids.shore < 0 {
         ensure!(
             shore_tools::plan(
@@ -143,9 +303,11 @@ fn audit(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json:
             .is_err(),
             "missing shore accepted"
         );
-        return Ok(serde_json::json!({"theater":theater,"unsupported_shores_rejected":true}));
+        return Ok(
+            serde_json::json!({"theater":theater,"unsupported_shores_rejected":true,"cases":road_cases}),
+        );
     }
-    let mut cases = Vec::new();
+    let mut cases = road_cases;
     for (name, a, b, paint) in [
         ("lake", [60, 60], [72, 72], Some(true)),
         ("extend", [68, 65], [80, 78], Some(true)),

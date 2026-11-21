@@ -631,6 +631,35 @@ fn roads_recover_all_curves_and_t_junctions_and_repair_crossing_cuts() {
     assert!(shore_tools::ground(&s, value(&d, &s, [70, 70])));
 }
 #[test]
+fn road_polyline_plans_all_turns_and_rejects_a_blocker_on_the_last_leg_atomically() {
+    let (mut doc, scene) = setup();
+    let vertices = [[52, 56], [73, 56], [73, 74], [92, 74]];
+    let style = road_tools::RoadStyle::Paved;
+    let before = doc.snapshot().bytes().unwrap();
+    let plan = road_tools::plan_polyline(&doc, &scene, &vertices, style).unwrap();
+    let reverse: Vec<_> = vertices.iter().rev().copied().collect();
+    assert_eq!(
+        plan.edits,
+        road_tools::plan_polyline(&doc, &scene, &reverse, style)
+            .unwrap()
+            .edits
+    );
+    let paved = scene.palette.tile_ids.unwrap().paved_roads as u16;
+    assert!(plan.cliffs.iter().any(|stamp| stamp.tile == paved + 10));
+    assert!(plan.cliffs.iter().any(|stamp| stamp.tile == paved + 9));
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    undoable(&mut doc, &plan);
+    complete(&doc, &scene, &plan);
+    doc.undo();
+    doc.set(Target::Overlay([85, 74]), Some(Value::Overlay(0, 0)))
+        .unwrap();
+    doc.commit("block final leg");
+    let before = doc.snapshot().bytes().unwrap();
+    assert!(road_tools::plan_polyline(&doc, &scene, &vertices, style).is_err());
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
 fn roads_reject_broken_templates_dense_bends_and_resource_loss_without_writes() {
     let (mut d, mut s) = setup();
     road_tools::plan(&d, &s, [60, 60], [80, 60], false)
