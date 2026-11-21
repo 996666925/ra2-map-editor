@@ -1654,7 +1654,7 @@ export default defineMission(map,{id:'random_timer',player:House.Neutral},m=>{
         let mut frames = Vec::new();
         for frame in 0..1000 {
             let output = runtime
-                .advance_frame(&[], 67, TickLane::Ordinary, FrameEffects::default())
+                .advance_frame(&[], 67, TickLane::Ordinary, &mut FrameEffects::default())
                 .unwrap();
             if output.trigger_effects.iter().any(|effect| matches!(effect,TriggerEffect::LocalizedMessage {csf_label} if csf_label == "MISSION:RANDOM")) {
                 frames.push(frame);
@@ -1697,7 +1697,7 @@ export default defineMission(map,{id:'repeat_any',player:House.Neutral},m=>{
         let mut stages = Vec::new();
         for frame in 0..125 {
             let output = runtime
-                .advance_frame(&[], 67, TickLane::Ordinary, FrameEffects::default())
+                .advance_frame(&[], 67, TickLane::Ordinary, &mut FrameEffects::default())
                 .unwrap();
             for effect in output.trigger_effects {
                 if let TriggerEffect::LocalizedMessage { csf_label } = effect {
@@ -1743,7 +1743,7 @@ export default defineMission(map, {id:'branches', player:House.Neutral}, m => {
         let mut frames = Vec::new();
         for frame in 0..150 {
             let output = runtime
-                .advance_frame(&[], 67, TickLane::Ordinary, FrameEffects::default())
+                .advance_frame(&[], 67, TickLane::Ordinary, &mut FrameEffects::default())
                 .unwrap();
             for effect in output.trigger_effects {
                 if let TriggerEffect::LocalizedMessage { csf_label } = effect {
@@ -1785,7 +1785,7 @@ export default defineMission(map, {id:'lifecycle', player:House.Neutral}, m => {
         let mut forced = Vec::new();
         for frame in 0..150 {
             let output = runtime
-                .advance_frame(&[], 67, TickLane::Ordinary, FrameEffects::default())
+                .advance_frame(&[], 67, TickLane::Ordinary, &mut FrameEffects::default())
                 .unwrap();
             for effect in output.trigger_effects {
                 if let TriggerEffect::LocalizedMessage { csf_label } = effect {
@@ -1837,7 +1837,7 @@ export default defineMission(map, {id:'lifecycle', player:House.Neutral}, m => {
         // or moving timers. Observe externally published message actions.
         for frame in 0..1400 {
             let output = runtime
-                .advance_frame(&[], 67, TickLane::Ordinary, FrameEffects::default())
+                .advance_frame(&[], 67, TickLane::Ordinary, &mut FrameEffects::default())
                 .unwrap();
             for effect in output.trigger_effects {
                 if let TriggerEffect::LocalizedMessage { csf_label } = effect {
@@ -1891,7 +1891,7 @@ export default defineMission(map, {id:'lifecycle', player:House.Neutral}, m => {
         for _ in 0..1500 {
             let frame = runtime.simulation.session().binary_frame();
             let output = runtime
-                .advance_frame(&[], 67, TickLane::Ordinary, FrameEffects::default())
+                .advance_frame(&[], 67, TickLane::Ordinary, &mut FrameEffects::default())
                 .unwrap();
             let view = runtime.simulation.session().scenario_timer_view();
             match frame {
@@ -1932,7 +1932,7 @@ export default defineMission(map, {id:'lifecycle', player:House.Neutral}, m => {
         for _ in 0..60 {
             let frame = runtime.simulation.session().binary_frame();
             let output = runtime
-                .advance_frame(&[], 67, TickLane::Ordinary, FrameEffects::default())
+                .advance_frame(&[], 67, TickLane::Ordinary, &mut FrameEffects::default())
                 .unwrap();
             for effect in output.trigger_effects {
                 if let TriggerEffect::LocalizedMessage { csf_label } = effect {

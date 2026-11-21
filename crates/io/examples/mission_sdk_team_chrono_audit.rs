@@ -249,7 +249,8 @@ fn audit(
     let mut wait_frames = 0;
     let mut ready_low_power_frames = 0;
     for frame in 0..1200 {
-        let output = runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output =
+            runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let tick = runtime.simulation.session().tick();
         let current = state(&runtime, team_type)?;
         let now = current["actors"].as_array().unwrap();

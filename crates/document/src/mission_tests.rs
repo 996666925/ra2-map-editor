@@ -179,7 +179,7 @@ fn minimum_mission_roundtrips_through_engine_readers_and_undoes_as_one_command()
     let teams = TeamAiIniRegistry::from_sources(
         &IniFile::empty(),
         &map.ini,
-        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+        vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
     );
     assert!(teams.diagnostics.is_empty(), "{:?}", teams.diagnostics);
     assert_eq!(teams.team_types.len(), 1);

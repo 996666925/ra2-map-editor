@@ -136,7 +136,7 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
     let teams = TeamAiIniRegistry::load_retail(
         &install.manager,
         &map.ini,
-        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+        vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
     )
     .map_err(anyhow::Error::msg)?;
     let roster =
@@ -161,6 +161,7 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
             game_options: None,
             campaign_index: 0,
             restart_carry_over: CampaignCarryOver::CLEARED,
+            network: None,
         },
     )?;
     let dummy = SharedCellDummy::fresh();
@@ -249,7 +250,13 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
     // The engine logs unresolved AI references and installs the remaining data.
     sim.install_team_ai_registry(&teams, &rules);
     let post = vera20k_core::sim::runtime::finalize_constructed_scenario(
-        &mut sim, &map, &rules, &roster, None,
+        &mut sim,
+        &map,
+        &rules,
+        &roster,
+        vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
+        None,
+        None,
     )?;
     ensure!(post.navigation_published, "post-map navigation");
     sim.publish_scenario_started();
@@ -321,7 +328,7 @@ fn run(install: &Install, bytes: &[u8], difficulty: i32, loss: bool) -> Result<s
             result_frame = Some(frame);
             break;
         }
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
     }
     ensure!(
         region_frame.is_some()

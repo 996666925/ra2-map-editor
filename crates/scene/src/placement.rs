@@ -24,6 +24,7 @@ pub fn offsets(scene: &MapScene, section: &str, type_id: &str) -> Vec<(i16, i16)
             .unwrap_or(0),
     )
     .cell_offsets()
+    .collect()
 }
 pub fn footprint(scene: &MapScene, r: &Record) -> Result<Vec<Cell>> {
     let at = r.cell().context("记录坐标无效")?;

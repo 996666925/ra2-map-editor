@@ -36,7 +36,8 @@ fn audit_intro_runtime(install: &Install, bytes: &[u8], root: &std::path::Path) 
     let texts = mission_script::declared_texts(bytes)?;
     let mut timer_preserved = true;
     for _ in 0..150 {
-        let output = runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output =
+            runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         actors_preserved &= initial.iter().all(|(id, ty, owner, health, cell)| {
             sim.entities().get(*id).is_some_and(|e| {
@@ -171,7 +172,8 @@ fn audit_talk_bubbles(
     let mut actor_preserved = true;
     let mut team_members = Vec::new();
     for _ in 0..230 {
-        let output = runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output =
+            runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         if sim.session().tick() == 30 {
             team_members = sim
@@ -252,7 +254,8 @@ fn audit_scene_pause(
     let mut runtime = campaign::load(install, bytes, 1)?;
     let mut cues = Vec::new();
     for _ in 0..46 {
-        let output = runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output =
+            runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         for effect in output.trigger_effects {
             if let TriggerEffect::ScenarioPause {
                 duration,
@@ -297,7 +300,8 @@ fn audit_radar_movie(
     let mut runtime = campaign::load(install, bytes, 1)?;
     let mut cues = Vec::new();
     for _ in 0..46 {
-        let output = runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output =
+            runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         for effect in output.trigger_effects {
             if let TriggerEffect::RadarMovie {
                 index,
@@ -372,7 +376,8 @@ fn audit_team_media(
     let mut previous = None;
     let mut original_intact = true;
     for _ in 0..350 {
-        let output = runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output =
+            runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         let tick = sim.session().tick();
         for e in output.sound_events {
@@ -466,7 +471,7 @@ fn audit_chrono_screen(
             effects
         } else {
             runtime
-                .advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?
+                .advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?
                 .trigger_effects
         };
         for effect in effects {

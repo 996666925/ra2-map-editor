@@ -122,7 +122,8 @@ export default defineMission(map,{id:'spy_waypoint',player:'Americans'},m=>{
     let mut ordered_to_capture = false;
     let mut infiltrations = 0;
     for _ in 0..1200 {
-        let output = runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output =
+            runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         for event in output.sound_events {
             if let SimSoundEvent::BuildingInfiltrated {
                 owner,

@@ -217,7 +217,7 @@ fn audit(
     for frame in 0..1000 {
         let prior_fog =
             (scout(name) && selected.is_none()).then(|| runtime.simulation.fog().clone());
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let tick = runtime.simulation.session().tick();
         let current = state(&runtime, definitions)?;
         let actors = current["actors"].as_array().unwrap();

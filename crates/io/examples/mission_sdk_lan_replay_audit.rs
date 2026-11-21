@@ -7,7 +7,6 @@ use vera20k_core::{
     headless_scenario::{HeadlessScenario, load_with_launch_and_ini},
     sim::{
         replay::{ReplayLog, ReplayPlayback},
-        scenario_bootstrap::MatchLaunchDescriptor,
         world::FrameEffects,
     },
 };
@@ -35,8 +34,7 @@ fn state(scenario: &HeadlessScenario) -> Value {
 fn audit(game: PathBuf, path: PathBuf) -> Result<Value> {
     let replay = ReplayLog::load(&path)?;
     let startup = replay.standalone_startup()?;
-    let launch = MatchLaunchDescriptor::from_resolved(startup.launch_session().clone())
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let launch = startup.launch_descriptor(&replay.header.map_name)?;
     let mut loaded = load_with_launch_and_ini(
         &game,
         &replay.header.map_name,
@@ -90,7 +88,7 @@ fn audit(game: PathBuf, path: PathBuf) -> Result<Value> {
     let mut previous = 0;
     let mut at_300 = Value::Null;
     while playback.can_advance() {
-        playback.advance(&mut loaded.runtime, FrameEffects::empty())?;
+        playback.advance(&mut loaded.runtime, &mut FrameEffects::empty())?;
         let tick = loaded.sim().session().tick();
         if tick > 300 {
             continue;

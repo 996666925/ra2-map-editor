@@ -100,7 +100,7 @@ fn audit(
     let mut observed_landing = false;
     let mut cargo_preserved = true;
     for tick in 1..=1600 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         if first_carrier.is_none()
             && let Some((id, e)) = sim

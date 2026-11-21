@@ -489,7 +489,7 @@ fn native_manager(game: &Path, overlay: Option<&Path>, ares: AresSetting) -> Res
         overlay,
         MediaArchiveMode::STOCK_DIGITAL,
         ares,
-        Default::default(),
+        &Default::default(),
     )
     .context("无法打开 YR 资源归档")
 }

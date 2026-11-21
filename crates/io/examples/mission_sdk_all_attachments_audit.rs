@@ -142,7 +142,7 @@ fn run(install: &Install, bytes: &[u8], repeat: &str, save: Option<&Path>) -> Re
     let mut previous_action = false;
     let mut premature_second_action = false;
     for frame in 1..=240 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let globals = runtime.simulation.global_variables();
         let first_present = runtime.simulation.entities().get(first).is_some();
         let second_present = runtime.simulation.entities().get(second).is_some();

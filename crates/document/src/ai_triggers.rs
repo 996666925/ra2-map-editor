@@ -131,7 +131,7 @@ mod tests {
         let registry = TeamAiIniRegistry::from_sources(
             &IniFile::from_str(""),
             &map.ini,
-            vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+            vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
         );
         let ai = registry
             .ai_triggers
@@ -156,7 +156,7 @@ mod tests {
             !TeamAiIniRegistry::from_sources(
                 &IniFile::from_str(""),
                 &ini,
-                vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign
+                vera20k_core::rules::rule_policy::RulePolicy::stock_campaign()
             )
             .ai_triggers[0]
                 .enabled
@@ -165,7 +165,7 @@ mod tests {
             TeamAiIniRegistry::from_sources(
                 &IniFile::from_str(""),
                 &ini,
-                vera20k_core::rules::rule_policy::BootstrapRuleProfile::Multiplayer
+                vera20k_core::rules::rule_policy::RulePolicy::stock_multiplayer()
             )
             .ai_triggers[0]
                 .enabled
@@ -178,7 +178,7 @@ mod tests {
             !TeamAiIniRegistry::from_sources(
                 &IniFile::from_str(""),
                 &ini,
-                vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign
+                vera20k_core::rules::rule_policy::RulePolicy::stock_campaign()
             )
             .ai_triggers[0]
                 .enabled

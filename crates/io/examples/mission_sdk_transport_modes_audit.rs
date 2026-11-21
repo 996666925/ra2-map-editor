@@ -160,7 +160,7 @@ fn audit(
     let mut witnesses_preserved = true;
     let mut max_distance = 0_i64;
     for frame in 0..3600 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         let tick = sim.session().tick();
         let current = state(&runtime, team_type)?;

@@ -212,14 +212,18 @@ fn audit(install: &Install, bytes: &[u8], root: &Path, name: &str, restore: bool
         } else {
             Vec::new()
         };
-        let mut output =
-            runtime.advance_frame(&commands, 22, TickLane::Ordinary, FrameEffects::default())?;
+        let mut output = runtime.advance_frame(
+            &commands,
+            22,
+            TickLane::Ordinary,
+            &mut FrameEffects::default(),
+        )?;
         admitted_commands += output.take_admitted_commands().len();
         let tick = runtime.simulation.session().tick();
         let current = state(&runtime)?;
         if name == "allied_transport" && [30, 31, 40, 60, 100, 300].contains(&frame) {
             let sim = &runtime.simulation;
-            command_observations.push(json!({"tick":tick,"allied":sim.house_alliances().is_allied(sim.interner(),sim.interner().get("Americans").unwrap(),sim.interner().get("Russians").unwrap()),"actors":sim.entities().iter_sorted().map(|(id,e)|json!({"id":id,"mission":format!("{:?}",e.mission.effective()),"nav":format!("{:?}",e.navigation.nav_com()),"radio":format!("{:?}",e.radio_contacts)})).collect::<Vec<_>>()}));
+            command_observations.push(json!({"tick":tick,"allied":sim.house_alliances().is_allied(sim.interner(),sim.interner().get("Americans").unwrap(),sim.interner().get("Russians").unwrap()),"actors":sim.entities().iter_sorted().map(|(id,e)|json!({"id":id,"mission":format!("{:?}",e.mission.effective()),"nav":format!("{:?}",e.navigation.nav_com()),"radio":format!("{:?}",e.seldom.radio_contacts)})).collect::<Vec<_>>()}));
         }
         if current["actors"]
             .as_array()

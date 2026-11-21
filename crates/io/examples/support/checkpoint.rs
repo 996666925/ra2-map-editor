@@ -37,7 +37,7 @@ pub fn restore_checkpoint(
             .resolved_terrain()
             .context("checkpoint terrain")?
             .clone(),
-        runtime.simulation.terrain_speed_config().clone(),
+        *runtime.simulation.terrain_speed_config(),
     )?;
     restored.intern_rule_type_ids(&runtime.resources.rules);
     restored.resolve_type_handles(&runtime.resources.rules);
@@ -48,7 +48,6 @@ pub fn restore_checkpoint(
     let dummy = runtime.simulation.effective_shared_cell_dummy();
     dummy.adopt_prepared_load_state(&restored.effective_shared_cell_dummy());
     restored.bind_shared_cell_dummy(dummy);
-    restored.install_fresh_process_main(runtime.simulation.main_rng());
     restored.publish_scenario_started();
     std::fs::write(path, &bytes)?;
     runtime.simulation = restored;

@@ -209,8 +209,12 @@ fn audit(install: &Install, bytes: &[u8], root: &Path, name: &str, restore: bool
         } else {
             Vec::new()
         };
-        let output =
-            runtime.advance_frame(&commands, 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output = runtime.advance_frame(
+            &commands,
+            22,
+            TickLane::Ordinary,
+            &mut FrameEffects::default(),
+        )?;
         let tick = runtime.simulation.session().tick();
         let current = state(&runtime, actor);
         for effect in output.trigger_effects {

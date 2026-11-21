@@ -204,7 +204,7 @@ fn main() -> Result<()> {
                 .health
                 .current();
             for tick in 1..=240 {
-                runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+                runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
                 if tick == 1 {
                     growth_timer = saved_field::read(
                         &runtime.simulation,

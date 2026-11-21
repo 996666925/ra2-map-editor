@@ -189,7 +189,7 @@ export default defineMission(map,{id:'discovery_spotlight',player:House.American
 fn objects(runtime: &SimRuntime) -> Value {
     let sim = &runtime.simulation;
     json!(sim.entities().iter_sorted().map(|(id,e)|json!({"id":id,"type":sim.interner().resolve(e.type_ref()),"owner":sim.interner().resolve(e.owner()),
-        "health":e.health.current(),"cell":sim.object_coords_cell(id),"discovery":e.discovery,"online":e.building_online()})).collect::<Vec<_>>())
+        "health":e.health.current(),"cell":sim.object_coords_cell(id),"discovery":e.seldom.discovery,"online":e.building_online()})).collect::<Vec<_>>())
 }
 fn audit(install: &Install, bytes: &[u8], root: &Path, name: &str, restore: bool) -> Result<Value> {
     std::fs::create_dir_all(root)?;
@@ -247,8 +247,12 @@ fn audit(install: &Install, bytes: &[u8], root: &Path, name: &str, restore: bool
         } else {
             Vec::new()
         };
-        let output =
-            runtime.advance_frame(&commands, 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output = runtime.advance_frame(
+            &commands,
+            22,
+            TickLane::Ordinary,
+            &mut FrameEffects::default(),
+        )?;
         let sim = &runtime.simulation;
         let tick = sim.session().tick();
         let current = objects(&runtime);
@@ -397,6 +401,7 @@ fn audit(install: &Install, bytes: &[u8], root: &Path, name: &str, restore: bool
                     .entities()
                     .get(target)
                     .unwrap()
+                    .seldom
                     .discovery
                     .discovered_by_current_house()
                     == expected_discovery,

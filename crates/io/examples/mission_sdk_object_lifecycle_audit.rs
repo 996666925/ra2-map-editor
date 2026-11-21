@@ -140,7 +140,7 @@ fn control(install: &mut Install, root: &Path) -> Result<serde_json::Value> {
     let mut transferred = false;
     let mut witness_intact = true;
     for _ in 0..400 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         let flags = sim.global_variables();
         witness_intact &= sim
@@ -220,7 +220,7 @@ fn restore(install: &mut Install, root: &Path) -> Result<serde_json::Value> {
     let mut witness_intact = true;
     let mut restored_types = Vec::new();
     for _ in 0..600 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         let flags = sim.global_variables();
         witness_intact &= sim

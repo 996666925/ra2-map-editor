@@ -267,7 +267,7 @@ impl Install {
                 vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::load_retail(
                     &self.manager,
                     &vera20k_core::rules::ini_parser::IniFile::empty(),
-                    vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+                    vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
                 )
                 .map(std::sync::Arc::new)
             })

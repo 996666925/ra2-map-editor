@@ -154,7 +154,7 @@ fn retail_tank_enters_and_exits_editor_authored_tunnel() {
                 &commands,
                 SIM_TICK_MS,
                 TickLane::Ordinary,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             )
             .unwrap();
         let tank = runtime.simulation.entities().get(id).unwrap();

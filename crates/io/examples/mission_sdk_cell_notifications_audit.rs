@@ -145,7 +145,7 @@ fn actor_state(runtime: &SimRuntime, actor: u64) -> Result<Value> {
         json!({"id":actor,"cell":sim.object_coords_cell(actor),"coord":[coord.x,coord.y,coord.z],
         "health":entity.health.current(),"owner":sim.interner().resolve(entity.owner()),
         "type":sim.interner().resolve(entity.type_ref()),
-        "disguise":entity.disguise.as_ref().map(|d|json!({"active":d.is_disguised(),
+        "disguise":entity.seldom.disguise.as_ref().map(|d|json!({"active":d.is_disguised(),
             "type":d.type_id().map(|id|sim.interner().resolve(id)),"house":d.house().map(|id|sim.interner().resolve(id))}))}),
     )
 }
@@ -240,8 +240,12 @@ fn audit(install: &Install, bytes: &[u8], root: &Path, name: &str, restore: bool
             .into_iter()
             .map(|c| CommandEnvelope::synchronized(c, tick))
             .collect::<Vec<_>>();
-        let output =
-            runtime.advance_frame(&envelopes, 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output = runtime.advance_frame(
+            &envelopes,
+            22,
+            TickLane::Ordinary,
+            &mut FrameEffects::default(),
+        )?;
         let sim = &runtime.simulation;
         let tick = sim.session().tick();
         let actors = ids

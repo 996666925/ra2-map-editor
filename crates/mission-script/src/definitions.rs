@@ -54,7 +54,7 @@ pub(super) fn script_indices(
     let local = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),
         &ini,
-        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+        vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
     );
     let mut indices = BTreeMap::new();
     let mut canonical = BTreeSet::new();

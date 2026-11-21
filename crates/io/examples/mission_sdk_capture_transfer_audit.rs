@@ -36,7 +36,7 @@ fn capture(
         )],
         22,
         TickLane::Ordinary,
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
     )?;
     Ok(())
 }
@@ -149,7 +149,7 @@ export default defineMission(map,{id:'capture_transfer',player:'Americans'},m=>{
         .context("Russian power plant")?;
     capture(&mut runtime, americans, first, plant)?;
     for _ in 0..1200 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let captured = runtime
             .simulation
             .entities()
@@ -170,7 +170,7 @@ export default defineMission(map,{id:'capture_transfer',player:'Americans'},m=>{
     );
     capture(&mut runtime, americans, second, plant)?;
     for _ in 0..1200 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         if runtime.simulation.global_variables()[0] {
             break;
         }
@@ -185,7 +185,7 @@ export default defineMission(map,{id:'capture_transfer',player:'Americans'},m=>{
         "visitor Engineer must remain available for repeat entry"
     );
     for _ in 0..300 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
     }
     ensure!(
         !runtime.simulation.global_variables()[1],
@@ -193,7 +193,7 @@ export default defineMission(map,{id:'capture_transfer',player:'Americans'},m=>{
     );
     capture(&mut runtime, americans, second, plant)?;
     for _ in 0..180 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
     }
     let repeat_reset_timer = !runtime.simulation.global_variables()[1];
     let tick = runtime.simulation.session().tick();
@@ -209,10 +209,10 @@ export default defineMission(map,{id:'capture_transfer',player:'Americans'},m=>{
         )],
         22,
         TickLane::Ordinary,
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
     )?;
     for _ in 0..900 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         if runtime.simulation.global_variables()[1] {
             break;
         }

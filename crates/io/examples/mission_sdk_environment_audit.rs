@@ -157,7 +157,8 @@ fn audit(install: &Install, bytes: &[u8], root: &Path, name: &str, restore: bool
     let mut last_health = initial["target"]["health"].clone();
     let mut health_changes = Vec::new();
     for _ in 0..800 {
-        let output = runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output =
+            runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let current = observation(&runtime, target, witness);
         let tick = runtime.simulation.session().tick();
         for request in output.combat_lights {

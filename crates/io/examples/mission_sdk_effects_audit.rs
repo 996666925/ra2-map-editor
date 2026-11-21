@@ -75,7 +75,7 @@ fn audit(install: &Install, bytes: &[u8], root: &Path, name: &str, restore: bool
     let mut no_projectile = true;
     let mut witness_unchanged = true;
     for _ in 0..200 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         let tick = sim.session().tick();
         let health = sim

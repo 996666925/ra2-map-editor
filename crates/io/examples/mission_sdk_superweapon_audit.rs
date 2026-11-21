@@ -23,7 +23,7 @@ mod campaign;
 mod checkpoint;
 
 fn advance(runtime: &mut SimRuntime) -> Result<()> {
-    runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+    runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
     Ok(())
 }
 
@@ -47,7 +47,7 @@ fn fire(runtime: &mut SimRuntime, name: &str, cell: [u16; 2]) -> Result<bool> {
         &[CommandEnvelope::synchronized(command, frame)],
         22,
         TickLane::Ordinary,
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
     )?;
     Ok(result.sound_events.iter().any(|event| {
         matches!(event,

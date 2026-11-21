@@ -117,7 +117,7 @@ fn authored(first: bool, branch: bool) -> Result<Vec<u8>> {
 fn advance(rt: &mut vera20k_core::sim::runtime::SimRuntime, frames: usize) -> Result<[bool; 3]> {
     let mut media = [false; 3];
     for _ in 0..frames {
-        let output = rt.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output = rt.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         for effect in output.trigger_effects {
             use vera20k_core::sim::trigger_runtime::TriggerEffect;
             match effect {
@@ -128,7 +128,14 @@ fn advance(rt: &mut vera20k_core::sim::runtime::SimRuntime, frames: usize) -> Re
                 _ => {}
             }
         }
-        media[2] |= output.sound_events.iter().any(|e| matches!(e, vera20k_core::sim::world::SimSoundEvent::VocCentered { sound_id } if sound_id == "PackageSound"));
+        let names = rt.resources.rules.sound_names();
+        media[2] |= output.sound_events.iter().any(|event| {
+            matches!(
+                event,
+                vera20k_core::sim::world::SimSoundEvent::VocCentered { sound_id }
+                    if sound_id.resolve(Some(names)) == Some("PackageSound")
+            )
+        });
     }
     Ok(media)
 }

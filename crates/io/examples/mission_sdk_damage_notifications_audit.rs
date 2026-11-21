@@ -215,8 +215,12 @@ fn audit(
         } else {
             vec![]
         };
-        let output =
-            runtime.advance_frame(&commands, 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output = runtime.advance_frame(
+            &commands,
+            22,
+            TickLane::Ordinary,
+            &mut FrameEffects::default(),
+        )?;
         let sim = &runtime.simulation;
         let tick = sim.session().tick();
         let health = sim.entities().get(target).map_or(0, |e| e.health.current());

@@ -172,7 +172,7 @@ fn audit(
     let mut witnesses_preserved = true;
     let mut cargo_crossing_intact = true;
     for _ in 0..2400 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let current = state(&runtime, team);
         let actors = current["actors"].as_array().unwrap();
         let ship = actors

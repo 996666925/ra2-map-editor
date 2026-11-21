@@ -452,7 +452,7 @@ fn reward_unit_isolated_cloning_rebuild_reload_cleanup_and_conflicts() {
     let registry = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),
         &ini,
-        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+        vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
     );
     let mut order = Vec::<&str>::new();
     for id in registry
@@ -2003,7 +2003,7 @@ export default defineMission(map,{id:'bubbles',player:House.Neutral},m=>{
     let registry = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),
         &ini,
-        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+        vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
     );
     let actions = &registry.scripts[0].actions;
     assert_eq!(
@@ -2066,7 +2066,7 @@ export default defineMission(map,{id:'orders',player:House.Neutral},m=>{
     let registry = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),
         &ini,
-        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+        vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
     );
     let parsed = registry.scripts.iter().find(|s| s.id == script).unwrap();
     assert_eq!(parsed.actions.len(), 17);
@@ -2159,7 +2159,7 @@ export default defineMission(map,{id:'change_script',player:House.Neutral},m=>{
     let registry = TeamAiIniRegistry::from_sources(
         &fixed,
         &ini,
-        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+        vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
     );
     let mut native_order = vec![];
     for id in registry
@@ -2955,9 +2955,9 @@ export default defineMission(map, {id:'ai_defs', mode:MissionMode.Multiplayer}, 
             &vera20k_core::rules::ini_parser::IniFile::from_str(""),
             &map.ini,
             if multiplayer {
-                vera20k_core::rules::rule_policy::BootstrapRuleProfile::Multiplayer
+                vera20k_core::rules::rule_policy::RulePolicy::stock_multiplayer()
             } else {
-                vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign
+                vera20k_core::rules::rule_policy::RulePolicy::stock_campaign()
             },
         );
         assert_eq!(registry.ai_triggers.len(), 2);
@@ -3440,7 +3440,7 @@ export default defineMission(map, {id:'shared', player:House.Neutral}, m => {
     let registry = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),
         &ini,
-        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+        vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
     );
     assert_eq!(registry.team_types.len(), 2);
     assert_eq!(registry.task_forces.len(), 1);
@@ -3894,7 +3894,7 @@ export default defineMission(map,{id:'new_handlers',mode:MissionMode.Multiplayer
     let scripts = vera20k_core::rules::team_ai_ini::TeamAiIniRegistry::from_sources(
         &vera20k_core::rules::ini_parser::IniFile::empty(),
         &ini,
-        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+        vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
     );
     assert_eq!(
         scripts.scripts[0]

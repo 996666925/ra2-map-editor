@@ -127,7 +127,7 @@ export default defineMission(map,{id:'special_building_entry',player:'Americans'
     let mut bunker_installed_frame = None;
     let mut reactor_absorbed_frame = None;
     for _ in 0..1400 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         let grinder_team = sim
             .team_script_vm()

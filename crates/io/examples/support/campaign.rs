@@ -84,7 +84,7 @@ fn load_stage_with_options(
     let teams = TeamAiIniRegistry::load_retail(
         &install.manager,
         &map.ini,
-        vera20k_core::rules::rule_policy::BootstrapRuleProfile::Campaign,
+        vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
     )
     .map_err(anyhow::Error::msg)?;
     let roster =
@@ -130,6 +130,7 @@ fn load_stage_with_options(
             game_options: options,
             campaign_index: 0,
             restart_carry_over: incoming.unwrap_or(CampaignCarryOver::CLEARED),
+            network: None,
         },
     )?;
     let dummy = SharedCellDummy::fresh();
@@ -245,7 +246,13 @@ fn load_stage_with_options(
     // The engine logs unresolved AI references and installs the remaining data.
     sim.install_team_ai_registry(&teams, &rules);
     let post = vera20k_core::sim::runtime::finalize_constructed_scenario(
-        &mut sim, &map, &rules, &roster, None,
+        &mut sim,
+        &map,
+        &rules,
+        &roster,
+        vera20k_core::rules::rule_policy::RulePolicy::stock_campaign(),
+        None,
+        None,
     )?;
     ensure!(post.navigation_published, "post-map navigation");
     sim.publish_scenario_started();

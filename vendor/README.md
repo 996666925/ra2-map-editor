@@ -4,8 +4,8 @@
 The editor pins the engine through its Git tree entry, rather than a moving branch.
 Use `git submodule status` for the revision selected by your editor checkout.
 
-The current integration targets VERA20k 0.3.7 at
-`c33de0916c34578e0d3f531962ba389ffc806558` (updated 2026-11-19).
+The current integration targets VERA20k 0.3.9 at
+`63253c5bb78af4eb7232abab8da727c0d1716bd5` (updated 2026-11-21).
 The engine mounts `ECACHE*.MIX` and `ELOCAL*.MIX` through the shared asset
 manager. Editor building previews use its RULES slot-9 configuration and
 32-facing frame table for healthy SHP turrets; ART `TurretAnim` is ignored.
@@ -27,8 +27,9 @@ Building voxel guns use the engine's bound physical model slots, including an
 explicit `VoxelBarrelFile`, instead of reconstructing filenames in the editor.
 Stock team script actions 18, 28, 29, 35, 36, 44 and 45 are available in the
 authoring schema and TypeScript SDK. Extended player starts require an explicit
-MaxPlayers declaration and all declared waypoints (up to 120). Direct `-SPAWN`
-playtests still address only the first 30. See the engine map format
+MaxPlayers declaration and all declared waypoints (up to 120). Offline `-SPAWN`
+playtests can use all 120 slots with one local human and up to 119 AI opponents.
+See the engine map format
 [specification](vera20k/docs/map-format.md). Overlay pack dimensions already
 follow the map header cell grid, including extended maps with overlays below 512.
 

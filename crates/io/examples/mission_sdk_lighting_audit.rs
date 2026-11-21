@@ -83,7 +83,7 @@ fn launch_dominator(runtime: &mut SimRuntime) -> Result<()> {
         &[CommandEnvelope::synchronized(command, sim.session().tick())],
         22,
         TickLane::Ordinary,
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
     )?;
     ensure!(result.sound_events.iter().any(|event| matches!(event,
         vera20k_core::sim::world::SimSoundEvent::SuperWeaponLaunched {owner:by,sw_type,..} if *by==owner && *sw_type==sw_type_id)),"dominator launch");
@@ -156,7 +156,7 @@ fn audit(
             launch_dominator(&mut runtime)?;
             launched = true;
         } else {
-            runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+            runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         }
         let sim = &runtime.simulation;
         let tick = sim.session().tick();

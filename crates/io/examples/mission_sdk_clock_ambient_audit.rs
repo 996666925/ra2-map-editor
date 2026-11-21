@@ -196,8 +196,12 @@ export default defineMission(map,{{id:'clock_{name}',player:House.Americans}},m=
             let mut messages = Vec::new();
             let mut checkpoint_state = Value::Null;
             for tick in 1..=400 {
-                let output =
-                    runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+                let output = runtime.advance_frame(
+                    &[],
+                    22,
+                    TickLane::Ordinary,
+                    &mut FrameEffects::default(),
+                )?;
                 for effect in output.trigger_effects {
                     if let TriggerEffect::LocalizedMessage { csf_label } = effect {
                         messages.push(json!({"tick":tick,"event":texts.get(&csf_label).context("declared message")?}));

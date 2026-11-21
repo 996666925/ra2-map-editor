@@ -1,10 +1,22 @@
-//! VERA -SPAWN Battle options: one local player and up to 29 AI opponents.
+//! VERA offline -SPAWN Battle options: one local player and up to 119 AI opponents.
 use anyhow::{Context, Result, ensure};
 use vera20k_core::map::map_file::MapFile;
-pub const MAX_PLAYTEST_PLAYERS: u8 = vera20k_core::skirmish_launch::NETWORK_PLAYER_SLOT_COUNT as u8;
+pub const MAX_PLAYTEST_PLAYERS: u8 = vera20k_core::skirmish_launch::SKIRMISH_MAX_SLOT_COUNT as u8;
 pub const PLAYER_COLOR_COUNT: u8 = 8;
 
 pub use ra2_map_document::player_starts::indices as player_start_indices;
+
+/// Keep the prefix whose waypoint numbers match the engine's gathered start indices.
+/// The input is the sorted list of valid starts from `player_starts`.
+pub fn contiguous_player_starts(mut starts: Vec<u8>) -> Vec<u8> {
+    let count = starts
+        .iter()
+        .enumerate()
+        .take_while(|&(index, &waypoint)| index == usize::from(waypoint))
+        .count();
+    starts.truncate(count);
+    starts
+}
 
 pub fn map_player_starts(map: &MapFile) -> Vec<u8> {
     let (Ok(width), Ok(height)) = (
@@ -14,7 +26,7 @@ pub fn map_player_starts(map: &MapFile) -> Vec<u8> {
         return Vec::new();
     };
     let side = map.header.cell_grid().side();
-    player_start_indices(
+    contiguous_player_starts(player_start_indices(
         map.ini
             .section_or_empty("Basic")
             .read_int("MaxPlayers", 0)
@@ -33,10 +45,7 @@ pub fn map_player_starts(map: &MapFile) -> Vec<u8> {
                     )
             })
             .filter_map(|w| u8::try_from(w.index).ok()),
-    )
-    .into_iter()
-    .filter(|&slot| slot < MAX_PLAYTEST_PLAYERS)
-    .collect()
+    ))
 }
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -158,13 +167,13 @@ impl PlayOptions {
         let starts = map_player_starts(map);
         ensure!(
             starts.contains(&self.start),
-            "试玩起点航点 {} 未定义为有效玩家起点（0～29）",
+            "航点 {} 不在可试玩的起点范围内，试玩起点需从航点 0 连续编号",
             self.start
         );
         let available: Vec<_> = starts.into_iter().filter(|&n| n != self.start).collect();
         ensure!(
             available.len() >= usize::from(self.ai),
-            "地图有效玩家起点不足以容纳 {} 个 AI（总人数最多 30 人）",
+            "地图有效玩家起点不足以容纳 {} 个 AI",
             self.ai
         );
         let yes = |v| if v { "Yes" } else { "No" };
@@ -241,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn a_120_start_map_only_offers_the_first_thirty_starts_to_spawn() {
+    fn extended_map_exposes_all_offline_spawn_starts() {
         let map = vera20k_core::map::map_file::load_from_bytes(
             ra2_map_document::new_map::NewMapOptions {
                 players: ra2_map_document::new_map::MAX_PLAYERS,
@@ -257,12 +266,12 @@ mod tests {
         );
         assert!(
             PlayOptions {
-                ai: MAX_PLAYTEST_PLAYERS - 1,
+                ai: MAX_PLAYTEST_PLAYERS,
                 start: MAX_PLAYTEST_PLAYERS - 1,
                 ..Default::default()
             }
             .spawn_ini(&map)
-            .is_ok()
+            .is_err()
         );
         assert!(
             PlayOptions {
@@ -275,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn thirty_player_spawn_writes_every_slot_and_reuses_only_stock_colors() {
+    fn full_offline_spawn_writes_every_slot_and_reuses_only_stock_colors() {
         let bytes = ra2_map_document::new_map::NewMapOptions {
             players: MAX_PLAYTEST_PLAYERS,
             ..Default::default()
@@ -285,8 +294,8 @@ mod tests {
         let map = vera20k_core::map::map_file::load_from_bytes(bytes).unwrap();
         for color in 0..PLAYER_COLOR_COUNT {
             let options = PlayOptions {
-                ai: 29,
-                start: 29,
+                ai: MAX_PLAYTEST_PLAYERS - 1,
+                start: MAX_PLAYTEST_PLAYERS - 1,
                 color,
                 ai_side: 8,
                 difficulty: 0,
@@ -297,12 +306,12 @@ mod tests {
             );
             let settings = ini.section_or_empty("Settings");
             assert_eq!(settings.read_int("PlayerCount", -1), 1);
-            assert_eq!(settings.read_int("AIPlayers", -1), 29);
+            assert_eq!(settings.read_int("AIPlayers", -1), i32::from(options.ai));
             assert_eq!(settings.read_int("Color", -1), i32::from(color));
             let locations = ini.section_or_empty("SpawnLocations");
-            assert_eq!(locations.read_int("Multi1", -1), 29);
+            assert_eq!(locations.read_int("Multi1", -1), i32::from(options.start));
             let mut first_eight_colors = std::collections::BTreeSet::from([i32::from(color)]);
-            for slot in 2..=30 {
+            for slot in 2..=i32::from(MAX_PLAYTEST_PLAYERS) {
                 let key = format!("Multi{slot}");
                 assert_eq!(locations.read_int(&key, -1), slot - 2);
                 assert_eq!(ini.section_or_empty("HouseCountries").read_int(&key, -1), 8);
@@ -319,20 +328,9 @@ mod tests {
                 "HouseHandicaps",
                 "HouseColors",
             ] {
-                assert!(!ini.section_or_empty(section).is_present("Multi31"));
+                let next_slot = format!("Multi{}", u16::from(MAX_PLAYTEST_PLAYERS) + 1);
+                assert!(!ini.section_or_empty(section).is_present(&next_slot));
             }
-        }
-        for options in [
-            PlayOptions {
-                ai: 30,
-                ..Default::default()
-            },
-            PlayOptions {
-                start: 30,
-                ..Default::default()
-            },
-        ] {
-            assert!(options.spawn_ini(&map).is_err());
         }
     }
 
@@ -359,6 +357,34 @@ mod tests {
         );
         map.waypoints.get_mut(&29).unwrap().rx = 1024;
         assert_eq!(map_player_starts(&map), (0..8).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn battle_does_not_advertise_sparse_start_indices() {
+        let bytes = ra2_map_document::new_map::NewMapOptions {
+            players: 8,
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap();
+        let mut map = vera20k_core::map::map_file::load_from_bytes(bytes).unwrap();
+        map.waypoints.retain(|slot, _| matches!(*slot, 0 | 7));
+        assert_eq!(map_player_starts(&map), vec![0]);
+        assert!(PlayOptions::default().spawn_ini(&map).is_ok());
+        for options in [
+            PlayOptions {
+                start: 7,
+                ..Default::default()
+            },
+            PlayOptions {
+                ai: 1,
+                ..Default::default()
+            },
+        ] {
+            assert!(options.spawn_ini(&map).is_err());
+        }
+        map.waypoints.remove(&0);
+        assert!(map_player_starts(&map).is_empty());
     }
 
     #[test]

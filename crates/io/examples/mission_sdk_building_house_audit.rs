@@ -159,7 +159,7 @@ export default defineMission(map,{id:'building_house',player:'Americans'},m=>{
     let mut generator_stayed_online = true;
     let mut created = None;
     for _ in 0..1200 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         let flags = sim.global_variables();
         let plant = sim

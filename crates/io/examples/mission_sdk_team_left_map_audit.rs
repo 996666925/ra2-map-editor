@@ -179,7 +179,8 @@ fn audit(
     let mut witnesses_preserved = true;
     let mut healthy_until_removed = true;
     for frame in 0..2200 {
-        let output = runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        let output =
+            runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         let tick = sim.session().tick();
         let current = state(&runtime, &ids)?;

@@ -197,7 +197,7 @@ export default defineMission(map,{id:'multiplayer_audit',mode:MissionMode.Multip
                         &[],
                         22,
                         TickLane::Ordinary,
-                        FrameEffects::default(),
+                        &mut FrameEffects::default(),
                     )?;
                     let current = state(&scenario);
                     if tick == 2 {

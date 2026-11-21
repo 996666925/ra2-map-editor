@@ -135,7 +135,7 @@ fn main() -> Result<()> {
                         &[],
                         22,
                         TickLane::Ordinary,
-                        FrameEffects::default(),
+                        &mut FrameEffects::default(),
                     )?;
                 }
                 if saved_at == Some(tick) {

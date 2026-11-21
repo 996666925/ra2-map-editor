@@ -175,7 +175,7 @@ export default defineMission(map,{id:'team_behavior',player:'Americans'},m=>{
     let mut previous_cursor = None;
     let mut timeline = Vec::new();
     for _ in 0..1200 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         let frame = sim.session().binary_frame();
         let flags = sim.global_variables();

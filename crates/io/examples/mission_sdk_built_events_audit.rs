@@ -229,7 +229,7 @@ fn audit(install: &Install, bytes: &[u8], root: &Path, case: Case, restore: bool
                 }) && sim.entities().iter_sorted().any(|(_, e)| {
                     e.owner() == owner
                         && sim.interner().resolve(e.type_ref()) == case.factory
-                        && e.radio_contacts.is_empty()
+                        && e.seldom.radio_contacts.is_empty()
                 })))
             && delivered.get(case.first).is_some_and(|t| {
                 tick > *t
@@ -329,7 +329,7 @@ fn audit(install: &Install, bytes: &[u8], root: &Path, case: Case, restore: bool
             &commands,
             22,
             TickLane::Ordinary,
-            FrameEffects::default().with_production_strip(&visits, &|_| {}),
+            &mut FrameEffects::default().with_production_strip(&visits),
         )?;
         let sim = &runtime.simulation;
         let tick = sim.session().tick();

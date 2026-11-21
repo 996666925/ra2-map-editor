@@ -225,7 +225,7 @@ fn main() -> Result<()> {
                 &commands,
                 22,
                 vera20k_core::sim::world::TickLane::Ordinary,
-                vera20k_core::sim::world::FrameEffects::default(),
+                &mut vera20k_core::sim::world::FrameEffects::default(),
             )?;
             let sim = &scenario.runtime.simulation;
             if ticks.contains(&(sim.session().tick() as i32)) || sim.session().tick() == 1000 {

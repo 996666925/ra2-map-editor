@@ -208,7 +208,7 @@ fn run(
         if !expect_team && frame >= 1000 && (!check_base || rebuilt.is_some()) {
             break;
         }
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
     }
     ensure!(
         first_team.is_some() == expect_team,

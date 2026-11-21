@@ -651,27 +651,7 @@ pub fn height_with_change(
         .filter(|r| r.section != "Waypoints" && r.section != "Smudge")
     {
         if let Some(at) = record.cell() {
-            let type_id = record.type_id();
-            let image = scene
-                .catalog
-                .rules
-                .section_or_empty(&type_id)
-                .read_name("Image", 256)
-                .unwrap_or(&type_id);
-            let foundation = vera20k_core::rules::foundation::Foundation::Stock(
-                scene
-                    .catalog
-                    .art
-                    .resolve_metadata_entry(&type_id, image)
-                    .and_then(|art| art.foundation)
-                    .unwrap_or(0),
-            );
-            let offsets = if record.section == "Structures" {
-                foundation.cell_offsets()
-            } else {
-                vec![(0, 0)]
-            };
-            for (dx, dy) in offsets {
+            for (dx, dy) in crate::placement::offsets(scene, &record.section, &record.type_id()) {
                 protected.insert((
                     i32::from(at[0]) + i32::from(dx),
                     i32::from(at[1]) + i32::from(dy),

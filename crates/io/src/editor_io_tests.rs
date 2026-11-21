@@ -720,7 +720,7 @@ fn session_config_uses_selected_ini_roots_and_keeps_original_art_available() {
         None,
         vera20k_core::assets::asset_manager::MediaArchiveMode::STOCK_DIGITAL,
         prepared.ares,
-        Default::default(),
+        &Default::default(),
     )
     .unwrap()
     .with_selected_ini_roots(roots);

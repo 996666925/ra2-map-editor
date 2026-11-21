@@ -98,7 +98,7 @@ fn main() -> Result<()> {
                     &[],
                     22,
                     vera20k_core::sim::world::TickLane::Ordinary,
-                    vera20k_core::sim::world::FrameEffects::default(),
+                    &mut vera20k_core::sim::world::FrameEffects::default(),
                 )?;
             }
             std::fs::write(

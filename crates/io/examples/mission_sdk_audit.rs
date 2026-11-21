@@ -446,8 +446,16 @@ export default defineMission(map,{id:'audit_two',player:'Americans'},m=>{
         if runtime.simulation.global_variables()[48] && rebuilt {
             break;
         }
-        let output = runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
-        sound|=output.sound_events.iter().any(|e|matches!(e,vera20k_core::sim::world::SimSoundEvent::VocCentered{sound_id} if sound_id=="SdkSound"));
+        let output =
+            runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
+        let names = runtime.resources.rules.sound_names();
+        sound |= output.sound_events.iter().any(|event| {
+            matches!(
+                event,
+                vera20k_core::sim::world::SimSoundEvent::VocCentered { sound_id }
+                    if sound_id.resolve(Some(names)) == Some("SdkSound")
+            )
+        });
         theme |= output.trigger_effects.iter().any(|e| {
             matches!(
                 e,
@@ -546,7 +554,7 @@ export default defineMission(map,{id:'audit_two',player:'Americans'},m=>{
         )],
         22,
         TickLane::Ordinary,
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
     )?;
     next.advance_frame(
         &[CommandEnvelope::new(
@@ -559,7 +567,7 @@ export default defineMission(map,{id:'audit_two',player:'Americans'},m=>{
         )],
         22,
         TickLane::Ordinary,
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
     )?;
     ensure!(
         !next.simulation.global_variables()[43],
@@ -585,7 +593,7 @@ export default defineMission(map,{id:'audit_two',player:'Americans'},m=>{
                 &root.join("transport-checkpoint.bin"),
             )?);
         }
-        next.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        next.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         if next.simulation.global_variables()[46] {
             break;
         }
@@ -647,7 +655,7 @@ export default defineMission(map,{id:'audit_two',player:'Americans'},m=>{
         )],
         22,
         TickLane::Ordinary,
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
     )?;
     ensure!(output.sound_events.iter().any(|effect| matches!(effect,
         vera20k_core::sim::world::SimSoundEvent::SuperWeaponLaunched { owner: fired_by, sw_type, .. }
@@ -682,7 +690,7 @@ export default defineMission(map,{id:'audit_two',player:'Americans'},m=>{
         )],
         22,
         TickLane::Ordinary,
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
     )?;
     for _ in 0..30 {
         if next.simulation.global_variables()[43]
@@ -691,7 +699,7 @@ export default defineMission(map,{id:'audit_two',player:'Americans'},m=>{
         {
             break;
         }
-        next.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        next.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
     }
     ensure!(
         next.simulation.global_variables()[43]
@@ -718,7 +726,7 @@ export default defineMission(map,{id:'audit_two',player:'Americans'},m=>{
         {
             break;
         }
-        next.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        next.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
     }
     ensure!(
         next.simulation.global_variables()[39..43]

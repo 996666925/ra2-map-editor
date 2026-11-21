@@ -537,7 +537,7 @@ mod tests {
 
     #[test]
     fn house_bindings_follow_the_engine_registration_flags() {
-        let source = include_str!("../../../vendor/vera20k/src/sim/trigger_runtime.rs");
+        let source = include_str!("../../../vendor/vera20k/src/sim/trigger_runtime/definitions.rs");
         let classification = source
             .split("fn event_classification(")
             .nth(1)
@@ -597,13 +597,16 @@ mod tests {
         // Replace longer identifiers first (PLAY_SOUND_AT_WAYPOINT contains
         // PLAY_SOUND). Otherwise the adapter would silently miss action 99.
         constants.sort_by_key(|(name, _)| std::cmp::Reverse(name.len()));
-        let body = source
-            .split("fn execute_live_trigger_action(")
-            .nth(1)
-            .unwrap()
-            .split("\nimpl TriggerRuntime {")
-            .next()
-            .unwrap();
+        let dispatcher = include_str!("../../../vendor/vera20k/src/sim/trigger_runtime/actions.rs");
+        let (_, dispatcher) = dispatcher
+            .split_once("fn execute_live_trigger_action(")
+            .expect("pinned stock action dispatcher");
+        let (_, body) = dispatcher
+            .split_once("match action.kind {")
+            .expect("pinned stock action switch");
+        let (body, _) = body
+            .split_once("\n        }")
+            .expect("end of pinned stock action switch");
         let mut handlers = BTreeSet::from([22]); // Force lives in a separate recursion frame.
         for line in body.lines() {
             let Some(rest) = line

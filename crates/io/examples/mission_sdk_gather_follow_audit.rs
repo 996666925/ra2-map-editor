@@ -212,8 +212,12 @@ fn audit(
         } else {
             Vec::new()
         };
-        let mut output =
-            runtime.advance_frame(&commands, 22, TickLane::Ordinary, FrameEffects::default())?;
+        let mut output = runtime.advance_frame(
+            &commands,
+            22,
+            TickLane::Ordinary,
+            &mut FrameEffects::default(),
+        )?;
         admitted += output.take_admitted_commands().len();
         let tick = runtime.simulation.session().tick();
         let current = state(&runtime, team_type)?;

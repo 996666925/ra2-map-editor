@@ -36,7 +36,7 @@ fn run(install: &Install, bytes: &[u8], root: &std::path::Path, restore: bool) -
     let mut checkpoint_preserved = true;
     let mut ownership_preserved = true;
     for frame in 1..=1400 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let sim = &runtime.simulation;
         if carrier.is_none() {
             for (id, entity) in sim.entities().iter_sorted() {

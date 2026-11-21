@@ -377,7 +377,12 @@ fn audit(install: &Install, bytes: &[u8], root: &Path, mode: &str, restore: bool
                 ));
             }
         }
-        runtime.advance_frame(&commands, 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(
+            &commands,
+            22,
+            TickLane::Ordinary,
+            &mut FrameEffects::default(),
+        )?;
         if expected_place.is_some() {
             ensure!(
                 runtime
@@ -525,7 +530,12 @@ fn ordinary_crate_probe(install: &Install, bytes: &[u8]) -> Result<Value> {
                 runtime.simulation.session().tick(),
             ));
         }
-        runtime.advance_frame(&commands, 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(
+            &commands,
+            22,
+            TickLane::Ordinary,
+            &mut FrameEffects::default(),
+        )?;
     }
     let mut miners = 0;
     let mut prizes = 0;

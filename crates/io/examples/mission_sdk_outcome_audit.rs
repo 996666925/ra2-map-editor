@@ -201,8 +201,12 @@ fn main() -> Result<()> {
                     .teams_in_order()
                     .any(|team| team.owner() == caller && team.members().next().is_some());
                 let tick = runtime.simulation.session().tick();
-                let output =
-                    runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+                let output = runtime.advance_frame(
+                    &[],
+                    22,
+                    TickLane::Ordinary,
+                    &mut FrameEffects::default(),
+                )?;
                 for event in &output.sound_events {
                     if let SimSoundEvent::MatchOutcome { owner, kind } = event {
                         ensure!(

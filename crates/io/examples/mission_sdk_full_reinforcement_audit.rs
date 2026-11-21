@@ -147,7 +147,7 @@ export default defineMission(map,{{id:'full_{name}',player:House.Americans}},m=>
                             &[],
                             22,
                             TickLane::Ordinary,
-                            FrameEffects::default(),
+                            &mut FrameEffects::default(),
                         )?;
                     }
                     if restore && tick == 32 {

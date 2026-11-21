@@ -219,7 +219,7 @@ fn audit(
     let mut mover_preserved = true;
     let mut selected_damage = false;
     for frame in 0..2200 {
-        runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+        runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         let tick = runtime.simulation.session().tick();
         let current = state(&runtime, team_type)?;
         let now = current["actors"].as_array().unwrap();

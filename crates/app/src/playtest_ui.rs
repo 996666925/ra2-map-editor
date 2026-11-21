@@ -53,10 +53,9 @@ pub(crate) const SPEEDS: [(&str, u8); 8] = [
 
 /// Query current document records, including pending edits, for launch starts.
 fn map_starts(doc: &MapDocument) -> Vec<u8> {
-    ra2_map_document::player_starts::from_document(doc)
-        .into_iter()
-        .filter(|&slot| slot < ra2_map_io::playtest::MAX_PLAYTEST_PLAYERS)
-        .collect()
+    ra2_map_io::playtest::contiguous_player_starts(ra2_map_document::player_starts::from_document(
+        doc,
+    ))
 }
 
 fn country(ui: &mut egui::Ui, id: &str, label: &str, value: &mut u8) {
@@ -252,11 +251,14 @@ impl Editor {
                 if o.mission {
                     ui.strong(tr!("任务难度"));
                     ui.horizontal_wrapped(|ui| {
-                        for (i, label) in [tr!("简单"), tr!("普通"), tr!("困难")].iter().enumerate() {
+                        for (i, label) in [tr!("简单"), tr!("普通"), tr!("困难")].iter().enumerate()
+                        {
                             ui.selectable_value(&mut o.mission_difficulty, i as u8, *label);
                         }
                     });
-                    ui.small(tr!("电脑阵营、部队和资金由地图任务定义；选择遭遇战可设置电脑对手。"));
+                    ui.small(tr!(
+                        "电脑阵营、部队和资金由地图任务定义；选择遭遇战可设置电脑对手。"
+                    ));
                     if let Some(doc) = &self.doc {
                         let player = doc.ini_text("Basic", "Player");
                         if !ra2_map_document::mission::ids(
@@ -265,8 +267,9 @@ impl Editor {
                         )
                         .contains(&player)
                         {
-                            invalid =
-                                Some(tr!("单人任务需要在任务制作中设置有效的玩家所属方。").to_owned());
+                            invalid = Some(
+                                tr!("单人任务需要在任务制作中设置有效的玩家所属方。").to_owned(),
+                            );
                         }
                     }
                 } else {
@@ -310,20 +313,31 @@ impl Editor {
                         ui.horizontal_wrapped(|ui| {
                             ui.label(tr!("电脑难度"));
                             // Native HouseHandicaps: 0 hard, 1 normal, 2 easy.
-                            for (value, label) in [(2, tr!("简单")), (1, tr!("普通")), (0, tr!("困难"))] {
+                            for (value, label) in
+                                [(2, tr!("简单")), (1, tr!("普通")), (0, tr!("困难"))]
+                            {
                                 ui.selectable_value(&mut o.difficulty, value, label);
                             }
                         });
                     });
-                    ui.small(tr!("地图可用玩家起点 {arg0} 个，最多添加 {capacity} 个电脑（总人数最多 30 人）。", arg0 = starts.len(), capacity = capacity));
+                    ui.small(tr!(
+                        "地图可用玩家起点 {arg0} 个，最多添加 {capacity} 个电脑。",
+                        arg0 = starts.len(),
+                        capacity = capacity
+                    ));
                     ui.small(tr!("电脑共用上述国家和难度。"));
                     if o.ai >= PLAYER_COLOR_COUNT {
                         ui.small(tr!("超过 8 人时循环使用现有 8 种玩家颜色。"));
                     }
                     if !starts.contains(&o.start) {
-                        invalid = Some(tr!("请选择地图上已定义的玩家起点（航点 0～29）。").to_owned());
+                        invalid = Some(
+                            tr!("试玩起点需从航点 0 连续编号，请选择范围内的起点。").to_owned(),
+                        );
                     } else if o.ai > capacity {
-                        invalid = Some(tr!("当前地图最多容纳 {capacity} 个电脑，请减少电脑数量。", capacity = capacity));
+                        invalid = Some(tr!(
+                            "当前地图最多容纳 {capacity} 个电脑，请减少电脑数量。",
+                            capacity = capacity
+                        ));
                     }
                 }
                 ui.separator();
@@ -628,9 +642,9 @@ mod tests {
     }
 
     #[test]
-    fn all_thirty_map_starts_are_available_for_direct_launch() {
+    fn all_offline_map_starts_are_available_for_direct_launch() {
         let bytes = crate::new_map::NewMapOptions {
-            players: 30,
+            players: crate::new_map::MAX_PLAYERS,
             ..Default::default()
         }
         .bytes()
@@ -638,7 +652,10 @@ mod tests {
         let map = vera20k_core::map::map_file::load_from_bytes(bytes.clone()).unwrap();
         let mut doc =
             MapDocument::new(crate::document::Baseline::parse(bytes.into(), &map).unwrap());
-        assert_eq!(map_starts(&doc), (0..30).collect::<Vec<_>>());
+        assert_eq!(
+            map_starts(&doc),
+            (0..crate::new_map::MAX_PLAYERS).collect::<Vec<_>>()
+        );
         assert_eq!(
             ra2_map_io::playtest::map_player_starts(&map),
             map_starts(&doc)
@@ -677,10 +694,10 @@ mod tests {
         doc.waypoint(7, [80, 80]).unwrap();
         doc.waypoint(8, [81, 80]).unwrap();
         doc.commit("edit starts");
-        assert_eq!(map_starts(&doc), vec![0, 2, 3, 7]);
+        assert_eq!(map_starts(&doc), vec![0]);
         doc.undo();
         assert_eq!(map_starts(&doc), vec![0, 1, 2, 3]);
         doc.redo();
-        assert_eq!(map_starts(&doc), vec![0, 2, 3, 7]);
+        assert_eq!(map_starts(&doc), vec![0]);
     }
 }

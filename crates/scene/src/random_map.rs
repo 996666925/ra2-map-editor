@@ -39,8 +39,13 @@ pub fn generate(
         &settings.extras,
     );
     let blocks = TheaterTileBlocks::build(&install.theater.lookup, |name| {
-        install.manager.get_ref(name).map(<[u8]>::to_vec)
+        install.manager.get_ref(name)
     });
+    if let Some(missing) =
+        blocks.missing_cliff_tile(&install.theater.lookup, resolved.ids.cliffs.cliff_set)
+    {
+        return Err(missing).context("随机地图缺少悬崖地形模板");
+    }
     let tech_types = rmg::tech_catalog::resolve(processed.neutral_tech_buildings(), &art);
     let tech = if options.tech_buildings {
         tech_types.as_slice()

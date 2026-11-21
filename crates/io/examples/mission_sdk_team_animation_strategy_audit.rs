@@ -167,7 +167,7 @@ fn state(runtime: &SimRuntime, team: &str) -> Result<Value> {
         .map(serde_json::to_value)
         .collect::<Result<Vec<_>, _>>()?;
     let animations=sim.anims().filter(|(_,a)|["EXPLOSML","CHRONOSK"].contains(&sim.interner().resolve(a.type_id()))).map(|(id,a)|json!({"id":id,"owner":a.owner_entity(),"absolute":sim.anim_absolute_coord(*id),"anim":a})).collect::<Vec<_>>();
-    let houses=sim.houses().order().iter().map(|id|{let h=&sim.houses()[id];json!({"id":sim.interner().resolve(*id),"human":h.is_controlled_by_human(sim.session().game_mode_nonzero()),
+    let houses=sim.houses().order().iter().map(|id|{let h=&sim.houses()[id];json!({"id":sim.interner().resolve(*id),"human":h.is_controlled_by_human(sim.session().rule_policy()),
         "emergency":h.strategy_emergency(),"strategy_timer":h.strategy_timer(),"money":h.economy().available_money(),"unit_losses":h.stats().units_lost(),"building_losses":h.stats().buildings_lost(),"outcome":h.outcome()})}).collect::<Vec<_>>();
     Ok(
         json!({"actors":actors,"teams":teams,"animations":animations,"houses":houses,"flags":sim.global_variables()[..2]}),
@@ -287,7 +287,7 @@ fn audit(
             .strategy_timer()
             .expired(runtime.simulation.session().binary_frame() as i32);
         let outcome =
-            runtime.advance_frame(&[], 22, TickLane::Ordinary, FrameEffects::default())?;
+            runtime.advance_frame(&[], 22, TickLane::Ordinary, &mut FrameEffects::default())?;
         sold_events += outcome
             .sound_events
             .iter()
