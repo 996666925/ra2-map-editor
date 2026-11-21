@@ -290,6 +290,15 @@ fn crop_preview_refuses_loss_and_stale_plans_and_clears_removed_follow_target() 
     assert!(p.apply(&mut doc).is_err());
 }
 #[test]
+fn local_size_validation_rejects_overflowing_rectangles() {
+    let mut options = Options::from_document(&document());
+    options.local = [i32::MAX, 4, i32::MAX, 20];
+    assert!(options.validate().is_err());
+    options.local = [2, i32::MAX, 20, i32::MAX];
+    assert!(options.validate().is_err());
+}
+
+#[test]
 fn local_size_uses_native_clipping_and_only_changes_header_and_invalid_preview() {
     let mut doc = document();
     let before = doc.snapshot().bytes().unwrap();

@@ -32,7 +32,7 @@ pub(crate) struct MapSettingsUi {
     pub profile: Profile,
     preview: bool,
     due: Option<Instant>,
-    plan: Option<Plan>,
+    blocked: Vec<map_settings::Affected>,
     worker: Option<std::sync::mpsc::Receiver<anyhow::Result<Plan>>>,
     message: String,
     completion: crate::form_edit::EditCompletion,
@@ -71,7 +71,8 @@ impl MapSettingsUi {
         if self.dirty() {
             self.open = true;
             self.message =
-                tr!("请完成或取消地图信息、光照和箱子设置输入；尺寸修改需检查预览并应用，或放弃尺寸修改。").into();
+                tr!("请完成或取消地图信息、光照和箱子设置输入。尺寸修改可应用，或关闭窗口放弃。")
+                    .into();
             false
         } else {
             true
@@ -95,7 +96,7 @@ impl MapSettingsUi {
             .len()
             .clamp(2, 30) as u8;
         self.original_players = self.players;
-        self.plan = None;
+        self.blocked.clear();
         self.worker = None;
         self.completion = Default::default();
         self.light_editing = false;
@@ -290,32 +291,11 @@ impl MapSettingsUi {
         let author_before = self.author.clone();
         let players_before = self.players;
         let info_before = self.info.clone();
-        if let Some(rx) = &self.worker {
-            match rx.try_recv() {
-                Ok(result) => {
-                    self.worker = None;
-                    match result {
-                        Ok(p) if Some(&p.options) == self.options.as_ref() => {
-                            self.plan = Some(p);
-                            self.message = tr!("迁移预览完成，未改写地图。").into();
-                        }
-                        Ok(_) => self.message = tr!("设置已改变，请重新检查迁移。").into(),
-                        Err(e) => self.message = format!("{e:#}"),
-                    }
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.worker = None;
-                    self.message = tr!("迁移检查线程意外结束。").into();
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            }
-        }
         let old_tab = self.tab;
         let mut open = true;
         let mut apply_map = false;
         let mut discard = false;
         let mut changed = false;
-        let mut inspect = false;
         let mut undo = false;
         let mut redo = false;
         crate::ui_theme::window(ctx,tr!("地图设置"),"map-properties",egui::vec2(750.,690.)).open(&mut open).show(ctx,|ui|{
@@ -331,28 +311,87 @@ impl MapSettingsUi {
             egui::ScrollArea::vertical().max_height((ui.available_height()-100.).max(140.)).show(ui,|ui|{
                 if self.tab==0 {
                     let options=self.options.as_mut().unwrap();
-                    ui.label(tr!("当前尺寸：{arg0} × {arg1}；宽＋高 ≤ {MAX_MAP_SPAN}。平移以投影平面左/上为单位。", arg0 = doc.base.header.width, arg1 = doc.base.header.height, MAX_MAP_SPAN = MAX_MAP_SPAN));
-                    egui::Grid::new("map-dimensions").num_columns(2).show(ui,|ui|{
-                        for (name,value) in [(tr!("新宽度"),&mut options.width),(tr!("新高度"),&mut options.height)]{ui.label(name);changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION),name).changed();ui.end_row();}
-                        ui.label(tr!("原图放置偏移（左、上）"));ui.horizontal(|ui|{for (value,name) in options.offset.iter_mut().zip([tr!("左侧偏移"),tr!("顶部偏移")]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(-i32::from(MAX_MAP_SPAN)..=i32::from(MAX_MAP_SPAN)),name).changed();}});ui.end_row();
-                        ui.label(tr!("扩展区域清地高度"));changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut options.fill_level).range(0..=127),tr!("扩展区域清地高度")).changed();ui.end_row();
-                        ui.label(tr!("可玩区域（左、上、宽、高）")).on_hover_text("LocalSize");ui.horizontal_wrapped(|ui|{for (value,name) in options.local.iter_mut().zip([tr!("可玩区域左侧"),tr!("可玩区域顶部"),tr!("可玩区域宽度"),tr!("可玩区域高度")]){changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(0..=MAX_MAP_DIMENSION),name).changed();}});ui.end_row();
+                    ui.label(tr!("当前尺寸：{arg0} × {arg1}；宽＋高 ≤ {MAX_MAP_SPAN}。", arg0 = doc.base.header.width, arg1 = doc.base.header.height, MAX_MAP_SPAN = MAX_MAP_SPAN));
+                    ui.add_enabled_ui(self.worker.is_none(), |ui| {
+                        egui::Grid::new("map-dimensions").num_columns(2).show(ui,|ui|{
+                            let previous_size = [options.width, options.height];
+                            let mut margins = local_margins(previous_size, options.local);
+                            for (name,value) in [(tr!("新宽度"),&mut options.width),(tr!("新高度"),&mut options.height)]{ui.label(name);changed|=crate::form_edit::number(ui,egui::DragValue::new(value).range(MIN_MAP_DIMENSION..=MAX_MAP_DIMENSION),name).changed();ui.end_row();}
+                            ui.label(tr!("原图移动（向右、向下）"))
+                                .on_hover_text(tr!("按投影地图格数移动。负数向左或向上。"));
+                            ui.horizontal(|ui| {
+                                let limit = i32::from(MAX_MAP_SPAN);
+                                let names = [tr!("原图向右移动"), tr!("原图向下移动")];
+                                for (value, name) in options.offset.iter_mut().zip(names) {
+                                    changed |= crate::form_edit::number(
+                                        ui,
+                                        egui::DragValue::new(value).range(-limit..=limit),
+                                        name,
+                                    )
+                                    .changed();
+                                }
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new(tr!("单位为格，负数向左或向上。如 (5, -3) 表示右移 5 格、上移 3 格。"))
+                                        .small()
+                                        .weak(),
+                                ).wrap());
+                            });
+                            ui.end_row();
+                            ui.label(tr!("扩展区域清地高度"));changed|=crate::form_edit::number(ui,egui::DragValue::new(&mut options.fill_level).range(0..=127),tr!("扩展区域清地高度")).changed();ui.end_row();
+                            let map_size = [options.width, options.height];
+                            ui.label(tr!("可玩区域（左、上、右、下）"))
+                                .on_hover_text(tr!("可玩区域距地图四边的距离"));
+                            let mut local_changed = false;
+                            ui.horizontal_wrapped(|ui| {
+                                let names = [
+                                    tr!("可玩区域左侧"),
+                                    tr!("可玩区域顶部"),
+                                    tr!("可玩区域右侧"),
+                                    tr!("可玩区域底部"),
+                                ];
+                                for (value, name) in margins.iter_mut().zip(names) {
+                                    local_changed |= crate::form_edit::number(
+                                        ui,
+                                        egui::DragValue::new(value)
+                                            .range(0..=MAX_MAP_DIMENSION)
+                                            .clamp_existing_to_range(false),
+                                        name,
+                                    )
+                                    .changed();
+                                }
+                            });
+                            if local_changed || map_size != previous_size {
+                                options.local = local_from_margins(map_size, margins);
+                                changed = true;
+                            }
+                            ui.end_row();
+                        });
+                        ui.horizontal_wrapped(|ui|{
+                            if ui.button(tr!("可玩区域铺满有效边距")).clicked(){options.local=[2,4,i32::from(options.width)-4,i32::from(options.height)-10];changed=true;}
+                            if ui.button(tr!("居中放置原图")).clicked(){options.offset=[(i32::from(options.width)-doc.base.header.width as i32)/2,(i32::from(options.height)-doc.base.header.height as i32)/2];changed=true;}
+                        });
+                        changed|=ui.checkbox(&mut options.delete_outside,tr!("应用时删除可移除的越界内容")).changed();
                     });
-                    ui.horizontal_wrapped(|ui|{
-                        if ui.button(tr!("可玩区域铺满有效边距")).clicked(){options.local=[2,4,i32::from(options.width)-4,i32::from(options.height)-10];changed=true;}
-                        if ui.button(tr!("居中放置原图")).clicked(){options.offset=[(i32::from(options.width)-doc.base.header.width as i32)/2,(i32::from(options.height)-doc.base.header.height as i32)/2];changed=true;}
-                    });
-                    changed|=ui.checkbox(&mut options.delete_outside,tr!("应用时删除预览中允许删除的越界内容")).changed();
                     ui.small(tr!("裁切可删除越界对象、覆盖物、格子标签、基地节点和整条隧道。越界航点、桥梁、脚本目的格和任务可视矩形须先调整；共享标签保留。建筑按当前美术配置中的占地检查。"));
-                    if let Err(e)=options.validate(){ui.colored_label(egui::Color32::LIGHT_RED,e.to_string());}
-                    inspect=ui.add_enabled(self.worker.is_none(),egui::Button::new(tr!("检查迁移与越界预览"))).clicked();
-                    if self.worker.is_some(){ui.spinner();}
-                    if let Some(plan)=&self.plan {
-                        let s=&plan.summary;ui.label(tr!("地形新增 {arg0} / 裁去 {arg1}；移动对象 {arg2}、任务引用 {arg3}；越界 {arg4} 项", arg0 = s.terrain_added, arg1 = s.terrain_removed, arg2 = s.records_moved, arg3 = s.references_moved, arg4 = s.affected.len()));
-                        draw_preview(ui,doc,&plan.options,&plan.summary);
-                        for a in s.affected.iter().take(100){ui.colored_label(if a.blocking{egui::Color32::LIGHT_RED}else{egui::Color32::YELLOW},format!("{} {:?} · {}",a.source,a.cell,if a.blocking{tr!("请先调整")}else{tr!("将删除")}));}
-                        if s.affected.len()>100{ui.label(tr!("其余项目见预览统计；裁切前请检查边界内容。"));}
-                        apply_map=ui.add_enabled(plan.can_apply(),egui::Button::new(tr!("应用地图设置（整笔撤销）"))).clicked();
+                    if let Err(error) = options.validate() {
+                        ui.colored_label(egui::Color32::LIGHT_RED, error.to_string());
+                    }
+                    ui.horizontal(|ui| {
+                        apply_map = ui.add_enabled(self.worker.is_none(), egui::Button::new(tr!("应用地图设置（整笔撤销）"))).clicked();
+                        if self.worker.is_some() {
+                            ui.spinner();
+                        }
+                    });
+                    if !changed && !self.blocked.is_empty() {
+                        ui.label(tr!("有 {count} 项越界内容阻止应用。", count = self.blocked.len()));
+                        for affected in self.blocked.iter().take(100) {
+                            let (color, hint) = if affected.blocking {
+                                (egui::Color32::LIGHT_RED, tr!("请先调整"))
+                            } else {
+                                (egui::Color32::YELLOW, tr!("可勾选删除"))
+                            };
+                            ui.colored_label(color, format!("{} {:?} · {}", affected.source, affected.cell, hint));
+                        }
                     }
                 }else if self.tab==1{
                     ui.horizontal_wrapped(|ui|{
@@ -380,44 +419,23 @@ impl MapSettingsUi {
             });
             ui.separator();
             ui.horizontal_wrapped(|ui|{
-                let cancel=ui.button(if self.tab==0{tr!("放弃尺寸修改")}else{tr!("取消本次输入")});
-                self.completion.cancel_button(&cancel);
-                discard=cancel.clicked();
+                if self.tab != 0 {
+                    let cancel = ui.button(tr!("取消本次输入"));
+                    self.completion.cancel_button(&cancel);
+                    discard = cancel.clicked();
+                }
                 undo=ui.add_enabled(!self.dirty(),egui::Button::new(tr!("撤销"))).clicked();
-                redo=ui.add_enabled(!self.dirty(),egui::Button::new(tr!("重做"))).clicked();
+                redo=ui.add_enabled(!self.dirty(),egui::Button::new(tr!("取消撤销"))).clicked();
             });
             ui.label(&self.message);
         });
         if changed {
-            self.plan = None;
+            if self.tab == 0 && self.worker.is_none() {
+                self.blocked.clear();
+                self.message.clear();
+            }
             if self.tab == 1 || old_tab == 1 {
                 self.due = Some(Instant::now());
-            }
-        }
-        if inspect {
-            let footprints = footprints(scene, doc);
-            let mut scratch = doc.fork();
-            scratch.id = doc.id;
-            scratch.state_id = doc.state_id;
-            let options = self.options.clone().unwrap();
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.worker = Some(rx);
-            let ctx = ctx.clone();
-            self.message = tr!("正在后台检查迁移…").into();
-            self.plan = None;
-            std::thread::spawn(move || {
-                let _ = tx.send(map_settings::plan(&scratch, options, &footprints));
-                ctx.request_repaint();
-            });
-        }
-        if apply_map && let Some(plan) = &self.plan {
-            match plan.apply(editor.doc.as_mut().unwrap()) {
-                Ok(_) => {
-                    editor.structural_changed(scene);
-                    self.load(editor.doc.as_ref().unwrap());
-                    self.message = tr!("已应用地图设置，可整笔撤销。").into();
-                }
-                Err(e) => self.message = format!("{e:#}"),
             }
         }
         if undo || redo {
@@ -438,10 +456,27 @@ impl MapSettingsUi {
             self.info_editing = true;
         }
         self.finish_edits(ctx, editor, scene);
+        if !open {
+            if self.tab == 0 {
+                self.load(editor.doc.as_ref().unwrap());
+                self.message.clear();
+            } else if self.dirty() {
+                self.message = tr!("请完成或取消当前输入后关闭。").into();
+                return;
+            }
+            self.open = false;
+            self.due = None;
+            editor.refresh = true;
+            return;
+        }
         if discard {
             self.load(editor.doc.as_ref().unwrap());
             editor.refresh = true;
             self.message.clear();
+        } else if apply_map && self.options != self.original {
+            self.start_apply(ctx, editor.doc.as_ref().unwrap(), scene);
+        } else {
+            self.poll_apply(ctx, editor, scene);
         }
         if let Some(start) = self.due {
             if start.elapsed() >= Duration::from_millis(250) {
@@ -453,14 +488,69 @@ impl MapSettingsUi {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
         }
-        if !open {
-            if self.dirty() {
-                self.message = tr!("请完成或取消当前输入；尺寸修改需应用或放弃后关闭。").into();
-            } else {
-                self.open = false;
-                self.due = None;
-                editor.refresh = true;
+    }
+
+    fn start_apply(&mut self, ctx: &egui::Context, doc: &MapDocument, scene: &MapScene) {
+        let footprints = footprints(scene, doc);
+        let mut scratch = doc.fork();
+        scratch.id = doc.id;
+        scratch.state_id = doc.state_id;
+        let options = self.options.clone().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.worker = Some(rx);
+        self.blocked.clear();
+        self.message = tr!("正在后台检查迁移…").into();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(map_settings::plan(&scratch, options, &footprints));
+            ctx.request_repaint();
+        });
+    }
+
+    fn poll_apply(&mut self, ctx: &egui::Context, editor: &mut Editor, scene: &MapScene) {
+        let Some(worker) = &self.worker else {
+            return;
+        };
+        let result = match worker.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.worker = None;
+                self.message = tr!("迁移检查线程意外结束。").into();
+                ctx.request_repaint();
+                return;
             }
+        };
+        self.worker = None;
+        ctx.request_repaint();
+        match result {
+            Ok(plan) if Some(&plan.options) != self.options.as_ref() => {
+                self.message = tr!("设置已改变，请重新应用。").into();
+            }
+            Ok(plan) if !plan.can_apply() => {
+                self.blocked = plan
+                    .summary
+                    .affected
+                    .into_iter()
+                    .filter(|item| item.blocking || !plan.options.delete_outside)
+                    .collect();
+                self.message.clear();
+            }
+            Ok(plan) => match plan.apply(editor.doc.as_mut().unwrap()) {
+                Ok(did_change) => {
+                    if did_change {
+                        editor.structural_changed(scene);
+                    }
+                    self.load(editor.doc.as_ref().unwrap());
+                    self.message = if did_change {
+                        tr!("已应用地图设置，可整笔撤销。").into()
+                    } else {
+                        String::new()
+                    };
+                }
+                Err(error) => self.message = format!("{error:#}"),
+            },
+            Err(error) => self.message = format!("{error:#}"),
         }
     }
 }
@@ -524,74 +614,246 @@ pub(crate) fn footprints(scene: &MapScene, doc: &MapDocument) -> Footprints {
         })
         .collect()
 }
-fn draw_preview(
-    ui: &mut egui::Ui,
-    doc: &MapDocument,
-    options: &Options,
-    summary: &map_settings::Summary,
-) {
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width().min(600.), 180.),
-        egui::Sense::hover(),
-    );
-    let p = ui.painter_at(rect);
-    let scale = ((rect.width() - 20.) / f32::from(options.width))
-        .min((rect.height() - 20.) / f32::from(options.height));
-    let origin = rect.min + egui::vec2(10., 10.);
-    let r = |left: f32, top: f32, w: f32, h: f32| {
-        egui::Rect::from_min_size(
-            origin + egui::vec2(left, top) * scale,
-            egui::vec2(w, h) * scale,
-        )
-    };
-    p.rect_filled(
-        r(0., 0., f32::from(options.width), f32::from(options.height)),
-        0,
-        egui::Color32::from_gray(42),
-    );
-    p.rect_stroke(
-        r(
-            options.offset[0] as f32,
-            options.offset[1] as f32,
-            doc.base.header.width as f32,
-            doc.base.header.height as f32,
-        ),
-        0,
-        egui::Stroke::new(1.5, egui::Color32::LIGHT_BLUE),
-        egui::StrokeKind::Inside,
-    );
-    let [l, t, w, h] = options.local;
-    p.rect_stroke(
-        r(l as f32, t as f32, w as f32, h as f32),
-        0,
-        egui::Stroke::new(2., egui::Color32::LIGHT_GREEN),
-        egui::StrokeKind::Inside,
-    );
-    for a in &summary.affected {
-        let x = (i32::from(a.cell[0]) - i32::from(a.cell[1]) + doc.base.header.width as i32) as f32
-            / 2.
-            + options.offset[0] as f32;
-        let y = (i32::from(a.cell[0]) + i32::from(a.cell[1]) - doc.base.header.width as i32) as f32
-            / 2.
-            + options.offset[1] as f32;
-        p.circle_filled(
-            origin + egui::vec2(x, y) * scale,
-            2.5,
-            if a.blocking {
-                egui::Color32::LIGHT_RED
-            } else {
-                egui::Color32::YELLOW
-            },
-        );
-    }
-    ui.small(tr!(
-        "灰：新尺寸；蓝：原图放置范围；绿：可玩区域；红/黄：受影响内容（位置按原图平移后绘制）。"
-    ));
+fn local_margins([map_width, map_height]: [u16; 2], local: [i32; 4]) -> [i64; 4] {
+    let [left, top, width, height] = local.map(i64::from);
+    [
+        left,
+        top,
+        i64::from(map_width) - left - width,
+        i64::from(map_height) - top - height,
+    ]
+}
+
+fn local_from_margins(
+    [map_width, map_height]: [u16; 2],
+    [left, top, right, bottom]: [i64; 4],
+) -> [i32; 4] {
+    [
+        left,
+        top,
+        i64::from(map_width) - left - right,
+        i64::from(map_height) - top - bottom,
+    ]
+    .map(|value| value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playable_area_margins_round_trip_to_native_local_size() {
+        let local = [2, 4, 76, 70];
+        assert_eq!(local_margins([80, 80], local), [2, 4, 2, 6]);
+        assert_eq!(local_from_margins([80, 80], [2, 4, 2, 6]), local);
+        assert_eq!(local_margins([91, 83], local), [2, 4, 13, 9]);
+        assert_eq!(local_margins([76, 73], local), [2, 4, -2, -1]);
+        let malformed = [i32::MAX, i32::MIN, i32::MAX, i32::MIN];
+        assert_eq!(
+            local_from_margins([80, 80], local_margins([80, 80], malformed)),
+            malformed
+        );
+    }
+
+    #[test]
+    fn movement_hint_fits_beside_offset_inputs() {
+        use crate::i18n::{Language, enter, text};
+        use egui_kittest::kittest::Queryable as _;
+        let (mut editor, _, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        for language in [Language::Chinese, Language::English] {
+            let _language = enter(language);
+            let form = MapSettingsUi {
+                open: true,
+                ..Default::default()
+            };
+            let mut harness = egui_kittest::Harness::builder()
+                .with_context_setup(|ctx| {
+                    crate::ui_theme::install(ctx);
+                    ctx.add_font_provider(std::sync::Arc::new(
+                        egui_system_font_provider::SystemFontProvider::new(),
+                    ));
+                })
+                .with_size([1000., 850.])
+                .build_ui_state(|ui, form| form.show(ui.ctx(), &mut editor, &scene), form);
+            for size in [[1000., 850.], [750., 600.], [600., 480.], [1000., 850.]] {
+                harness.set_size(size.into());
+                harness.run();
+                let window = harness
+                    .ctx
+                    .memory(|m| m.area_rect(egui::Id::unique("map-properties")))
+                    .unwrap();
+                let right = harness.get_by_label(text("原图向右移动")).rect();
+                let down = harness.get_by_label(text("原图向下移动")).rect();
+                let hint = harness
+                    .get_by_label(text(
+                        "单位为格，负数向左或向上。如 (5, -3) 表示右移 5 格、上移 3 格。",
+                    ))
+                    .rect();
+                assert!(
+                    [right, down, hint]
+                        .into_iter()
+                        .all(|widget| window.contains_rect(widget)),
+                    "offset row outside the dialog at {size:?} in {language:?}"
+                );
+                assert!(right.right() <= down.left() && down.right() <= hint.left());
+                assert!((right.center().y - down.center().y).abs() <= 1.);
+                assert!(hint.y_range().contains(down.center().y));
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn map_size_applies_in_one_click_and_reports_blocked_migrations() {
+        use egui_kittest::kittest::Queryable as _;
+        let (mut editor, _, root) = crate::editing::tests::editor();
+        let scene = crate::editing::tests::terrain_scene();
+        editor.attach(&scene);
+        let original_bytes = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+        let form = MapSettingsUi {
+            open: true,
+            ..Default::default()
+        };
+        let mut harness = egui_kittest::Harness::<(MapSettingsUi, Editor)>::builder()
+            .with_context_setup(|ctx| {
+                crate::ui_theme::install(ctx);
+                ctx.add_font_provider(std::sync::Arc::new(
+                    egui_system_font_provider::SystemFontProvider::new(),
+                ));
+            })
+            .with_size([1000., 850.])
+            .build_ui_state(
+                |ui, (form, editor)| form.show(ui.ctx(), editor, &scene),
+                (form, editor),
+            );
+        let role = egui::accesskit::Role::SpinButton;
+        for (name, displayed) in [
+            ("可玩区域左侧", "2"),
+            ("可玩区域顶部", "4"),
+            ("可玩区域右侧", "2"),
+            ("可玩区域底部", "6"),
+        ] {
+            let field = harness.get_by_role_and_label(role, name);
+            assert_eq!(field.value().as_deref(), Some(displayed));
+        }
+        harness.get_by_role_and_label(role, "可玩区域底部").focus();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness
+            .get_by_role_and_label(role, "可玩区域底部")
+            .type_text("8");
+        harness.run();
+        assert!(!harness.state().0.dirty());
+        let apply = |harness: &mut egui_kittest::Harness<'_, (MapSettingsUi, Editor)>| {
+            harness.get_by_label("应用地图设置（整笔撤销）").click();
+            harness.step();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while harness.state().0.worker.is_some() {
+                harness.step();
+                assert!(Instant::now() < deadline, "map settings worker timeout");
+                std::thread::yield_now();
+            }
+            harness.run();
+        };
+
+        apply(&mut harness);
+        let (form, editor) = harness.state();
+        assert!(!form.dirty(), "{}", form.message);
+        let header = &editor.doc.as_ref().unwrap().base.header;
+        assert_eq!(header.local_left, 2);
+        assert_eq!(header.local_top, 4);
+        assert_eq!(header.local_width, 16);
+        assert_eq!(header.local_height, 8);
+
+        for (name, size, expected_local) in [
+            ("新宽度", "27", [2, 4, 23, 8]),
+            ("新高度", "25", [2, 4, 23, 13]),
+            ("新宽度", "24", [2, 4, 20, 13]),
+        ] {
+            harness.get_by_role_and_label(role, name).focus();
+            harness.run();
+            harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            harness.get_by_role_and_label(role, name).type_text(size);
+            harness.run();
+            harness.key_press(egui::Key::Enter);
+            harness.run();
+            for (margin, expected) in [
+                ("可玩区域左侧", "2"),
+                ("可玩区域顶部", "4"),
+                ("可玩区域右侧", "2"),
+                ("可玩区域底部", "8"),
+            ] {
+                let field = harness.get_by_role_and_label(role, margin);
+                assert_eq!(field.value().as_deref(), Some(expected), "{name}={size}");
+            }
+            assert_eq!(
+                harness.state().0.options.as_ref().unwrap().local,
+                expected_local
+            );
+        }
+        apply(&mut harness);
+        let (form, editor) = harness.state();
+        assert!(!form.dirty(), "{}", form.message);
+        let header = &editor.doc.as_ref().unwrap().base.header;
+        assert_eq!((header.width, header.height), (24, 25));
+        assert_eq!((header.local_width, header.local_height), (20, 13));
+
+        for _ in 0..2 {
+            harness.get_by_label("撤销").click();
+            harness.run();
+        }
+        let bytes = |harness: &egui_kittest::Harness<'_, (MapSettingsUi, Editor)>| {
+            harness
+                .state()
+                .1
+                .doc
+                .as_ref()
+                .unwrap()
+                .snapshot()
+                .bytes()
+                .unwrap()
+        };
+        assert_eq!(bytes(&harness), original_bytes);
+
+        harness.get_by_label("单位为格，负数向左或向上。如 (5, -3) 表示右移 5 格、上移 3 格。");
+        for name in ["原图向右移动", "原图向下移动"] {
+            harness.get_by_role_and_label(role, name).focus();
+            harness.run();
+            harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            harness.get_by_role_and_label(role, name).type_text("20");
+            harness.run();
+            harness.key_press(egui::Key::Enter);
+            harness.run();
+        }
+        let options = harness.state_mut().0.options.as_mut().unwrap();
+        assert_eq!(options.offset, [20, 20]);
+        options.delete_outside = true;
+        harness.run();
+        apply(&mut harness);
+        let form = &harness.state().0;
+        assert!(form.dirty());
+        assert!(form.blocked.iter().any(|item| item.blocking));
+        assert_eq!(bytes(&harness), original_bytes);
+
+        assert!(harness.query_by_label("放弃尺寸修改").is_none());
+        harness.get_by_label("Close window").click();
+        harness.run();
+        let form = &harness.state().0;
+        assert!(!form.open);
+        assert!(!form.dirty());
+        assert!(form.blocked.is_empty());
+        assert_eq!(bytes(&harness), original_bytes);
+
+        harness.state_mut().0.open = true;
+        harness.run();
+        let (form, editor) = harness.state();
+        let expected = Options::from_document(editor.doc.as_ref().unwrap());
+        assert_eq!(form.options.as_ref(), Some(&expected));
+        drop(harness);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn map_information_mode_input_applies_on_enter_through_the_form() {
@@ -804,7 +1066,7 @@ mod tests {
                 .unwrap(),
             before
         );
-        harness.get_by_label("重做").click();
+        harness.get_by_label("取消撤销").click();
         harness.run();
         assert_eq!(
             harness
@@ -912,7 +1174,7 @@ mod tests {
                 .unwrap(),
             before
         );
-        harness.get_by_label("重做").click();
+        harness.get_by_label("取消撤销").click();
         harness.run();
         assert_eq!(harness.state().0.name.as_deref(), Some("中文地图"));
         harness.get_by_role_and_label(input().0, input().1).focus();

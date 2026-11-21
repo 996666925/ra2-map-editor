@@ -91,14 +91,14 @@ impl Options {
                 .all(|v| (-i32::from(MAX_MAP_SPAN)..=i32::from(MAX_MAP_SPAN)).contains(v)),
             "平移偏移超出范围"
         );
-        let [l, t, w, h] = self.local;
+        let [l, t, w, h] = self.local.map(i64::from);
         ensure!(
             l >= 2
                 && t >= 2
                 && w > 0
                 && h > 0
-                && l + w <= i32::from(self.width) - 2
-                && t + h <= i32::from(self.height) - 6,
+                && l + w <= i64::from(self.width) - 2
+                && t + h <= i64::from(self.height) - 6,
             "LocalSize 须位于引擎有效边距内：左/上至少 2，右至少 2，下至少 6"
         );
         Ok(())
@@ -157,7 +157,7 @@ impl Plan {
         ensure!(self.can_apply(), "越界项尚未处理或未选择删除越界内容");
         ensure!(
             self.identity == (doc.id, doc.state_id) && self.source == doc.snapshot().bytes()?,
-            "地图已改变，请重新预览迁移"
+            "地图已改变，请重新应用尺寸设置"
         );
         doc.replace_bytes(self.bytes.clone(), "地图尺寸与可玩区域")
     }
