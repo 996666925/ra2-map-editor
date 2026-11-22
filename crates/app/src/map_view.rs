@@ -1161,34 +1161,90 @@ impl MapView {
         if self.pending.is_none() {
             return;
         }
+        use crate::ui_theme as theme;
+
         let mut choice = 0;
-        let modal = crate::ui_theme::modal(ctx, "unsaved-map", |ui| {
-            ui.set_width(420.0_f32.min(ctx.content_rect().width() - 64.));
-            ui.heading(tr!("地图有未保存的修改"));
-            ui.label(tr!("保存当前地图后继续，或丢弃本次修改。"));
-            if !self.editor.status.is_empty() {
-                ui.add(egui::Label::new(&self.editor.status).wrap());
-            }
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        !self.editor.saving,
-                        crate::ui_theme::primary(tr!("保存并继续")),
-                    )
-                    .clicked()
-                {
-                    choice = 1;
+        let modal = theme::modal(ctx, "unsaved-map", |ui| {
+            egui::Frame::new().inner_margin(8).show(ui, |ui| {
+                ui.set_width((ctx.content_rect().width() - 64.).clamp(1., 416.));
+                ui.horizontal_top(|ui| {
+                    let (icon, _) =
+                        ui.allocate_exact_size(egui::vec2(36., 36.), egui::Sense::hover());
+                    let center = icon.center();
+                    ui.painter()
+                        .circle_filled(center, 18., theme::ACCENT.gamma_multiply(0.16));
+                    ui.painter().line_segment(
+                        [center + egui::vec2(0., -7.), center + egui::vec2(0., 2.)],
+                        egui::Stroke::new(2.5, theme::ACCENT),
+                    );
+                    ui.painter()
+                        .circle_filled(center + egui::vec2(0., 7.), 1.5, theme::ACCENT);
+                    ui.add_space(4.);
+                    ui.vertical(|ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(tr!("地图有未保存的修改"))
+                                    .size(19.)
+                                    .strong(),
+                            )
+                            .wrap(),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(tr!(
+                                    "如果丢弃修改，自上次保存以来的编辑将丢失。"
+                                ))
+                                .color(theme::MUTED),
+                            )
+                            .wrap(),
+                        );
+                    });
+                });
+                if self.editor.saving || !self.editor.status.is_empty() {
+                    ui.add_space(8.);
+                    egui::Frame::new()
+                        .fill(theme::BACKGROUND)
+                        .corner_radius(5)
+                        .inner_margin(8)
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            egui::ScrollArea::vertical().max_height(64.).show(ui, |ui| {
+                                ui.horizontal_top(|ui| {
+                                    if self.editor.saving {
+                                        ui.spinner();
+                                    }
+                                    ui.add(egui::Label::new(&self.editor.status).wrap());
+                                });
+                            });
+                        });
                 }
-                if ui
-                    .add_enabled(!self.editor.saving, egui::Button::new(tr!("丢弃修改")))
-                    .clicked()
-                {
-                    choice = 2;
-                }
-                if ui.button(tr!("取消")).clicked() {
-                    choice = 3;
-                }
+                ui.add_space(12.);
+                ui.separator();
+                ui.add_space(6.);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), 34.),
+                    egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true),
+                    |ui| {
+                        let save =
+                            theme::primary(tr!("保存并继续")).min_size(egui::vec2(110., 34.));
+                        if ui.add_enabled(!self.editor.saving, save).clicked() {
+                            choice = 1;
+                        }
+                        if ui
+                            .add(egui::Button::new(tr!("取消")).min_size(egui::vec2(68., 34.)))
+                            .clicked()
+                        {
+                            choice = 3;
+                        }
+                        let discard = egui::Button::new(
+                            egui::RichText::new(tr!("丢弃修改")).color(ui.visuals().error_fg_color),
+                        )
+                        .min_size(egui::vec2(96., 34.));
+                        if ui.add_enabled(!self.editor.saving, discard).clicked() {
+                            choice = 2;
+                        }
+                    },
+                );
             });
         });
         if modal.should_close() {

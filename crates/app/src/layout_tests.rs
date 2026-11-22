@@ -2034,6 +2034,50 @@ fn map_settings_tabs_stay_inside_the_viewport_without_document_writes() {
 }
 
 #[test]
+fn unsaved_map_actions_stay_visible_after_resizing() {
+    for info in &crate::i18n::LANGUAGES {
+        let _language = crate::i18n::enter(info.language);
+        let (mut view, root) = view();
+        view.pending = Some(Leave::Close);
+        view.editor.status = "C:/Maps/".to_owned() + &"VeryLongMapName".repeat(24) + ".yrm";
+        let mut harness = crate::test_support::harness()
+            .with_context_setup(setup)
+            .with_accessibility_check(false)
+            .with_size([900., 600.])
+            .build_ui(|ui| view.dialogs(ui.ctx()));
+        for size in [[900., 600.], [320., 480.], [900., 600.]] {
+            harness.set_size(size.into());
+            harness.run();
+            let modal = harness
+                .ctx
+                .memory(|memory| memory.area_rect(egui::Id::unique("unsaved-map")))
+                .unwrap();
+            let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, size.into());
+            assert!(bounds.contains_rect(modal), "{modal:?} outside {bounds:?}");
+            let [discard, cancel, save] = [tr!("丢弃修改"), tr!("取消"), tr!("保存并继续")]
+                .map(|label| harness.get_by_label(label).rect());
+            for action in [discard, cancel, save] {
+                assert!(modal.contains_rect(action), "{action:?} outside {modal:?}");
+                assert!(action.height() >= 34.);
+            }
+            assert!(!discard.intersects(cancel) && !discard.intersects(save));
+            assert!(cancel.right() < save.left());
+            if size[0] == 900. {
+                assert_eq!(discard.center().y, save.center().y);
+                assert!(discard.right() < cancel.left());
+            }
+        }
+        harness.get_by_label(tr!("取消")).click();
+        harness.run();
+        drop(harness);
+        assert!(view.pending.is_none());
+        assert!(!view.allow_close);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn all_workbench_panel_layouts_fit_desktop_and_compact_viewports() {
     use super::ui_smoke::{Panel, panels};
     use crate::editing::Tool;
