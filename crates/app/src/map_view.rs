@@ -781,11 +781,7 @@ impl MapView {
             self.editor.cancel_operation(scene);
             self.workbench.cancel_secondary = true;
         }
-        if self.fit
-            || (response.double_clicked()
-                && self.editor.tool == crate::editing::Tool::Select
-                && !self.workbench.mission.picking())
-        {
+        if self.fit {
             self.center = map_bounds.center();
             self.zoom = ((rect.width() - 30.) / map_bounds.width())
                 .min((rect.height() - 30.) / map_bounds.height())

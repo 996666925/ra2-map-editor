@@ -178,6 +178,75 @@ fn flat_authoring_view_with(
 }
 
 #[test]
+fn map_canvas_double_click_keeps_camera_and_home_fits_map() {
+    let ctx = egui::Context::default();
+    setup(&ctx);
+    let (mut view, root) = view();
+    let scene = terrain_scene();
+    let bounds = scene.bounds;
+    view.editor.attach(&scene);
+    view.editor.activate_tool(crate::editing::Tool::Select);
+    view.scene = Some(scene);
+    let center = bounds.center() + egui::vec2(10., 20.);
+    let zoom = 2.;
+    view.center = center;
+    view.zoom = zoom;
+    view.fit = false;
+
+    let frame = |view: &mut MapView, time, events| {
+        crate::test_support::run_ui(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200., 800.),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| view.canvas_inner(ui, None),
+        );
+    };
+    frame(&mut view, 0., vec![]);
+    let rect = view.workbench.canvas_rect.unwrap();
+    let pos = rect.center();
+    for (time, pressed) in [(0.1, true), (0.12, false), (0.2, true), (0.22, false)] {
+        frame(
+            &mut view,
+            time,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert_eq!(view.center, center);
+    assert_eq!(view.zoom, zoom);
+
+    frame(
+        &mut view,
+        0.3,
+        vec![egui::Event::Key {
+            key: egui::Key::Home,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    assert_eq!(view.center, bounds.center());
+    assert_ne!(view.zoom, zoom);
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn flatten_canvas_routes_arrows_to_height_and_keeps_wheel_zoom_without_terrain_edits() {
     let ctx = egui::Context::default();
     setup(&ctx);
