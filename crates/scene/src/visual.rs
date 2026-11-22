@@ -9,6 +9,7 @@ use vera20k_core::{
     assets::shp_file::ShpFile,
     map::lighting,
     rules::{color_scheme, house_colors, ini_parser::IniFile},
+    util::lepton::{BRIDGE_DECK_HEIGHT_LEPTONS, GROUND_LEVEL_HEIGHT_LEPTONS},
 };
 
 /// World-space sprite anchor shared by committed objects, placement ghosts
@@ -308,12 +309,28 @@ impl VisualScene {
                 } else {
                     0.
                 };
+                let (level, deck_shift) = if bridge {
+                    let base = resolved
+                        .cell(cell.rx, cell.ry)
+                        .map_or(cell.z, |cell| cell.high_bridge_art_base_level());
+                    let level = crate::bridge_tools::deck_level(base);
+                    let delta = i16::from(cell.z as i8) - i16::from(base as i8);
+                    (
+                        level,
+                        f32::from(delta) * vera20k_core::map::terrain::HEIGHT_STEP,
+                    )
+                } else {
+                    (i16::from(cell.z as i8), 0.)
+                };
                 out.add_sprite(
                     &mut cache,
                     image,
-                    [cell.screen_x + 30., cell.screen_y + 15. + y_bias],
+                    [
+                        cell.screen_x + 30.,
+                        cell.screen_y + 15. + y_bias + deck_shift,
+                    ],
                     [cell.rx, cell.ry],
-                    cell.z.saturating_add(if bridge { 4 } else { 0 }),
+                    level,
                     1,
                     None,
                     light.overlay_tint_at((cell.rx, cell.ry)),
@@ -396,15 +413,23 @@ impl VisualScene {
                         let f = r.fields();
                         let high = object_on_bridge(r);
                         let slope = resolved.cell(at[0], at[1]).map_or(0, |c| c.slope_type);
-                        let world_z = vera20k_core::util::lepton::ground_height_leptons(
-                            cell.z,
-                            slope,
-                            i32::from(at[0]) * 256 + 128,
-                            i32::from(at[1]) * 256 + 128,
-                        )
-                        .unwrap_or(i32::from(cell.z) * 104)
-                            + if high { 416 } else { 0 };
-                        let level = cell.z.saturating_add(if high { 4 } else { 0 });
+                        let ground_z = crate::terrain_tools::ground_world_z(at, cell.z, slope);
+                        let deck = if high {
+                            resolved.corrected_high_bridge_deck_level((at[0], at[1]))
+                        } else {
+                            None
+                        };
+                        let world_z = deck.map_or_else(
+                            || ground_z + if high { BRIDGE_DECK_HEIGHT_LEPTONS } else { 0 },
+                            |level| i32::from(level) * GROUND_LEVEL_HEIGHT_LEPTONS,
+                        );
+                        let level = deck.unwrap_or_else(|| {
+                            if high {
+                                crate::bridge_tools::deck_level(cell.z)
+                            } else {
+                                i16::from(cell.z as i8)
+                            }
+                        });
                         let point = object_anchor(r, appearance, world_z);
                         if pass == 1 {
                             if turret_part {
@@ -414,9 +439,13 @@ impl VisualScene {
                                 out.add_sprite(
                                     &mut cache,
                                     shadow,
-                                    [point[0], point[1] + if high { 60. } else { 0. }],
+                                    if high {
+                                        object_anchor(r, appearance, ground_z)
+                                    } else {
+                                        point
+                                    },
                                     at,
-                                    cell.z,
+                                    i16::from(cell.z as i8),
                                     2,
                                     None,
                                     [1.; 3],
@@ -640,7 +669,7 @@ impl VisualScene {
         image: &Arc<DecodedImage>,
         point: [f32; 2],
         at: [u16; 2],
-        level: u8,
+        level: i16,
         layer: u32,
         owner: Option<u64>,
         tint: [f32; 3],

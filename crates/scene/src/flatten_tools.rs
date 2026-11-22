@@ -93,7 +93,7 @@ pub fn editable_cells_with_options(
             (morphable(doc, scene, at)
                 || doc.check_cell(at).is_ok()
                     && (options.force || paved_road(roads.as_ref(), scene, value(doc, scene, at))))
-                && doc.overlay(at).0 == 255
+                && crate::bridge_tools::height_editable_overlay(doc, scene, at)
                 && !blocked.contains(&at)
         })
         .collect())
@@ -130,7 +130,7 @@ pub fn window_with_force(
             };
             let at = [x, y];
             if (morphable(doc, scene, at) || force && doc.check_cell(at).is_ok())
-                && doc.overlay(at).0 == 255
+                && crate::bridge_tools::height_editable_overlay(doc, scene, at)
             {
                 allowed.insert(at);
             }
@@ -240,7 +240,7 @@ impl Surface<'_> {
         let result = if v.level <= 12
             && self.doc.check_cell(at).is_ok()
             && (road || self.force || morphable(self.doc, self.scene, at))
-            && self.doc.overlay(at).0 == 255
+            && crate::bridge_tools::height_editable_overlay(self.doc, self.scene, at)
             && !self.blocked.contains(&at)
         {
             let tile = self

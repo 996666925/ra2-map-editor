@@ -763,7 +763,7 @@ impl Editor {
                 overlays.sort_by_key(|(at, _)| (u32::from(at[0]) + u32::from(at[1]), at[0]));
                 for (&at, &(id, frame)) in overlays {
                     let high = vera20k_core::rules::overlay_types::is_high_bridge_index(id);
-                    let level = if error.is_some() {
+                    let level = if high || error.is_some() {
                         plan.base
                     } else {
                         plan.edits
@@ -772,7 +772,8 @@ impl Editor {
                             .unwrap_or_else(|| terrain_tools::value(doc, scene, at))
                             .level
                     };
-                    outline(painter, at, level + if high { 4 } else { 0 });
+                    let lift = vera20k_core::util::lepton::BRIDGE_DECK_HEIGHT_LEVELS as u8;
+                    outline(painter, at, level + if high { lift } else { 0 });
                     if self.flat_view {
                         continue;
                     }

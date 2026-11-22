@@ -361,7 +361,7 @@ pub fn fill(doc: &MapDocument, scene: &MapScene, seed: Cell, target: u8) -> Resu
         interior.insert(at);
         if old.level != target {
             ensure!(
-                doc.overlay(at).0 == 255,
+                crate::bridge_tools::height_editable_overlay(doc, scene, at),
                 "{},{} 有覆盖物占用，未填高地形",
                 at[0],
                 at[1]

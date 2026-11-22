@@ -99,6 +99,7 @@ fn scene() -> MapScene {
     let playfield = PlayfieldBounds::from_map_header(&source.header);
     let mut scene = MapScene {
         resolved: None,
+        authored_bridge_decks: Default::default(),
         revision: Default::default(),
         mission_definitions: Default::default(),
         mission_resources: Default::default(),

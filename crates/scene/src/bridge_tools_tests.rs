@@ -244,6 +244,130 @@ fn low_bridge_accepts_non_morphable_dry_lats_but_rejects_impassable_banks() {
 }
 
 #[test]
+fn high_bridge_preserves_depressed_ground_and_slopes_below_anchors_and_side_cells() {
+    for rotate in [false, true] {
+        let turn = |[x, y]: Cell| if rotate { [y, x] } else { [x, y] };
+        let (mut doc, scene) = setup();
+        for (a, b) in [([60, 60], [79, 74]), ([94, 60], [108, 74])] {
+            cliff_tools::plan(&doc, &scene, cliff_tools::rectangle(turn(a), turn(b)), 4)
+                .unwrap()
+                .apply(&mut doc)
+                .unwrap();
+        }
+        doc.commit("banks");
+        let a = turn([80, 67]);
+        let b = turn([94, 67]);
+        let anchor = turn([86, 67]);
+        let side = turn([86, 66]);
+        let kind = BridgeKind::HighConcrete;
+        let original = plan(&doc, &scene, a, b, kind).unwrap();
+        assert!(original.overlays.contains_key(&anchor));
+        let ramp_base = scene.palette.tile_ids.unwrap().ramp_base as u16;
+        let ground = [
+            (turn([85, 67]), value(&doc, &scene, turn([85, 67])).tile, 0),
+            (anchor, scene.catalog.raw_tiles[&ramp_base], 3),
+            (side, scene.catalog.raw_tiles[&(ramp_base + 1)], 4),
+        ]
+        .map(|(at, tile, level)| {
+            let terrain = TerrainValue {
+                tile,
+                level,
+                ..value(&doc, &scene, at)
+            };
+            doc.set(Target::Terrain(at), Some(Value::Terrain(terrain)))
+                .unwrap();
+            (at, terrain)
+        });
+        let uneven = plan(&doc, &scene, a, b, kind).unwrap();
+        assert_eq!(uneven.overlays, original.overlays);
+        assert_eq!(uneven.edits, original.edits);
+
+        for (at, level) in [(anchor, 5), (side, 5)] {
+            let mut invalid = doc.fork();
+            let v = TerrainValue {
+                level,
+                ..value(&invalid, &scene, at)
+            };
+            invalid
+                .set(Target::Terrain(at), Some(Value::Terrain(v)))
+                .unwrap();
+            assert!(plan(&invalid, &scene, a, b, kind).is_err());
+        }
+        uneven.apply(&mut doc).unwrap();
+        doc.commit("bridge over uneven ground");
+        let (source, _) = ra2_map_document::source::SourceMap::parse(
+            "uneven.map".into(),
+            "test".into(),
+            doc.snapshot().bytes().unwrap(),
+        )
+        .unwrap();
+        let reopened = MapDocument::new(source.edit_base.unwrap());
+        for (at, terrain) in ground {
+            assert_eq!(doc.terrain(at), Some(terrain));
+            assert_eq!(reopened.terrain(at), Some(terrain));
+        }
+        assert_eq!(reopened.overlay(anchor), uneven.overlays[&anchor]);
+    }
+}
+
+#[test]
+fn high_bridge_preserves_lower_cliff_templates_across_the_span() {
+    for rotate in [false, true] {
+        let turn = |[x, y]: Cell| if rotate { [y, x] } else { [x, y] };
+        let (mut doc, scene) = setup();
+        for (a, b) in [([60, 60], [79, 74]), ([94, 60], [108, 74])] {
+            cliff_tools::plan(&doc, &scene, cliff_tools::rectangle(turn(a), turn(b)), 4)
+                .unwrap()
+                .apply(&mut doc)
+                .unwrap();
+        }
+        let terrace = cliff_tools::geometry(
+            &doc,
+            &scene,
+            cliff_tools::rectangle(turn([85, 63]), turn([88, 71])),
+            0,
+        )
+        .unwrap();
+        terrace.apply(&mut doc).unwrap();
+        doc.commit("banks and lower terrace");
+
+        let bridge = plan(
+            &doc,
+            &scene,
+            turn([80, 67]),
+            turn([94, 67]),
+            BridgeKind::HighConcrete,
+        )
+        .unwrap();
+        assert!(bridge.overlays.keys().any(|at| {
+            terrace.edits.get(at).is_some_and(|ground| {
+                ground.level < bridge.base
+                    && crate::coastal_cliffs::piece(&scene, scene.palette.raw_ids[&ground.tile])
+                        .is_some()
+            })
+        }));
+        assert!(
+            terrace
+                .edits
+                .keys()
+                .all(|at| !bridge.edits.contains_key(at))
+        );
+        bridge.apply(&mut doc).unwrap();
+        doc.commit("bridge over lower terrace");
+        let (source, _) = ra2_map_document::source::SourceMap::parse(
+            "terrace.map".into(),
+            "test".into(),
+            doc.snapshot().bytes().unwrap(),
+        )
+        .unwrap();
+        let reopened = MapDocument::new(source.edit_base.unwrap());
+        for (at, terrain) in terrace.edits {
+            assert_eq!(reopened.terrain(at), Some(terrain));
+        }
+    }
+}
+
+#[test]
 fn high_bridges_both_materials_and_axes_write_heads_and_canonical_overlay_data() {
     for along_x in [true, false] {
         let (mut doc, scene) = setup();
@@ -914,5 +1038,106 @@ fn partial_low_bridge_overwrite_keeps_old_cells_outside_the_new_span() {
         assert_eq!(doc.snapshot().bytes().unwrap(), before);
         doc.redo();
         assert_eq!(doc.snapshot().bytes().unwrap(), after);
+    }
+}
+
+#[test]
+fn saved_high_bridge_rebuilds_deck_from_heads_after_ordinary_ground_edit() {
+    use crate::{flatten_tools, map::load_scene_bytes, terrain_tools};
+    use std::{fs, time::Instant};
+    let fixture = Fixture::with_joining();
+    // Author actual theater overlay definitions so the engine admits the
+    // fixture's SHP files when it recovers the span from the bridgeheads.
+    let rules_path = fixture.0.join("rulesmd.ini");
+    let mut rules = fs::read_to_string(&rules_path).unwrap();
+    let mut art = String::new();
+    for name in ["BRIDGE1", "BRIDGE2", "BRIDGEB1", "BRIDGEB2"] {
+        rules.push_str(&format!("\n[{name}]\nImage={name}\n"));
+        art.push_str(&format!("[{name}]\nTheater=yes\n"));
+    }
+    fs::write(rules_path, rules).unwrap();
+    fs::write(fixture.0.join("artmd.ini"), art).unwrap();
+    let mut install = fixture.install();
+    install.catalog = Catalog::load(&install.manager, &install.theater);
+    for transpose in [false, true] {
+        let orient = |[x, y]: Cell| if transpose { [y, x] } else { [x, y] };
+        for kind in [BridgeKind::HighConcrete, BridgeKind::HighWood] {
+            let (mut doc, scene) = setup();
+            for (a, b) in [([60, 60], [79, 74]), ([94, 60], [108, 74])] {
+                cliff_tools::plan(
+                    &doc,
+                    &scene,
+                    cliff_tools::rectangle(orient(a), orient(b)),
+                    4,
+                )
+                .unwrap()
+                .apply(&mut doc)
+                .unwrap();
+            }
+            doc.commit("banks");
+            let bridge = plan(&doc, &scene, orient([80, 67]), orient([94, 67]), kind).unwrap();
+            bridge.apply(&mut doc).unwrap();
+            doc.commit("bridge");
+            let reload = |install: &mut ra2_map_assets::assets::Install, doc: &MapDocument| {
+                load_scene_bytes(
+                    install,
+                    "bridge.map",
+                    "test".into(),
+                    doc.snapshot().bytes().unwrap(),
+                    Instant::now(),
+                )
+                .unwrap()
+            };
+            let scene = reload(&mut install, &doc);
+            let at = orient([86, 67]);
+            let side = orient([86, 68]);
+            let chosen = (83..=88)
+                .flat_map(|x| (66..=68).map(move |y| orient([x, y])))
+                .collect();
+            let mut bare = doc.fork();
+            for &at in bridge.overlays.keys() {
+                bare.set(Target::Overlay(at), Some(Value::Overlay(255, 0)))
+                    .unwrap();
+            }
+            let lowered = flatten_tools::plan(&doc, &scene, &chosen, 0, true).unwrap();
+            let ordinary = flatten_tools::plan(&bare, &scene, &chosen, 0, true).unwrap();
+            assert_eq!(
+                lowered.edits, ordinary.edits,
+                "{kind:?} transpose={transpose}"
+            );
+            assert!(lowered.overlays.is_empty());
+            for at in [at, side] {
+                assert_eq!(
+                    lowered.edits.get(&at).map(|v| v.level),
+                    Some(0),
+                    "{kind:?} transpose={transpose} at {at:?} deck {:?}",
+                    scene.authored_bridge_decks.get(&at)
+                );
+            }
+            lowered.apply(&mut doc).unwrap();
+            doc.commit("ordinary ground edit");
+            let reloaded = reload(&mut install, &doc);
+            let terrain = reloaded.resolved.as_ref().unwrap();
+            for [x, y] in [at, side] {
+                assert_eq!(terrain.cell(x, y).unwrap().level, 0);
+                assert_eq!(
+                    terrain.corrected_high_bridge_deck_level((x, y)),
+                    Some(8),
+                    "{kind:?} transpose={transpose} at ({x}, {y})"
+                );
+                assert_eq!(
+                    terrain_tools::preview_object_world_z(
+                        &scene,
+                        [x, y],
+                        true,
+                        |at| value(&doc, &scene, at),
+                        |at| doc.overlay(at).0,
+                    ),
+                    8 * vera20k_core::util::lepton::GROUND_LEVEL_HEIGHT_LEPTONS
+                );
+            }
+            let anchor = terrain.cell(at[0], at[1]).unwrap();
+            assert_eq!(deck_level(anchor.high_bridge_art_base_level()), 8);
+        }
     }
 }

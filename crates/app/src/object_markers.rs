@@ -63,11 +63,12 @@ impl MarkerCache {
                 );
                 let image = appearance.map(|a| a.image_at(facing, at).clone());
                 let image_rect = appearance.zip(image.as_ref()).map(|(appearance, image)| {
-                    let z = terrain_tools::object_world_z(
+                    let z = terrain_tools::preview_object_world_z(
                         scene,
                         at,
-                        ground,
                         ra2_map_scene::visual::object_on_bridge(record),
+                        |at| terrain_tools::value(doc, scene, at),
+                        |at| doc.overlay(at).0,
                     );
                     let point = ra2_map_scene::visual::object_anchor(record, appearance, z);
                     let position = ra2_map_scene::visual::sprite_position(point, image);

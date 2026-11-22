@@ -1,6 +1,136 @@
 use super::*;
 
 #[test]
+fn bridge_pixels_and_ghost_use_anchor_height_only_for_bridge_objects() {
+    use crate::terrain_tools;
+    use ra2_map_document::document::{Target, Value};
+    let fixture = ra2_map_assets::test_support::Fixture::with_water_vehicle();
+    let bridges = ra2_map_assets::test_support::Fixture::with_authoring();
+    for file in ["BRIDGE1.tem", "BRIDGE2.tem"] {
+        std::fs::copy(bridges.0.join(file), fixture.0.join(file)).unwrap();
+    }
+    let rules = fixture.0.join("rulesmd.ini");
+    let mut bridge_entries = String::from("0=DECK\n");
+    // The runtime uses registration order for overlay IDs, even with sparse INI keys.
+    for id in 1..24 {
+        bridge_entries.push_str(&format!("{id}=OV{id}\n"));
+    }
+    bridge_entries.push_str("24=BRIDGE1\n25=BRIDGE2\n[DECK]");
+    let mut rules_text = std::fs::read_to_string(&rules)
+        .unwrap()
+        .replace("0=DECK\n[DECK]", &bridge_entries);
+    let art = fixture.0.join("artmd.ini");
+    let mut art_text = std::fs::read_to_string(&art).unwrap();
+    for name in ["BRIDGE1", "BRIDGE2"] {
+        rules_text.push_str(&format!("\n[{name}]\nImage={name}\n"));
+        art_text.push_str(&format!("\n[{name}]\nTheater=yes\n"));
+    }
+    std::fs::write(rules, rules_text).unwrap();
+    std::fs::write(art, art_text).unwrap();
+    let mut install = fixture.install();
+    install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
+    let bytes = ra2_map_document::new_map::NewMapOptions {
+        width: 20,
+        height: 20,
+        ..Default::default()
+    }
+    .bytes()
+    .unwrap();
+    let (source, _) =
+        ra2_map_document::source::SourceMap::parse("uneven.map".into(), "test".into(), bytes)
+            .unwrap();
+    let mut doc = MapDocument::new(source.edit_base.unwrap());
+    let anchor_x = [20, 21];
+    let anchor_y = [23, 20];
+    let atop = [20, 20];
+    let below = [22, 20];
+    for (anchor, overlay, frame) in [(anchor_x, 24, 0), (anchor_y, 25, 9)] {
+        let level = ra2_map_document::document::TerrainValue {
+            level: 4,
+            ..doc.terrain(anchor).unwrap()
+        };
+        doc.set(Target::Terrain(anchor), Some(Value::Terrain(level)))
+            .unwrap();
+        doc.set(
+            Target::Overlay(anchor),
+            Some(Value::Overlay(overlay, frame)),
+        )
+        .unwrap();
+    }
+    let high_id = doc.add_record("Units", atop, "Neutral", "ROBO").unwrap();
+    let low_id = doc.add_record("Units", below, "Neutral", "ROBO").unwrap();
+    let mut record = doc.records()[&high_id].clone();
+    let mut fields = record.fields();
+    fields[10] = "1".into();
+    record.value = fields.join(",").into_bytes();
+    doc.set(Target::Record(high_id), Some(Value::Record(record)))
+        .unwrap();
+    doc.commit("bridge with two depressed lanes");
+    let scene = crate::map::load_scene_bytes(
+        &mut install,
+        "uneven.map",
+        "test".into(),
+        doc.snapshot().bytes().unwrap(),
+        std::time::Instant::now(),
+    )
+    .unwrap();
+    let terrain = scene.resolved.as_ref().unwrap();
+    for at in [atop, below] {
+        assert_eq!(
+            terrain.corrected_high_bridge_deck_level((at[0], at[1])),
+            Some(8)
+        );
+        let preview_z = |on_bridge, overlay_at| {
+            terrain_tools::preview_object_world_z(
+                &scene,
+                at,
+                on_bridge,
+                |c| terrain_tools::value(&doc, &scene, c),
+                overlay_at,
+            )
+        };
+        let overlays = |c| doc.overlay(c).0;
+        assert_eq!(preview_z(true, overlays), 8 * GROUND_LEVEL_HEIGHT_LEPTONS);
+        assert_eq!(preview_z(false, overlays), 0);
+        assert_eq!(
+            terrain_tools::preview_object_world_z(
+                &scene,
+                at,
+                true,
+                |c| terrain_tools::value(&doc, &scene, c),
+                |_| 255,
+            ),
+            BRIDGE_DECK_HEIGHT_LEPTONS
+        );
+    }
+    for (at, original_id, z) in [
+        (atop, high_id, 8 * GROUND_LEVEL_HEIGHT_LEPTONS),
+        (below, low_id, 0),
+    ] {
+        let doc_record = doc.records()[&original_id].clone();
+        let (id, record) = MapDocument::new(scene.source.edit_base.as_ref().unwrap().clone())
+            .records()
+            .into_iter()
+            .find(|(_, r)| r.key == doc_record.key && r.section == "Units")
+            .unwrap();
+        let appearance = scene
+            .object_sprite("Units", "ROBO", at, object_on_bridge(&record))
+            .unwrap();
+        let expected = sprite_position(
+            object_anchor(&record, appearance, z),
+            appearance.image_at(0, at),
+        );
+        let draw = scene
+            .visual
+            .draws
+            .iter()
+            .find(|d| d.owner == Some(id))
+            .unwrap();
+        assert_eq!(draw.position, [expected.x, expected.y]);
+    }
+}
+
+#[test]
 fn water_image_follows_map_rules_cell_land_and_bridge_for_pixels_and_picking() {
     use ra2_map_document::document::{Target, Value};
     let fixture = ra2_map_assets::test_support::Fixture::with_water_vehicle();

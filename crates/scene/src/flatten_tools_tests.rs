@@ -243,3 +243,25 @@ fn smooth_flatten_can_lower_ground_and_raw_flatten_keeps_extended_height_support
     let p = plan(&doc, &scene, &selected, 127, false).unwrap();
     assert!(p.edits.values().all(|v| v.level == 127));
 }
+
+#[test]
+fn smooth_lowering_beside_high_bridges_uses_the_ordinary_terrain_plan() {
+    for (transpose, id, frame) in [(false, 24, 0), (true, 25, 9)] {
+        let (mut doc, scene) = setup();
+        let orient = |[x, y]: Cell| if transpose { [y, x] } else { [x, y] };
+        let mut ordinary = doc.fork();
+        for x in 34..=46 {
+            let target = Target::Overlay(orient([x, 40]));
+            ordinary
+                .set(target.clone(), Some(Value::Overlay(1, 0)))
+                .unwrap();
+            doc.set(target, Some(Value::Overlay(id, frame))).unwrap();
+        }
+        let selected = (41..=45).map(|y| orient([40, y])).collect();
+        let expected = plan(&ordinary, &scene, &selected, 0, true).unwrap();
+        let actual = plan(&doc, &scene, &selected, 0, true).unwrap();
+        assert_eq!(actual.edits, expected.edits);
+        assert_eq!(actual.edits[&orient([40, 41])].level, 0);
+        assert!(actual.overlays.is_empty());
+    }
+}

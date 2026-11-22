@@ -5,13 +5,14 @@ use ra2_map_document::source::MAX_SOURCE_BYTES;
 pub use ra2_map_document::source::SourceMap;
 use serde::Serialize;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     io::Read,
     path::Path,
     sync::Arc,
     time::Instant,
 };
 use vera20k_core::map::{
+    bridge_facts::{BRIDGE_FLAG_ANCHOR_SELF, high_bridge_stamp_for_overlay},
     playfield::{self, PlayfieldBounds},
     resolved_terrain::ResolvedTerrainGrid,
     terrain::{self, TerrainCell},
@@ -28,6 +29,7 @@ pub struct Diagnostic {
 #[derive(Clone)]
 pub struct MapScene {
     pub(crate) resolved: Option<Arc<ResolvedTerrainGrid>>,
+    pub(crate) authored_bridge_decks: Arc<BTreeMap<[u16; 2], (u8, i16)>>,
     pub revision: Arc<ra2_map_assets::profile::Revision>,
     pub mission_resources: Arc<ra2_map_assets::mission_resources::MissionResources>,
     pub mission_definitions: Arc<ra2_map_document::mission::ExternalDefinitions>,
@@ -351,6 +353,7 @@ pub fn load_scene_bytes_controlled(
         });
         return Ok(MapScene {
             resolved: None,
+            authored_bridge_decks: Default::default(),
             revision: install.revision.clone(),
             mission_resources: install.mission_resources(),
             mission_definitions: Arc::new(crate::mission_catalog::load(install)),
@@ -411,6 +414,7 @@ pub fn load_scene_bytes_controlled(
     let palette = install.terrain_palette();
     let mut scene = MapScene {
         resolved: None,
+        authored_bridge_decks: Default::default(),
         revision: install.revision.clone(),
         mission_resources: install.mission_resources(),
         mission_definitions: Arc::new(crate::mission_catalog::load(install)),
@@ -612,6 +616,27 @@ impl MapScene {
         // Terrain-dependent appearances must see this grid during the initial
         // visual build and after a terrain edit, before the scene is published.
         let resolved = Arc::new(resolved);
+        // Keep resolved anchor heights for previews while the next terrain
+        // snapshot is pending. Map load owns bridgehead recognition.
+        self.authored_bridge_decks = Arc::new(
+            map.overlays
+                .iter()
+                .filter_map(|overlay| {
+                    let id = overlay.overlay_id;
+                    high_bridge_stamp_for_overlay(id)?;
+                    if !crate::bridge_tools::standard_overlay(self, id) {
+                        return None;
+                    }
+                    let cell = resolved.cell(overlay.rx, overlay.ry)?;
+                    let facts = cell.bridge_facts;
+                    if !facts.has_structural_bridge() || !facts.has_flag(BRIDGE_FLAG_ANCHOR_SELF) {
+                        return None;
+                    }
+                    let deck = crate::bridge_tools::deck_level(cell.high_bridge_art_base_level());
+                    Some(([overlay.rx, overlay.ry], (id, deck)))
+                })
+                .collect(),
+        );
         self.resolved = Some(resolved.clone());
         self.visual = Arc::new(crate::visual::VisualScene::build_cached(
             self,
