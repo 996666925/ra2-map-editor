@@ -136,6 +136,10 @@ pub fn static_foot_depth(
             DepthCell {
                 coord: [c.rx as i16, c.ry as i16],
                 level: c.level as i8,
+                fixed_deck_z: sim::movement::ground_pose::corrected_deck_z(
+                    terrain,
+                    map::cell_index::NativeCellIdentity::Real(index),
+                ),
                 ramp: c.slope_type,
                 flags: c.bridge_facts.raw_flags,
                 iso_tile_index: c.final_tile_index,

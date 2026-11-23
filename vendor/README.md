@@ -5,7 +5,10 @@ The editor pins the engine through its Git tree entry, rather than a moving bran
 Use `git submodule status` for the revision selected by your editor checkout.
 
 The current integration targets VERA20k 0.4.1 at
-`41f140f93db4d28dcc5b8f4f4a839593bf8de787` (updated 2026-11-23).
+`d477ffe59e689f50a08495cb1333728b53488d90` (updated 2026-11-23).
+The editor uses the engine's retained high-bridge deck levels for bridge art,
+placed units, placement previews and SHP vehicle depth. The engine derives one
+height for the span from the bridgeheads on map load.
 The engine mounts `ECACHE*.MIX` and `ELOCAL*.MIX` through the shared asset
 manager. Editor building previews use its RULES slot-9 configuration and
 32-facing frame table for healthy SHP turrets; ART `TurretAnim` is ignored.

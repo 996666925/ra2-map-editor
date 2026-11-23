@@ -12,7 +12,6 @@ use std::{
     time::Instant,
 };
 use vera20k_core::map::{
-    bridge_facts::{BRIDGE_FLAG_ANCHOR_SELF, high_bridge_stamp_for_overlay},
     playfield::{self, PlayfieldBounds},
     resolved_terrain::ResolvedTerrainGrid,
     terrain::{self, TerrainCell},
@@ -30,6 +29,7 @@ pub struct Diagnostic {
 pub struct MapScene {
     pub(crate) resolved: Option<Arc<ResolvedTerrainGrid>>,
     pub(crate) authored_bridge_decks: Arc<BTreeMap<[u16; 2], (u8, i16)>>,
+    pub(crate) high_bridge_overlay_ids: Vec<u8>,
     pub revision: Arc<ra2_map_assets::profile::Revision>,
     pub mission_resources: Arc<ra2_map_assets::mission_resources::MissionResources>,
     pub mission_definitions: Arc<ra2_map_document::mission::ExternalDefinitions>,
@@ -350,6 +350,7 @@ pub fn load_scene_bytes_controlled(
         return Ok(MapScene {
             resolved: None,
             authored_bridge_decks: Default::default(),
+            high_bridge_overlay_ids: Vec::new(),
             revision: install.revision.clone(),
             mission_resources: install.mission_resources(),
             mission_definitions: Arc::new(crate::mission_catalog::load(install)),
@@ -415,6 +416,7 @@ pub fn load_scene_bytes_controlled(
     let mut scene = MapScene {
         resolved: None,
         authored_bridge_decks: Default::default(),
+        high_bridge_overlay_ids: Vec::new(),
         revision: install.revision.clone(),
         mission_resources: install.mission_resources(),
         mission_definitions: Arc::new(crate::mission_catalog::load(install)),
@@ -477,6 +479,27 @@ impl MapScene {
         let mut random = || rng.next_u32();
         let mut fill = |low, _high| low;
         let mut selector = selector_cache.begin_load(&mut random);
+        // The engine admits these stamps only when the overlay has an SHP
+        // or a CellAnim. Keep the same gate for additions in region previews.
+        let registry = &self.catalog.radar.overlays;
+        self.high_bridge_overlay_ids = [24, 25, 237, 238]
+            .into_iter()
+            .filter(|&id| {
+                registry
+                    .flags(id)
+                    .is_some_and(|flags| flags.cell_anim.is_some())
+                    || registry.name(id).is_some_and(|name| {
+                        vera20k_core::rules::effect_asset_catalog::load_overlay_shape(
+                            &install.manager,
+                            registry,
+                            name,
+                            install.theater.extension,
+                            &map.header.theater,
+                        )
+                        .is_some()
+                    })
+            })
+            .collect();
         let resolved = ResolvedTerrainGrid::build_with_variant_selector(
             map,
             Some(&install.theater),
@@ -623,16 +646,12 @@ impl MapScene {
                 .iter()
                 .filter_map(|overlay| {
                     let id = overlay.overlay_id;
-                    high_bridge_stamp_for_overlay(id)?;
+                    vera20k_core::map::bridge_facts::high_bridge_stamp_for_overlay(id)?;
                     if !crate::bridge_tools::standard_overlay(self, id) {
                         return None;
                     }
-                    let cell = resolved.cell(overlay.rx, overlay.ry)?;
-                    let facts = cell.bridge_facts;
-                    if !facts.has_structural_bridge() || !facts.has_flag(BRIDGE_FLAG_ANCHOR_SELF) {
-                        return None;
-                    }
-                    let deck = crate::bridge_tools::deck_level(cell.high_bridge_art_base_level());
+                    let deck =
+                        resolved.corrected_high_bridge_deck_level((overlay.rx, overlay.ry))?;
                     Some(([overlay.rx, overlay.ry], (id, deck)))
                 })
                 .collect(),

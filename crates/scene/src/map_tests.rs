@@ -100,6 +100,7 @@ fn scene() -> MapScene {
     let mut scene = MapScene {
         resolved: None,
         authored_bridge_decks: Default::default(),
+        high_bridge_overlay_ids: Vec::new(),
         revision: Default::default(),
         mission_definitions: Default::default(),
         mission_resources: Default::default(),

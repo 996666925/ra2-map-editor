@@ -803,7 +803,7 @@ cargo run --locked --offline -p ra2-map-io --example mission_sdk_crate_lottery_a
 
 ## 引擎版本管理
 
-当前固定 VERA20k 0.3.9；提交与接入说明见 [vendor/README](../vendor/README.md)。引擎和编辑器均不再提供 Ares 编译开关。任务 schema 和 SDK 始终可创作 Ares，运行时遵从地图资源设置。
+当前固定的 VERA20k 版本、提交与接入说明见 [vendor/README](../vendor/README.md)。引擎和编辑器均不再提供 Ares 编译开关。任务 schema 和 SDK 始终可创作 Ares，运行时遵从地图资源设置。
 
 地图资源的 Auto / On / Off 传给资源加载和试玩。INI、include、扩展 CSF 跟随 AssetManager::ships_ares()，文档及后台操作保留打开时的解析选择。未选择资源叠加时，Auto 忽略仅安装在游戏根目录的 ares.mix。
 

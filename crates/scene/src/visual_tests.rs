@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn bridge_pixels_and_ghost_use_anchor_height_only_for_bridge_objects() {
+fn bridge_pixels_and_ghost_use_span_height_only_for_bridge_objects() {
     use crate::terrain_tools;
     use ra2_map_document::document::{Target, Value};
     let fixture = ra2_map_assets::test_support::Fixture::with_water_vehicle();
@@ -44,9 +44,16 @@ fn bridge_pixels_and_ghost_use_anchor_height_only_for_bridge_objects() {
     let anchor_y = [23, 20];
     let atop = [20, 20];
     let below = [22, 20];
-    for (anchor, overlay, frame) in [(anchor_x, 24, 0), (anchor_y, 25, 9)] {
+    let raised = [21, 21];
+    let end = [22, 21];
+    for (anchor, overlay, frame, ground_level) in [
+        (anchor_x, 24, 0, 4),
+        (raised, 24, 0, 6),
+        (end, 24, 0, 5),
+        (anchor_y, 25, 9, 4),
+    ] {
         let level = ra2_map_document::document::TerrainValue {
-            level: 4,
+            level: ground_level,
             ..doc.terrain(anchor).unwrap()
         };
         doc.set(Target::Terrain(anchor), Some(Value::Terrain(level)))
@@ -75,6 +82,26 @@ fn bridge_pixels_and_ghost_use_anchor_height_only_for_bridge_objects() {
     )
     .unwrap();
     let terrain = scene.resolved.as_ref().unwrap();
+    assert_eq!(terrain.cell(raised[0], raised[1]).unwrap().level, 6);
+    for at in [anchor_x, raised, end] {
+        assert_eq!(terrain.corrected_high_bridge_deck_level(at.into()), Some(8));
+        assert_eq!(
+            terrain_tools::preview_object_world_z(
+                &scene,
+                at,
+                true,
+                |c| {
+                    let mut value = terrain_tools::value(&doc, &scene, c);
+                    if c == at {
+                        value.level = 7;
+                    }
+                    value
+                },
+                |c| doc.overlay(c).0,
+            ),
+            8 * GROUND_LEVEL_HEIGHT_LEPTONS
+        );
+    }
     for at in [atop, below] {
         assert_eq!(
             terrain.corrected_high_bridge_deck_level((at[0], at[1])),

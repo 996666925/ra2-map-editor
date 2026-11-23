@@ -28,6 +28,58 @@ pub struct TerrainPalette {
     pub framework_heights: Vec<crate::assets::DecodedImage>,
     pub bridge_rim: Option<vera20k_core::map::bridge_rim_tiles::HighBridgeRimTiles>,
     pub raw_ids: std::collections::HashMap<i32, u16>,
+    pub wood_bridge_rims: std::collections::HashMap<u16, WoodBridgeRim>,
+}
+
+#[derive(Clone, Copy)]
+pub struct WoodBridgeRim {
+    pub axis: usize,
+    pub anchor_subtile: Option<u8>,
+    pub road_subtile: u8,
+}
+
+impl WoodBridgeRim {
+    fn from_template(tmp: &vera20k_core::assets::tmp_file::TmpFile) -> Option<Self> {
+        use vera20k_core::{
+            rules::terrain_rules::{LandType, tmp_terrain_to_land_type},
+            util::lepton::BRIDGE_DECK_HEIGHT_LEVELS,
+        };
+        let (axis, depth) = match (tmp.template_width, tmp.template_height) {
+            (depth @ (2 | 3), 5) => (0, depth),
+            (5, depth @ (2 | 3)) => (1, depth),
+            _ => return None,
+        };
+        let subtile = |along, across| {
+            if axis == 0 {
+                across * tmp.template_width + along
+            } else {
+                along * tmp.template_width + across
+            }
+        };
+        let tile = |along, across| tmp.tiles.get(subtile(along, across) as usize)?.as_ref();
+        let deck = BRIDGE_DECK_HEIGHT_LEVELS as u8;
+        // Match the pristine WoodBridgeSet footprint used by VERA20k on load.
+        let raised_road = (0..2).all(|along| {
+            (1..=3).all(|across| {
+                tile(along, across).is_some_and(|tile| {
+                    tile.has_damaged_data
+                        && tile.height == deck
+                        && tmp_terrain_to_land_type(tile.terrain_type) == LandType::Road
+                })
+            })
+        });
+        if !raised_road
+            || (depth == 3
+                && !tile(2, 2).is_some_and(|tile| tile.has_damaged_data && tile.height < deck))
+        {
+            return None;
+        }
+        Some(Self {
+            axis,
+            anchor_subtile: (depth == 3).then(|| subtile(2, 2) as u8),
+            road_subtile: subtile(if depth == 3 { 1 } else { 0 }, 2) as u8,
+        })
+    }
 }
 
 pub struct TerrainTemplate {
@@ -216,6 +268,9 @@ impl Catalog {
             raw_ids: self.raw_tiles.iter().map(|(&id, &raw)| (raw, id)).collect(),
             ..Default::default()
         };
+        let wood_bridge_bounds = theater
+            .wood_bridge_set
+            .and_then(|set| theater.lookup.bounds().get(usize::from(set)));
         for (&tile_id, &raw) in &self.raw_tiles {
             if theater.lookup.is_morphable(tile_id) {
                 palette.morphable.insert(tile_id);
@@ -230,6 +285,16 @@ impl Catalog {
                 let Ok(tmp) = TmpFile::from_bytes(bytes) else {
                     continue;
                 };
+                if variant == 0
+                    && wood_bridge_bounds.is_some_and(|bounds| {
+                        tile_id
+                            .checked_sub(bounds.start)
+                            .is_some_and(|offset| offset < bounds.count)
+                    })
+                    && let Some(rim) = WoodBridgeRim::from_template(&tmp)
+                {
+                    palette.wood_bridge_rims.insert(tile_id, rim);
+                }
                 let native = framework
                     .as_ref()
                     .and_then(|source| source.template(theater, tile_id, &tmp));

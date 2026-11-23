@@ -94,6 +94,198 @@ fn water_vehicle_paste_ghost_uses_the_pasted_terrain_and_overlay() {
 }
 
 #[test]
+fn high_bridge_region_ghost_matches_the_reloaded_unit() {
+    use ra2_map_assets::{catalog::Catalog, test_support::Fixture};
+    use ra2_map_scene::visual::{object_anchor, sprite_position};
+    use vera20k_core::util::lepton::GROUND_LEVEL_HEIGHT_LEPTONS;
+
+    let fixture = Fixture::with_authoring();
+    let units = Fixture::with_shp_turret();
+    std::fs::copy(units.0.join("tank.shp"), fixture.0.join("tank.shp")).unwrap();
+    std::fs::copy(units.0.join("unittem.pal"), fixture.0.join("unittem.pal")).unwrap();
+    let rules_path = fixture.0.join("rulesmd.ini");
+    let mut rules = std::fs::read_to_string(&rules_path).unwrap();
+    rules.push_str("\n[VehicleTypes]\n0=TANK\n[TANK]\nStrength=100\n");
+    let mut art = String::from("[TANK]\nFacings=1\nWalkFrames=0\nStandingFrames=1\n");
+    for name in ["BRIDGE1", "BRIDGE2", "BRIDGEB1", "BRIDGEB2"] {
+        rules.push_str(&format!("\n[{name}]\nImage={name}\n"));
+        art.push_str(&format!("\n[{name}]\nTheater=yes\n"));
+    }
+    std::fs::write(rules_path, rules).unwrap();
+    std::fs::write(fixture.0.join("artmd.ini"), art).unwrap();
+    let mut install = fixture.install();
+    install.catalog = Catalog::load(&install.manager, &install.theater);
+    let ids = vera20k_core::map::rmg::TileIds::resolve(&install.theater);
+    let load = |install: &mut ra2_map_assets::assets::Install, doc: &MapDocument| {
+        ra2_map_scene::map::load_scene_bytes(
+            install,
+            "bridge.map",
+            "test".into(),
+            doc.snapshot().bytes().unwrap(),
+            Instant::now(),
+        )
+        .unwrap()
+    };
+    for (transpose, wood, overlay) in [
+        (false, false, 24),
+        (true, false, 25),
+        (false, true, 237),
+        (true, true, 238),
+    ] {
+        let orient = |x| if transpose { [40, x] } else { [x, 40] };
+        let join_at = |[x, y]: Cell| {
+            if transpose {
+                [x + 5, y + 14]
+            } else {
+                [x + 14, y + 5]
+            }
+        };
+        let source = orient(40);
+        let frame = if transpose { 9 } else { 0 };
+        let base = if wood {
+            ids.cliffs.wood_bridge_set
+        } else {
+            ids.cliffs.bridge_set
+        }
+        .unwrap();
+        let start_tile = install.catalog.raw_tiles[&(base + if transpose { 3 } else { 0 })];
+        let end_tile = install.catalog.raw_tiles[&(base + if transpose { 5 } else { 2 })];
+        let bytes = crate::new_map::NewMapOptions {
+            width: 40,
+            height: 40,
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap();
+        let (parsed, _) =
+            ra2_map_document::source::SourceMap::parse("bridge.map".into(), "test".into(), bytes)
+                .unwrap();
+        let mut doc = MapDocument::new(parsed.edit_base.unwrap());
+        for (x, tile, sub, level) in [
+            (37, start_tile, 7, 9),
+            (38, start_tile, if transpose { 12 } else { 8 }, 4),
+            (42, 0, 0, 6),
+            (43, end_tile, if transpose { 2 } else { 4 }, 11),
+        ] {
+            doc.set(
+                Target::Terrain(orient(x)),
+                Some(Value::Terrain(crate::document::TerrainValue {
+                    tile,
+                    sub,
+                    level,
+                    ice: 0,
+                })),
+            )
+            .unwrap();
+        }
+        for x in 38..=42 {
+            doc.set(
+                Target::Overlay(orient(x)),
+                Some(Value::Overlay(overlay, frame)),
+            )
+            .unwrap();
+        }
+        for x in [43, 44] {
+            doc.set(
+                Target::Overlay(join_at(orient(x))),
+                Some(Value::Overlay(overlay, frame)),
+            )
+            .unwrap();
+        }
+        doc.set(
+            Target::Terrain(join_at(orient(45))),
+            Some(Value::Terrain(crate::document::TerrainValue {
+                tile: end_tile,
+                sub: if transpose { 2 } else { 4 },
+                level: 6,
+                ice: 0,
+            })),
+        )
+        .unwrap();
+        let id = doc.add_record("Units", source, "Neutral", "TANK").unwrap();
+        let unit = doc.records()[&id].patched(&[(10, "1".into())]).unwrap();
+        doc.set(Target::Record(id), Some(Value::Record(unit)))
+            .unwrap();
+        doc.commit("uneven high bridge");
+        let scene = load(&mut install, &doc);
+        // A complete span, partial spans, a paste that extends an existing
+        // span, and a move that clears the start road while retaining stamps.
+        for (selected, moving, joining, level) in [
+            ((37..=43).collect::<Vec<_>>(), false, false, 9),
+            ((38..=43).collect(), false, false, 11),
+            ((38..=42).collect(), false, false, 8),
+            ((37..=42).collect(), false, true, 6),
+            (vec![37, 40], true, false, 11),
+        ] {
+            let (mut editor, ctx, root) = editor();
+            editor.attach(&scene);
+            editor.auto_lat = false;
+            editor.auto_walls = false;
+            editor.region.cells = selected.iter().map(|&x| orient(x)).collect();
+            let origin = orient(selected[0]);
+            let (at, target) = if moving {
+                editor.region.layers.overlays = false;
+                editor.region_action(&scene, Action::Move);
+                (orient(selected[0] - 1), orient(39))
+            } else {
+                editor.region_action(&scene, Action::Copy);
+                editor.region_action(&scene, Action::Paste);
+                if joining {
+                    (join_at(origin), join_at(source))
+                } else {
+                    (origin.map(|n| n + 10), source.map(|n| n + 10))
+                }
+            };
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500., 500.));
+            let camera = crate::camera::MapCamera {
+                center: egui::pos2(0., 1300.),
+                zoom: 1.,
+            };
+            let _ = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+                editor.region_preview(ui.painter(), &scene, rect, &camera, Some(at));
+            });
+            let preview = editor.region.preview.as_ref().unwrap();
+            assert!(preview.error.is_none(), "{:?}", preview.error);
+            let [ghost] = preview.records.as_slice() else {
+                panic!("expected one ghost")
+            };
+            assert_eq!(ghost.at, target);
+            assert_eq!(
+                ghost.world_z,
+                level * GROUND_LEVEL_HEIGHT_LEPTONS,
+                "overlay={overlay}, selected={selected:?}, moving={moving}, joining={joining}"
+            );
+            let sprite = scene
+                .object_sprite_for_terrain("Units", "TANK", ghost.ground, ghost.overlay, true)
+                .unwrap();
+            let expected = sprite_position(
+                object_anchor(&ghost.record, sprite, ghost.world_z),
+                sprite.image_at(0, target),
+            );
+            editor.pointer(&scene, Some(at), true, false, true, None);
+            let placed = load(&mut install, editor.doc.as_ref().unwrap());
+            let placed_doc = MapDocument::new(placed.source.edit_base.as_ref().unwrap().clone());
+            let (owner, _) = placed_doc
+                .records()
+                .into_iter()
+                .find(|(_, r)| r.section == "Units" && r.cell() == Some(target))
+                .unwrap();
+            assert!(
+                placed
+                    .visual
+                    .draws
+                    .iter()
+                    .any(|draw| draw.owner == Some(owner)
+                        && draw.position == [expected.x, expected.y]),
+                "ghost at {expected:?} must match loaded unit, overlay={overlay}, selected={selected:?}, moving={moving}, joining={joining}"
+            );
+            drop(editor);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[test]
 fn startup_owner_property_dropdown_auto_commits_and_undo_restores_graph() {
     use egui_kittest::kittest::Queryable as _;
     use ra2_map_document::{mission, startup_owner};

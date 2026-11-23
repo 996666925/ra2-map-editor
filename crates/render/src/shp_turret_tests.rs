@@ -91,11 +91,7 @@ fn shp_turret_depth_and_y_sort_match_gpu_picking_and_export() {
                 "material75" => Some((75, 6)),
                 _ => None,
             };
-            let expected = if level == 36 && name == "before-unit" {
-                // Engine high-terrain compensation applies to buildings and
-                // slot anims; the Foot-class unit stays two rows below.
-                [200, 0, 0, 255]
-            } else if let Some((value, selector)) = material {
+            let expected = if let Some((value, selector)) = material {
                 let path = fixture.0.join("artmd.ini");
                 std::fs::write(&path,std::fs::read_to_string(&path).unwrap().replace("LoopEnd=32",
                     &format!("LoopEnd=32\nTranslucency={value}\nShouldUseCellDrawer=no\nUseNormalLight=yes"))).unwrap();
@@ -181,7 +177,12 @@ fn shp_turret_depth_and_y_sort_match_gpu_picking_and_export() {
                 std::time::Instant::now(),
             )
             .unwrap();
-            let y = if level > 20 { 1215. } else { 615. } - f32::from(level) * 15.;
+            // The native Z conversion accumulates a rounding difference at
+            // high terrain. Sample the fixture's shared projected row.
+            let lift = vera20k_core::util::native_x87::adjust_for_z_standard(
+                i32::from(level) * vera20k_core::util::lepton::GROUND_LEVEL_HEIGHT_LEPTONS,
+            );
+            let y = if level > 20 { 1215. } else { 615. } - lift as f32;
             if !name.starts_with("voxel") {
                 assert_eq!(
                     scene.visual.sample(egui::pos2(-0.5, y + 0.5), options).0,

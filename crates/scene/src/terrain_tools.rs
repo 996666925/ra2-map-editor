@@ -183,19 +183,46 @@ pub fn preview_object_world_z(
     terrain_at: impl Fn(Cell) -> TerrainValue,
     overlay_at: impl Fn(Cell) -> u8,
 ) -> i32 {
-    use vera20k_core::util::lepton::{BRIDGE_DECK_HEIGHT_LEPTONS, GROUND_LEVEL_HEIGHT_LEPTONS};
-    if on_bridge
-        && let Some(level) =
+    let deck = on_bridge
+        .then(|| {
             crate::bridge_tools::authored_deck_level(scene, at, |c| terrain_at(c).level, overlay_at)
-    {
+        })
+        .flatten();
+    preview_floor(scene, at, terrain_at(at), on_bridge, deck)
+}
+
+/// Resolve the object floor after the pending region's terrain and overlays
+/// have been applied. `terrain_at` excludes cells outside the map.
+pub fn preview_region_object_world_z(
+    scene: &MapScene,
+    at: Cell,
+    on_bridge: bool,
+    terrain_at: impl Fn(Cell) -> Option<TerrainValue>,
+    overlay_at: impl Fn(Cell) -> u8,
+) -> i32 {
+    let deck = on_bridge
+        .then(|| crate::bridge_tools::prospective_deck_level(scene, at, &terrain_at, overlay_at))
+        .flatten();
+    let value = terrain_at(at).expect("region object placement must be within the map");
+    preview_floor(scene, at, value, on_bridge, deck)
+}
+
+fn preview_floor(
+    scene: &MapScene,
+    at: Cell,
+    value: TerrainValue,
+    on_bridge: bool,
+    deck: Option<i16>,
+) -> i32 {
+    use vera20k_core::util::lepton::{BRIDGE_DECK_HEIGHT_LEPTONS, GROUND_LEVEL_HEIGHT_LEPTONS};
+    if let Some(level) = deck {
         return i32::from(level) * GROUND_LEVEL_HEIGHT_LEPTONS;
     }
-    let value = terrain_at(at);
     let tile = scene
-        .catalog
-        .raw_tiles
-        .iter()
-        .find_map(|(&tile, &raw)| (raw == value.tile).then_some(tile))
+        .palette
+        .raw_ids
+        .get(&value.tile)
+        .copied()
         .or_else(|| u16::try_from(value.tile).ok());
     let slope = tile
         .and_then(|tile| scene.palette.templates.get(&(tile, 0)))

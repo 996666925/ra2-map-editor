@@ -8,7 +8,10 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use ra2_map_document::document::{Cell, MapDocument, TerrainValue};
 use std::collections::{BTreeMap, BTreeSet};
-use vera20k_core::map::{bridge_facts::high_bridge_stamp_for_overlay, cell_index::MAX_CELL_SIDE};
+use vera20k_core::map::{
+    bridge_facts::{BridgeStampFamily, high_bridge_stamp_for_overlay},
+    cell_index::MAX_CELL_SIDE,
+};
 use vera20k_core::rules::terrain_rules::{LandType, tmp_terrain_to_land_type};
 use vera20k_core::util::lepton::BRIDGE_DECK_HEIGHT_LEVELS;
 
@@ -37,18 +40,129 @@ pub(crate) fn authored_deck_level(
 ) -> Option<i16> {
     let anchor_deck = |anchor: Cell| {
         let id = overlay_at(anchor);
-        let local = deck_level(level_at(anchor));
+        // Pending terrain edits do not move an already resolved span.
         scene
             .authored_bridge_decks
             .get(&anchor)
             .filter(|&&(saved, _)| id == saved)
-            .map_or(local, |&(_, level)| level.max(local))
+            .map_or_else(|| deck_level(level_at(anchor)), |&(_, level)| level)
     };
-    let local_deck = deck_level(level_at(at));
+    stamped_deck_level(
+        at,
+        |c| high_bridge_stamp_for_overlay(overlay_at(c)),
+        anchor_deck,
+    )
+}
+
+/// A region transaction can cut, join or replace a span. Resolve from the
+/// prospective anchors and bridgeheads, including existing cells outside it.
+pub(crate) fn prospective_deck_level(
+    scene: &MapScene,
+    at: Cell,
+    terrain_at: impl Fn(Cell) -> Option<TerrainValue>,
+    overlay_at: impl Fn(Cell) -> u8,
+) -> Option<i16> {
+    let stamp_at = |at| {
+        let id = overlay_at(at);
+        let stamp = high_bridge_stamp_for_overlay(id)?;
+        (scene.high_bridge_overlay_ids.contains(&id) && terrain_at(at).is_some()).then_some(stamp)
+    };
+    stamped_deck_level(at, stamp_at, |anchor| {
+        let stamp = stamp_at(anchor).expect("stamped bridge anchor");
+        let axis = usize::from(stamp.1 != 0);
+        let run_end = |delta| {
+            let mut end = anchor;
+            while let Ok(next) = step(end, axis, delta) {
+                if stamp_at(next) != Some(stamp) {
+                    break;
+                }
+                end = next;
+            }
+            end
+        };
+        let (first, last) = (run_end(-1), run_end(1));
+        let first_ground = terrain_at(first).expect("span start terrain");
+        let last_ground = terrain_at(last).expect("span end terrain");
+        let tile = |v: TerrainValue| {
+            scene
+                .palette
+                .raw_ids
+                .get(&v.tile)
+                .copied()
+                .or_else(|| u16::try_from(v.tile).ok())
+        };
+        let wood = |tile| {
+            scene
+                .palette
+                .wood_bridge_rims
+                .get(&tile)
+                .filter(|rim| rim.axis == axis)
+        };
+        let concrete = scene.palette.bridge_rim.filter(|rim| rim.base >= 0);
+        let middle = |relative, base: i32| (0..4).any(|n| relative == base.wrapping_add(n));
+        let start_deck = step(first, axis, -1)
+            .ok()
+            .and_then(&terrain_at)
+            .and_then(|road| {
+                let start_tile = tile(first_ground)?;
+                if tile(road)? != start_tile {
+                    return None;
+                }
+                let sub = first_ground.sub;
+                let wooden = wood(start_tile).is_some_and(|rim| {
+                    rim.anchor_subtile == Some(sub) && rim.road_subtile == road.sub
+                });
+                let concrete = concrete.is_some_and(|rim| {
+                    let relative = i32::from(start_tile) - rim.base + 1;
+                    // The engine tests the X direction first if theater keys alias.
+                    let x = (sub == 8 && rim.top_left.contains(&relative))
+                        || (sub == 5 && middle(relative, rim.middle[0]));
+                    if x {
+                        axis == 0
+                    } else {
+                        axis == 1
+                            && ((sub == 12 && rim.top_right.contains(&relative))
+                                || (sub == 7 && middle(relative, rim.middle[1])))
+                    }
+                });
+                (wooden || concrete).then_some(i16::from(road.level as i8))
+            });
+        let end_deck = step(last, axis, 1)
+            .ok()
+            .and_then(&terrain_at)
+            .and_then(|road| {
+                let tile = tile(road)?;
+                let wooden = wood(tile).is_some_and(|rim| {
+                    rim.anchor_subtile.is_none() && rim.road_subtile == road.sub
+                });
+                let concrete = concrete.is_some_and(|rim| {
+                    let relative = i32::from(tile) - rim.base + 1;
+                    let (sub, ends) = if axis == 0 {
+                        (4, rim.bottom_right)
+                    } else {
+                        (2, rim.bottom_left)
+                    };
+                    road.sub == sub
+                        && (ends.contains(&relative) || middle(relative, rim.middle[axis]))
+                });
+                (wooden || concrete).then_some(i16::from(road.level as i8))
+            });
+        match (start_deck, end_deck) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(deck), None) | (None, Some(deck)) => deck,
+            (None, None) => deck_level(first_ground.level).min(deck_level(last_ground.level)),
+        }
+    })
+}
+
+fn stamped_deck_level(
+    at: Cell,
+    stamp_at: impl Fn(Cell) -> Option<(BridgeStampFamily, u8)>,
+    anchor_deck: impl Fn(Cell) -> i16,
+) -> Option<i16> {
     // ANCHOR_SELF takes precedence over a pointer from a neighbouring stamp.
-    if high_bridge_stamp_for_overlay(overlay_at(at)).is_some() {
-        let deck = anchor_deck(at);
-        return (deck > local_deck).then_some(deck);
+    if stamp_at(at).is_some() {
+        return Some(anchor_deck(at));
     }
     let mut structural = false;
     let mut last_anchor = None;
@@ -64,17 +178,14 @@ pub(crate) fn authored_deck_level(
         (-2, 0, 6, false),
     ] {
         let Ok(anchor) = cell(at, x, y) else { continue };
-        if high_bridge_stamp_for_overlay(overlay_at(anchor))
-            .is_some_and(|(_, dir)| dir == direction)
-        {
+        if stamp_at(anchor).is_some_and(|(_, dir)| dir == direction) {
             structural |= supports_deck;
             let packed_order = (anchor[1], anchor[0]);
             last_anchor = Some(last_anchor.map_or(packed_order, |prev| packed_order.max(prev)));
         }
     }
     let (y, x) = last_anchor.filter(|_| structural)?;
-    let deck = anchor_deck([x, y]);
-    (deck > local_deck).then_some(deck)
+    Some(anchor_deck([x, y]))
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

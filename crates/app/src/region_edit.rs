@@ -34,18 +34,34 @@ struct SelectionDrag {
 
 type PreviewGeometry = (
     Vec<(Cell, u8)>,
-    Vec<Record>,
+    Vec<PreviewRecord>,
     Vec<(Cell, crate::document::TerrainValue)>,
-    Vec<(Cell, u8)>,
 );
 struct Preview {
     key: String,
     cells: Vec<(Cell, u8)>,
-    records: Vec<Record>,
+    records: Vec<PreviewRecord>,
     ground: Vec<(Cell, crate::document::TerrainValue)>,
-    overlays: Vec<(Cell, u8)>,
     error: Option<String>,
 }
+struct PreviewRecord {
+    record: Record,
+    at: Cell,
+    ground: crate::document::TerrainValue,
+    overlay: u8,
+    world_z: i32,
+}
+
+fn clear_tile(scene: &MapScene) -> i32 {
+    scene
+        .palette
+        .tile_ids
+        .and_then(|ids| u16::try_from(ids.clear).ok())
+        .and_then(|id| scene.catalog.raw_tiles.get(&id))
+        .copied()
+        .unwrap_or(0)
+}
+
 impl RegionEdit {
     pub(super) fn invalidate_preview(&mut self) {
         self.preview = None;
@@ -116,13 +132,7 @@ impl Editor {
                 self.region.clipboard = Some(clip.clone());
             }
             if matches!(action, Action::Cut | Action::Delete) {
-                let clear = scene
-                    .palette
-                    .tile_ids
-                    .and_then(|ids| u16::try_from(ids.clear).ok())
-                    .and_then(|id| scene.catalog.raw_tiles.get(&id))
-                    .copied()
-                    .unwrap_or(0);
+                let clear = clear_tile(scene);
                 doc.atomic(|doc| {
                     region::clear(doc, &clip, clear)?;
                     if clip.layers.terrain && self.auto_lat {
@@ -192,13 +202,7 @@ impl Editor {
             .filter_map(|c| c.terrain.map(|v| (c.at, v)))
             .collect();
         placement::validate(doc, scene, &records, &ignored, self.allow_overlap, &ground)?;
-        let clear = scene
-            .palette
-            .tile_ids
-            .and_then(|ids| u16::try_from(ids.clear).ok())
-            .and_then(|id| scene.catalog.raw_tiles.get(&id))
-            .copied()
-            .unwrap_or(0);
+        let clear = clear_tile(scene);
         let mut touched: BTreeSet<_> = plan.cells.iter().map(|c| c.at).collect();
         if moving {
             touched.extend(clip.cells.iter().map(|c| c.at));
@@ -483,7 +487,21 @@ impl Editor {
                 }
             }
             let mut overlays = BTreeMap::new();
+            let mut cleared_ground = BTreeMap::new();
             if self.tool == Tool::RegionMove {
+                let clear = clear_tile(scene);
+                cleared_ground.extend(clip.cells.iter().filter_map(|cell| {
+                    cell.terrain.map(|v| {
+                        (
+                            cell.at,
+                            crate::document::TerrainValue {
+                                tile: clear,
+                                sub: 0,
+                                ..v
+                            },
+                        )
+                    })
+                }));
                 overlays.extend(
                     clip.cells
                         .iter()
@@ -496,8 +514,44 @@ impl Editor {
                     .iter()
                     .filter_map(|cell| cell.overlay.map(|(id, _)| (cell.at, id))),
             );
-            let overlays = overlays.into_iter().collect();
-            return Ok((cells, records, ground.into_iter().collect(), overlays));
+            let terrain_at = |at| {
+                doc.check_cell(at).ok()?;
+                Some(
+                    ground
+                        .get(&at)
+                        .or_else(|| cleared_ground.get(&at))
+                        .copied()
+                        .unwrap_or_else(|| terrain_tools::value(doc, scene, at)),
+                )
+            };
+            let overlay_at = |at| {
+                overlays
+                    .get(&at)
+                    .copied()
+                    .unwrap_or_else(|| doc.overlay(at).0)
+            };
+            let records = records
+                .into_iter()
+                .filter_map(|record| {
+                    let at = record.cell()?;
+                    let ground = terrain_at(at)?;
+                    let world_z = terrain_tools::preview_region_object_world_z(
+                        scene,
+                        at,
+                        ra2_map_scene::visual::object_on_bridge(&record),
+                        terrain_at,
+                        overlay_at,
+                    );
+                    Some(PreviewRecord {
+                        record,
+                        at,
+                        ground,
+                        overlay: overlay_at(at),
+                        world_z,
+                    })
+                })
+                .collect();
+            return Ok((cells, records, ground.into_iter().collect()));
         }
         let (record, ignored) = if self.tool == Tool::Place {
             let value = if self.section == "Terrain" {
@@ -552,7 +606,27 @@ impl Editor {
             .into_iter()
             .map(|at| (at, terrain_tools::value(doc, scene, at).level))
             .collect();
-        Ok((cells, vec![record], Vec::new(), Vec::new()))
+        let at = record.cell().context("object preview requires a cell")?;
+        let terrain_at = |at| terrain_tools::value(doc, scene, at);
+        let overlay_at = |at| doc.overlay(at).0;
+        let world_z = terrain_tools::preview_object_world_z(
+            scene,
+            at,
+            ra2_map_scene::visual::object_on_bridge(&record),
+            terrain_at,
+            overlay_at,
+        );
+        Ok((
+            cells,
+            vec![PreviewRecord {
+                record,
+                at,
+                ground: terrain_at(at),
+                overlay: overlay_at(at),
+                world_z,
+            }],
+            Vec::new(),
+        ))
     }
     pub fn region_preview(
         &mut self,
@@ -614,12 +688,11 @@ impl Editor {
         );
         if self.region.preview.as_ref().is_none_or(|p| p.key != key) {
             self.region.preview = Some(match self.make_preview(scene, at) {
-                Ok((cells, records, ground, overlays)) => Preview {
+                Ok((cells, records, ground)) => Preview {
                     key,
                     cells,
                     records,
                     ground,
-                    overlays,
                     error: None,
                 },
                 Err(e) => {
@@ -684,7 +757,6 @@ impl Editor {
                         cells,
                         records: Vec::new(),
                         ground: Vec::new(),
-                        overlays: Vec::new(),
                         error: Some(e.to_string()),
                     }
                 }
@@ -776,30 +848,14 @@ impl Editor {
         for &(cell, level) in &preview.cells {
             outline(cell, level, color);
         }
-        for r in &preview.records {
-            let Some(at) = r.cell() else { continue };
-            let terrain_at = |at| {
-                preview
-                    .ground
-                    .binary_search_by_key(&at, |&(cell, _)| cell)
-                    .map_or_else(
-                        |_| terrain_tools::value(doc, scene, at),
-                        |i| preview.ground[i].1,
-                    )
-            };
-            let overlay_at = |at| {
-                preview
-                    .overlays
-                    .binary_search_by_key(&at, |&(cell, _)| cell)
-                    .map_or_else(|_| doc.overlay(at).0, |i| preview.overlays[i].1)
-            };
-            let ground = terrain_at(at);
-            let overlay = overlay_at(at);
+        for ghost in &preview.records {
+            let r = &ghost.record;
+            let at = ghost.at;
             let Some(appearance) = scene.object_sprite_for_terrain(
                 &r.section,
                 &r.type_id(),
-                ground,
-                overlay,
+                ghost.ground,
+                ghost.overlay,
                 ra2_map_scene::visual::object_on_bridge(r),
             ) else {
                 continue;
@@ -810,14 +866,7 @@ impl Editor {
                 .and_then(|f| f.parse().ok())
                 .unwrap_or(0);
             let image = appearance.image_at(facing, at);
-            let world_z = terrain_tools::preview_object_world_z(
-                scene,
-                at,
-                ra2_map_scene::visual::object_on_bridge(r),
-                terrain_at,
-                overlay_at,
-            );
-            let point = ra2_map_scene::visual::object_anchor(r, appearance, world_z);
+            let point = ra2_map_scene::visual::object_anchor(r, appearance, ghost.world_z);
             let position = ra2_map_scene::visual::sprite_position(point, image);
             let target = egui::Rect::from_min_size(
                 rect.min + (position - world.min) * camera.zoom,
