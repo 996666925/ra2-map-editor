@@ -1337,6 +1337,7 @@
   "关闭后将生成的宝石转为矿石。宝石是否出现由引擎根据地貌和资源档位决定。": "Convert generated gems to ore when unchecked. The terrain and resource level determine where gems appear.",
   "高级生成设置": "Advanced generation settings",
   "光照时段": "Time of day",
+  "默认光照": "Default lighting",
   "清晨": "Morning",
   "午后": "Afternoon",
   "黄昏": "Dusk",

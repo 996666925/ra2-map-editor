@@ -1,7 +1,7 @@
 use super::*;
 use crate::i18n::tr;
 use crate::ui_theme as theme;
-use ra2_map_document::random_map::{ENVIRONMENTS, LANDSCAPES, SIZES};
+use ra2_map_document::random_map::{ENVIRONMENTS, LANDSCAPES, RandomMapOptions, SIZES};
 
 fn fresh_seed() -> i32 {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,6 +33,43 @@ fn choice(ui: &mut egui::Ui, label: &str, value: &mut i32, labels: &[&str]) {
         .show_ui(ui, |ui| {
             for (index, label) in labels.iter().enumerate() {
                 ui.selectable_value(value, index as i32, crate::i18n::text(label));
+            }
+        });
+    ui.end_row();
+}
+
+fn lighting_choice(ui: &mut egui::Ui, options: &mut RandomMapOptions) {
+    const TIMES: [&str; 4] = ["清晨", "午后", "黄昏", "夜间"];
+    ui.label(tr!("光照时段"));
+    let default_label = tr!("默认光照");
+    let selected = if options.use_default_lighting {
+        default_label
+    } else {
+        TIMES
+            .get(options.terrain.time as usize)
+            .map(|label| crate::i18n::text(label))
+            .unwrap_or(default_label)
+    };
+    egui::ComboBox::from_id_salt("random-map-lighting-time")
+        .width(215.)
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(options.use_default_lighting, default_label)
+                .clicked()
+            {
+                options.use_default_lighting = true;
+            }
+            for (index, label) in TIMES.into_iter().enumerate() {
+                let time = index as i32;
+                let selected = !options.use_default_lighting && options.terrain.time == time;
+                if ui
+                    .selectable_label(selected, crate::i18n::text(label))
+                    .clicked()
+                {
+                    options.use_default_lighting = false;
+                    options.terrain.time = time;
+                }
             }
         });
     ui.end_row();
@@ -139,9 +176,9 @@ impl MapView {
                         ui.end_row();
                     });
                     egui::CollapsingHeader::new(tr!("高级生成设置")).show(ui, |ui| {
-                        let t = &mut options.terrain;
                         egui::Grid::new("random-map-advanced").num_columns(2).spacing([20., 8.]).show(ui, |ui| {
-                            choice(ui, "光照时段", &mut t.time, &["清晨", "午后", "黄昏", "夜间"]);
+                            lighting_choice(ui, options);
+                            let t = &mut options.terrain;
                             ui.label(tr!("公平起点"));
                             ui.checkbox(&mut t.fair_starts, tr!("平衡起点空间和附近矿量"));
                             ui.end_row();

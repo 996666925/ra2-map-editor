@@ -21,6 +21,8 @@ pub const SIZES: [&str; 8] = ["小", "中", "大", "特大", "巨大", "超大",
 pub struct RandomMapOptions {
     pub title: String,
     pub terrain: RmgOptions,
+    /// Use the blank map's lighting instead of applying `terrain.time`.
+    pub use_default_lighting: bool,
     pub ore: bool,
     /// Keep the gems placed by the engine instead of converting them to ore.
     pub gems: bool,
@@ -46,6 +48,7 @@ impl Default for RandomMapOptions {
                 resources: 3,
                 ..Default::default()
             },
+            use_default_lighting: true,
             ore: true,
             gems: true,
             tech_buildings: true,
@@ -70,6 +73,8 @@ impl RandomMapOptions {
         let section = ini.section("RandomMap")?;
         let mut options = Self::default();
         options.terrain.apply_sed(ini, reads_ares);
+        // Older recipes implicitly selected the time-of-day preset.
+        options.use_default_lighting = section.read_bool("EditorDefaultLighting", false);
         // The source owns decoded user-facing text; native INI strings widen
         // legacy bytes instead of decoding editor-authored UTF-8.
         options.title = title.to_owned();
@@ -176,8 +181,13 @@ impl RandomMapOptions {
             )
             .as_bytes(),
         );
+        if self.use_default_lighting {
+            out.extend_from_slice(b"EditorDefaultLighting=true\r\n");
+        }
         out.extend_from_slice(b"[Lighting]\r\n");
-        if let Some(lighting) = map.ini.section("Lighting") {
+        if !self.use_default_lighting
+            && let Some(lighting) = map.ini.section("Lighting")
+        {
             for (key, value) in lighting.raw_entries() {
                 out.extend_from_slice(format!("{key}={value}\r\n").as_bytes());
             }
@@ -284,6 +294,40 @@ mod tests {
     use super::*;
     use crate::{document::MapDocument, source::SourceMap};
     use vera20k_core::map::{map_file, overlay::OverlayEntry};
+
+    #[test]
+    fn random_map_lighting_defaults_to_blank_and_roundtrips_selected_time() {
+        use vera20k_core::rules::ini_parser::IniFile;
+
+        let mut options = RandomMapOptions::default();
+        assert!(options.use_default_lighting);
+        let mut map = map_file::load_from_bytes(NewMapOptions::default().bytes().unwrap()).unwrap();
+        map.ini = IniFile::from_str("[Lighting]\nAmbient=0.500000\nRed=0.600000\nLevel=0.015000\n");
+
+        let bytes = options.map_bytes(&map, false, Ok).unwrap();
+        let ini = IniFile::from_bytes(&bytes).unwrap();
+        let lighting = ini.section("Lighting").unwrap();
+        assert_eq!(lighting.read_string("Ambient", "", 32), "1.000000");
+        assert_eq!(lighting.read_string("Red", "", 32), "1.000000");
+        assert!(!lighting.is_present("Level"));
+        assert!(
+            RandomMapOptions::from_ini(&ini, "test", false)
+                .unwrap()
+                .use_default_lighting
+        );
+
+        options.use_default_lighting = false;
+        options.terrain.time = 3;
+        let bytes = options.map_bytes(&map, false, Ok).unwrap();
+        let ini = IniFile::from_bytes(&bytes).unwrap();
+        let lighting = ini.section("Lighting").unwrap();
+        assert_eq!(lighting.read_string("Ambient", "", 32), "0.500000");
+        assert_eq!(lighting.read_string("Red", "", 32), "0.600000");
+        assert_eq!(lighting.read_string("Level", "", 32), "0.015000");
+        let restored = RandomMapOptions::from_ini(&ini, "test", false).unwrap();
+        assert!(!restored.use_default_lighting);
+        assert_eq!(restored.terrain.time, 3);
+    }
 
     #[test]
     fn urban_areas_roundtrips_only_in_the_selected_map_dialect() {
