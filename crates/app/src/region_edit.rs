@@ -482,11 +482,21 @@ impl Editor {
                     ));
                 }
             }
-            let overlays = plan
-                .cells
-                .iter()
-                .filter_map(|cell| cell.overlay.map(|(id, _)| (cell.at, id)))
-                .collect();
+            let mut overlays = BTreeMap::new();
+            if self.tool == Tool::RegionMove {
+                overlays.extend(
+                    clip.cells
+                        .iter()
+                        .filter(|cell| cell.overlay.is_some())
+                        .map(|cell| (cell.at, 255)),
+                );
+            }
+            overlays.extend(
+                plan.cells
+                    .iter()
+                    .filter_map(|cell| cell.overlay.map(|(id, _)| (cell.at, id))),
+            );
+            let overlays = overlays.into_iter().collect();
             return Ok((cells, records, ground.into_iter().collect(), overlays));
         }
         let (record, ignored) = if self.tool == Tool::Place {
@@ -768,16 +778,23 @@ impl Editor {
         }
         for r in &preview.records {
             let Some(at) = r.cell() else { continue };
-            let ground = preview
-                .ground
-                .iter()
-                .find(|(c, _)| *c == at)
-                .map_or_else(|| terrain_tools::value(doc, scene, at), |(_, value)| *value);
-            let overlay = preview
-                .overlays
-                .iter()
-                .find(|(cell, _)| *cell == at)
-                .map_or_else(|| doc.overlay(at).0, |(_, id)| *id);
+            let terrain_at = |at| {
+                preview
+                    .ground
+                    .binary_search_by_key(&at, |&(cell, _)| cell)
+                    .map_or_else(
+                        |_| terrain_tools::value(doc, scene, at),
+                        |i| preview.ground[i].1,
+                    )
+            };
+            let overlay_at = |at| {
+                preview
+                    .overlays
+                    .binary_search_by_key(&at, |&(cell, _)| cell)
+                    .map_or_else(|_| doc.overlay(at).0, |i| preview.overlays[i].1)
+            };
+            let ground = terrain_at(at);
+            let overlay = overlay_at(at);
             let Some(appearance) = scene.object_sprite_for_terrain(
                 &r.section,
                 &r.type_id(),
@@ -793,11 +810,12 @@ impl Editor {
                 .and_then(|f| f.parse().ok())
                 .unwrap_or(0);
             let image = appearance.image_at(facing, at);
-            let world_z = terrain_tools::object_world_z(
+            let world_z = terrain_tools::preview_object_world_z(
                 scene,
                 at,
-                ground,
                 ra2_map_scene::visual::object_on_bridge(r),
+                terrain_at,
+                overlay_at,
             );
             let point = ra2_map_scene::visual::object_anchor(r, appearance, world_z);
             let position = ra2_map_scene::visual::sprite_position(point, image);

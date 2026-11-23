@@ -471,14 +471,27 @@ impl Fixture {
                     6..=10 => (2, vec![0, 0, 4, 0, 4, 0, 4, 0, 0, 0]),
                     _ => (5, vec![0, 4, 4, 4, 0, 0, 0, 0, 0, 0]),
                 };
+                let path = f.0.join(format!("{prefix}{:02}.tem", i + 1));
                 write_tmp(
-                    &f.0.join(format!("{prefix}{:02}.tem", i + 1)),
+                    &path,
                     w,
-                    &heights
-                        .into_iter()
-                        .map(|h| Some((h, 0)))
-                        .collect::<Vec<_>>(),
+                    &heights.iter().map(|&h| Some((h, 0))).collect::<Vec<_>>(),
                 );
+                if prefix == "wood" && i < 6 {
+                    // Authored wood rims are identified by the damaged-data
+                    // flag and the raised road strip in the pristine TMP.
+                    let mut bytes = std::fs::read(&path).unwrap();
+                    for (sub, height) in heights.into_iter().enumerate() {
+                        let entry = 16 + sub * 4;
+                        let offset = u32::from_le_bytes(bytes[entry..entry + 4].try_into().unwrap())
+                            as usize;
+                        bytes[offset + 36] |= 4;
+                        if height == 4 {
+                            bytes[offset + 41] = 11;
+                        }
+                    }
+                    std::fs::write(path, bytes).unwrap();
+                }
             }
         }
         let mut rules = String::from("[OverlayTypes]\n");

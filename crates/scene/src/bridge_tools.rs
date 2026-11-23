@@ -8,8 +8,74 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use ra2_map_document::document::{Cell, MapDocument, TerrainValue};
 use std::collections::{BTreeMap, BTreeSet};
-use vera20k_core::map::cell_index::MAX_CELL_SIDE;
+use vera20k_core::map::{bridge_facts::high_bridge_stamp_for_overlay, cell_index::MAX_CELL_SIDE};
 use vera20k_core::rules::terrain_rules::{LandType, tmp_terrain_to_land_type};
+use vera20k_core::util::lepton::BRIDGE_DECK_HEIGHT_LEVELS;
+
+pub(crate) fn deck_level(base: u8) -> i16 {
+    i16::from(base as i8) + BRIDGE_DECK_HEIGHT_LEVELS as i16
+}
+
+/// Leave resolved high-bridge overlays in place during ground height edits.
+pub(crate) fn height_editable_overlay(doc: &MapDocument, scene: &MapScene, at: Cell) -> bool {
+    let id = doc.overlay(at).0;
+    id == 255
+        || scene
+            .authored_bridge_decks
+            .get(&at)
+            .is_some_and(|&(saved, _)| id == saved)
+}
+
+/// Project the relevant authored stamps before overlay edits reach the scene.
+/// The engine visits anchors in OverlayPack (Y, X) order. A structural slot
+/// enables the deck, while the last pointer write selects its base level.
+pub(crate) fn authored_deck_level(
+    scene: &MapScene,
+    at: Cell,
+    level_at: impl Fn(Cell) -> u8,
+    overlay_at: impl Fn(Cell) -> u8,
+) -> Option<i16> {
+    let anchor_deck = |anchor: Cell| {
+        let id = overlay_at(anchor);
+        let local = deck_level(level_at(anchor));
+        scene
+            .authored_bridge_decks
+            .get(&anchor)
+            .filter(|&&(saved, _)| id == saved)
+            .map_or(local, |&(_, level)| level.max(local))
+    };
+    let local_deck = deck_level(level_at(at));
+    // ANCHOR_SELF takes precedence over a pointer from a neighbouring stamp.
+    if high_bridge_stamp_for_overlay(overlay_at(at)).is_some() {
+        let deck = anchor_deck(at);
+        return (deck > local_deck).then_some(deck);
+    }
+    let mut structural = false;
+    let mut last_anchor = None;
+    // Inverse offsets from the target to the anchor for F1, F2, Opposite
+    // and ExtraDir6. F3 and the anchor itself do not write the pointer.
+    for (x, y, direction, supports_deck) in [
+        (0, 1, 0, true),
+        (0, 2, 0, true),
+        (0, -1, 0, true),
+        (1, 0, 6, true),
+        (2, 0, 6, true),
+        (-1, 0, 6, true),
+        (-2, 0, 6, false),
+    ] {
+        let Ok(anchor) = cell(at, x, y) else { continue };
+        if high_bridge_stamp_for_overlay(overlay_at(anchor))
+            .is_some_and(|(_, dir)| dir == direction)
+        {
+            structural |= supports_deck;
+            let packed_order = (anchor[1], anchor[0]);
+            last_anchor = Some(last_anchor.map_or(packed_order, |prev| packed_order.max(prev)));
+        }
+    }
+    let (y, x) = last_anchor.filter(|_| structural)?;
+    let deck = anchor_deck([x, y]);
+    (deck > local_deck).then_some(deck)
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BridgeKind {
@@ -59,7 +125,7 @@ fn overlay_name(id: u8) -> String {
     }
 }
 
-fn standard_overlay(scene: &MapScene, id: u8) -> bool {
+pub(crate) fn standard_overlay(scene: &MapScene, id: u8) -> bool {
     let expected = overlay_name(id);
     !expected.is_empty()
         && scene
@@ -469,8 +535,8 @@ pub fn plan(
     );
     let base = if kind.high() {
         landing
-            .checked_sub(4)
-            .context("高架桥两端至少应在第 4 层；桥下低 4 层")?
+            .checked_sub(BRIDGE_DECK_HEIGHT_LEVELS as u8)
+            .context("高架桥两端至少应在第 4 层")?
     } else {
         landing
     };
@@ -490,6 +556,7 @@ pub fn plan(
     };
     let mut footprint = BTreeSet::new();
     let mut deck = BTreeSet::new();
+    let mut under_deck = BTreeSet::new();
     if kind.high() {
         let family = if kind == BridgeKind::HighWood {
             ids.cliffs.wood_bridge_set
@@ -573,11 +640,12 @@ pub fn plan(
                     .copied()
                     .unwrap_or_else(|| value(doc, scene, at));
                 ensure!(
-                    under.level == base || side == -2 && under.level == landing,
-                    "桥下地面必须比两端低 4 层，且桥面下不能有高度突变"
+                    (under.level as i8) <= (base as i8) || side == -2 && under.level == landing,
+                    "桥下地形必须与桥基等高或更低"
                 );
+                under_deck.insert(at);
                 footprint.insert(at);
-                if !p.edits.contains_key(&at) && under.level == base {
+                if !p.edits.contains_key(&at) && (under.level as i8) <= (base as i8) {
                     deck.insert(at);
                 }
             }
@@ -636,12 +704,27 @@ pub fn plan(
         let land_cliff = crate::coastal_cliffs::piece(scene, *id).is_some();
         let old_head =
             bridge_head(scene, *id) && p.edits.get(&at).is_some_and(|new| new.level == v.level);
+        let tile = i32::from(*id);
+        let morphable = scene.palette.morphable.contains(id);
+        // A suspended span can cross intact terrain, including a cliff face
+        // below the bridge. Bridgeheads and overlay crossings replace terrain.
+        let keep_ground = kind.high() && deck.contains(&at) && !crossings.contains(&at);
+        let keep_cliff = keep_ground && land_cliff;
+        let keep_slope = keep_ground
+            && t.slope != 0
+            && (morphable
+                || ids.ramp_base >= 0 && (ids.ramp_base..ids.ramp_base + 20).contains(&tile)
+                || ids.ramp_smooth >= 0 && (ids.ramp_smooth..ids.ramp_smooth + 12).contains(&tile));
         let ordinary = land(scene, v)
-            || scene.palette.morphable.contains(id)
-            || i32::from(*id) == ids.clear
-            || ids.is_water_shore_or_waterfall(i32::from(*id));
+            || morphable
+            || tile == ids.clear
+            || ids.is_water_shore_or_waterfall(tile)
+            || keep_slope;
         ensure!(
-            ordinary || old_head || land_cliff && (p.edits.contains_key(&at) || v.level == base),
+            ordinary
+                || old_head
+                || keep_cliff
+                || land_cliff && (p.edits.contains_key(&at) || v.level == base),
             "桥梁范围 {},{} 有不能替换的特殊地形 #{}（{}）",
             at[0],
             at[1],
@@ -652,10 +735,16 @@ pub fn plan(
                 .get(id)
                 .map_or("未知", |g| g.name.as_str())
         );
-        ensure!(t.slope == 0 || old_head, "桥梁范围内有坡面");
+        ensure!(
+            t.slope == 0 || old_head || keep_slope || keep_cliff,
+            "桥梁范围内有坡面"
+        );
         if kind.high() {
             ensure!(
-                old_head || v.level == base || v.level == landing,
+                old_head
+                    || v.level == base
+                    || v.level == landing
+                    || under_deck.contains(&at) && (v.level as i8) < (base as i8),
                 "桥梁范围内高度不匹配"
             );
         } else {

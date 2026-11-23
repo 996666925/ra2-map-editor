@@ -174,8 +174,23 @@ pub fn value(doc: &MapDocument, scene: &MapScene, at: Cell) -> TerrainValue {
     })
 }
 
-/// Exact floor at an authored object's cell centre, including preview terrain.
-pub fn object_world_z(scene: &MapScene, at: Cell, value: TerrainValue, on_bridge: bool) -> i32 {
+/// Exact floor at an authored object's cell centre, including prospective
+/// terrain and overlays that have not reached the resolved scene yet.
+pub fn preview_object_world_z(
+    scene: &MapScene,
+    at: Cell,
+    on_bridge: bool,
+    terrain_at: impl Fn(Cell) -> TerrainValue,
+    overlay_at: impl Fn(Cell) -> u8,
+) -> i32 {
+    use vera20k_core::util::lepton::{BRIDGE_DECK_HEIGHT_LEPTONS, GROUND_LEVEL_HEIGHT_LEPTONS};
+    if on_bridge
+        && let Some(level) =
+            crate::bridge_tools::authored_deck_level(scene, at, |c| terrain_at(c).level, overlay_at)
+    {
+        return i32::from(level) * GROUND_LEVEL_HEIGHT_LEPTONS;
+    }
+    let value = terrain_at(at);
     let tile = scene
         .catalog
         .raw_tiles
@@ -187,14 +202,23 @@ pub fn object_world_z(scene: &MapScene, at: Cell, value: TerrainValue, on_bridge
         .and_then(|t| t.cells.get(usize::from(value.sub)))
         .and_then(|s| *s)
         .map_or(0, |s| s.slope);
-    vera20k_core::util::lepton::ground_height_leptons(
-        value.level,
+    ground_world_z(at, value.level, slope)
+        + if on_bridge {
+            BRIDGE_DECK_HEIGHT_LEPTONS
+        } else {
+            0
+        }
+}
+
+pub(crate) fn ground_world_z(at: Cell, level: u8, slope: u8) -> i32 {
+    use vera20k_core::util::lepton::{GROUND_LEVEL_HEIGHT_LEPTONS, ground_height_leptons};
+    ground_height_leptons(
+        level,
         slope,
         i32::from(at[0]) * 256 + 128,
         i32::from(at[1]) * 256 + 128,
     )
-    .unwrap_or(i32::from(value.level) * 104)
-        + if on_bridge { 416 } else { 0 }
+    .unwrap_or(i32::from(level as i8) * GROUND_LEVEL_HEIGHT_LEPTONS)
 }
 
 fn raw(scene: &MapScene, tile: i32) -> Option<i32> {
@@ -645,7 +669,9 @@ pub fn height_with_change(
             .and_then(|s| *s)
             .map_or(0, |s| s.slope);
         grid.insert((x, y), (tile, old.level, slope));
-        if old.level > 12 || doc.overlay([x as u16, y as u16]).0 != 255 {
+        if old.level > 12
+            || !crate::bridge_tools::height_editable_overlay(doc, scene, [x as u16, y as u16])
+        {
             protected.insert((x, y));
         }
     }
