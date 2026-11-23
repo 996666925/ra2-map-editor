@@ -50,6 +50,9 @@ pub struct Catalog {
     pub infantry_appearances: BTreeMap<String, crate::mission_resources::InfantryAppearance>,
     pub shp_vehicle_turrets:
         BTreeMap<String, vera20k_core::rules::animation_sequence::ShpVehicleTurret>,
+    pub shp_vehicle_body_frames: BTreeMap<String, [Option<u16>; 256]>,
+    pub alternate_theater_shps:
+        BTreeMap<(&'static str, String), crate::mission_resources::TheaterShpAppearance>,
     pub water_images: BTreeMap<String, crate::mission_resources::WaterAppearance>,
     pub rules: IniFile,
     /// Active installation language table; shared by map-local catalog clones.
@@ -79,6 +82,8 @@ impl Default for Catalog {
             radar: Default::default(),
             infantry_appearances: BTreeMap::new(),
             shp_vehicle_turrets: BTreeMap::new(),
+            shp_vehicle_body_frames: BTreeMap::new(),
+            alternate_theater_shps: BTreeMap::new(),
             water_images: BTreeMap::new(),
             rules: IniFile::empty(),
             strings: None,
@@ -101,6 +106,21 @@ impl Default for Catalog {
     }
 }
 impl Catalog {
+    pub fn alternate_theater_shp(
+        &self,
+        section: &str,
+        id: &str,
+    ) -> Option<&crate::mission_resources::TheaterShpAppearance> {
+        let section = match section {
+            "Structures" => "Structures",
+            "Units" => "Units",
+            "Aircraft" => "Aircraft",
+            _ => return None,
+        };
+        self.alternate_theater_shps
+            .get(&(section, id.to_ascii_uppercase()))
+    }
+
     pub fn infantry_image(&self, id: &str) -> Option<&str> {
         self.infantry_appearances
             .get(&id.to_ascii_uppercase())
@@ -353,6 +373,8 @@ impl Catalog {
         ) {
             catalog.infantry_appearances = registries.infantry_appearances;
             catalog.shp_vehicle_turrets = registries.shp_vehicle_turrets;
+            catalog.shp_vehicle_body_frames = registries.shp_vehicle_body_frames;
+            catalog.alternate_theater_shps = registries.alternate_theater_shps;
             catalog.water_images = registries.water_images;
             catalog.mission_country_indices = registries.countries;
             catalog.mission_country_names = registries.country_names;

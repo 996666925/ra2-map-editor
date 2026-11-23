@@ -636,3 +636,24 @@ fn symlink_payload_changes_invalidate_resource_profiles_and_views() {
         Some(b"after!".as_slice())
     );
 }
+
+#[test]
+fn resource_refresh_detects_same_size_loose_ini_edits_with_same_stamp() {
+    let game = game();
+    let path = game.0.join("rulesmd.ini");
+    fs::write(&path, b"[General]\nBuildSpeed=.7\n").unwrap();
+    let stamp = crate::profile::FileStamp::read(&path).unwrap();
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    let initial = crate::assets::Install::open_with_resources(&game.0, None, &|| false).unwrap();
+    let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    fs::write(&path, b"[General]\nBuildSpeed=.8\n").unwrap();
+    file.set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert_eq!(stamp, crate::profile::FileStamp::read(&path).unwrap());
+    let refreshed = initial.reconfigure_map_resources(None, &|| false).unwrap();
+    assert_ne!(initial.base_revision(), refreshed.base_revision());
+    assert_eq!(
+        refreshed.manager.get_ref("rulesmd.ini"),
+        Some(b"[General]\nBuildSpeed=.8\n".as_slice())
+    );
+}

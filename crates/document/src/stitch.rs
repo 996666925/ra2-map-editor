@@ -101,6 +101,7 @@ impl Workspace {
                     | "Tubes"
                     | "TunnelPortalBackup"
                     | "TunnelPortalFacing"
+                    | "TunnelReverse"
                     | storage::SECTION
             )
         };

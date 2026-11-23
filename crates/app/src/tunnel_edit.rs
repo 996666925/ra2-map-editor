@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 const MAX_PATH_STEPS: usize = 99;
 const PORTAL_BACKUP_SECTION: &str = "TunnelPortalBackup";
 const PORTAL_FACING_SECTION: &str = "TunnelPortalFacing";
+const REVERSE_SECTION: &str = "TunnelReverse";
 const DIRECTIONS: [(i32, i32); 8] = [
     (0, -1),
     (1, -1),
@@ -34,6 +35,7 @@ struct TunnelRecord {
     exit: Cell,
     direction: i32,
     exit_facing: Option<u8>,
+    reverse: Option<(Target, String)>,
     steps: Vec<i32>,
     error: Option<String>,
 }
@@ -486,6 +488,7 @@ fn parse_record(target: Target, key: String, bytes: &[u8]) -> TunnelRecord {
         exit: [0, 0],
         direction: 0,
         exit_facing: None,
+        reverse: None,
         steps: Vec::new(),
         error: None,
     };
@@ -532,7 +535,7 @@ fn parse_record(target: Target, key: String, bytes: &[u8]) -> TunnelRecord {
     row
 }
 
-fn rows(doc: &MapDocument) -> Vec<TunnelRecord> {
+fn physical_rows(doc: &MapDocument) -> Vec<TunnelRecord> {
     doc.ini_entries("Tubes")
         .into_iter()
         .map(|(target, key, value)| {
@@ -545,6 +548,151 @@ fn rows(doc: &MapDocument) -> Vec<TunnelRecord> {
             tunnel
         })
         .collect()
+}
+
+fn rows(doc: &MapDocument) -> Vec<TunnelRecord> {
+    let mut entries = physical_rows(doc);
+    let mut by_key = BTreeMap::new();
+    for row in &entries {
+        by_key
+            .entry(row.key.as_str())
+            .and_modify(|unique| *unique = None)
+            .or_insert(Some(row));
+    }
+    let metadata = doc.ini_fields(REVERSE_SECTION);
+    let mut claims = BTreeMap::<_, Vec<_>>::new();
+    for (key, reverse_key) in &metadata {
+        let Ok(reverse_key) = std::str::from_utf8(reverse_key) else {
+            continue;
+        };
+        let (Some(Some(row)), Some(Some(reverse))) =
+            (by_key.get(key.as_str()), by_key.get(reverse_key))
+        else {
+            continue;
+        };
+        // Only pair an exact, unambiguous generated counterpart. An edited
+        // or imported record must remain visible and independently editable.
+        if admits_exit(row)
+            && admits_exit(reverse)
+            && reverse.entry == row.exit
+            && reverse.exit == row.entry
+            && row.steps.iter().all(|step| (0..8).contains(step))
+            && route(row.entry, &row.steps).last() == Some(&row.exit)
+            && reverse.steps.first() == Some(&reverse.direction)
+            && reverse.steps.iter().copied().eq(reverse_steps(&row.steps))
+            && !metadata.contains_key(reverse_key)
+        {
+            claims
+                .entry(reverse.target.clone())
+                .or_default()
+                .push((row, reverse));
+        }
+    }
+    let mut companions = BTreeMap::new();
+    let mut hidden = BTreeSet::new();
+    for (target, claims) in claims {
+        if let [(row, reverse)] = claims.as_slice() {
+            companions.insert(row.target.clone(), (target.clone(), reverse.key.clone()));
+            hidden.insert(target);
+        }
+    }
+    entries.retain(|row| !hidden.contains(&row.target));
+    for row in &mut entries {
+        row.reverse = companions.remove(&row.target);
+    }
+    entries
+}
+
+fn reverse_steps(steps: &[i32]) -> impl Iterator<Item = i32> + '_ {
+    steps.iter().rev().map(|step| (step & 7) ^ 4)
+}
+
+fn admits_exit(tunnel: &TunnelRecord) -> bool {
+    tunnel.error.is_none() && tunnel.entry != tunnel.exit && tunnel.exit != [0, 0]
+}
+
+/// The engine uses the last record at a cell for direction-8 exit admission.
+/// A route may share that record with another tunnel, including on old maps.
+fn check_exit_dependencies(
+    before: &[TunnelRecord],
+    after: &[TunnelRecord],
+    edited: &TunnelRecord,
+) -> Result<()> {
+    let portal_at = |rows: &[TunnelRecord], cell| {
+        rows.iter()
+            .rev()
+            .find(|row| row.entry == cell)
+            .is_some_and(admits_exit)
+    };
+    let cells = [
+        Some(edited.entry),
+        edited.reverse.as_ref().map(|_| edited.exit),
+    ];
+    for cell in cells.into_iter().flatten() {
+        if !portal_at(before, cell) || portal_at(after, cell) {
+            continue;
+        }
+        if let Some(dependent) = after
+            .iter()
+            .find(|row| admits_exit(row) && row.exit == cell)
+        {
+            anyhow::bail!(
+                "{}",
+                tr!(
+                    "此操作会使隧道 {tunnel} 无法出洞，请先重绘或删除该隧道",
+                    tunnel = dependent.key
+                )
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Imported reciprocal records remain separate in the list. Offer an explicit
+/// pair removal when both mouths have a single visible, unowned record.
+fn reciprocal_tunnel<'a>(
+    tunnels: &'a [TunnelRecord],
+    selected: &TunnelRecord,
+) -> Option<&'a TunnelRecord> {
+    if selected.reverse.is_some() || !admits_exit(selected) {
+        return None;
+    }
+    let mut at_mouths = tunnels.iter().filter(|row| {
+        row.target != selected.target && (row.entry == selected.entry || row.entry == selected.exit)
+    });
+    let other = at_mouths.next()?;
+    (at_mouths.next().is_none()
+        && other.reverse.is_none()
+        && admits_exit(other)
+        && other.entry == selected.exit
+        && other.exit == selected.entry)
+        .then_some(other)
+}
+
+fn delete_tunnel(
+    doc: &mut MapDocument,
+    scene: &MapScene,
+    tunnel: &TunnelRecord,
+    reciprocal: Option<&TunnelRecord>,
+) -> Result<()> {
+    let before = physical_rows(doc);
+    let selection = || std::iter::once(tunnel).chain(reciprocal);
+    doc.atomic(|doc| {
+        for row in selection() {
+            restore_portal_backups(doc, scene, row)?;
+            doc.set_ini(PORTAL_FACING_SECTION, &row.key, None)?;
+            doc.set_ini(REVERSE_SECTION, &row.key, None)?;
+            if let Some((target, _)) = &row.reverse {
+                doc.set(target.clone(), None)?;
+            }
+            doc.set(row.target.clone(), None)?;
+        }
+        let after = physical_rows(doc);
+        for row in selection() {
+            check_exit_dependencies(&before, &after, row)?;
+        }
+        Ok(())
+    })
 }
 
 fn route(entry: Cell, steps: &[i32]) -> Vec<Cell> {
@@ -599,15 +747,23 @@ fn serialize(entry: Cell, exit: Cell, direction: u8, steps: &[i32]) -> Vec<u8> {
     fields.join(",").into_bytes()
 }
 
-fn next_key(doc: &MapDocument) -> Result<String> {
-    let used: std::collections::BTreeSet<_> = doc
+fn next_key(doc: &MapDocument, reserved: Option<&str>) -> Result<String> {
+    let mut used: BTreeSet<_> = doc
         .ini_entries("Tubes")
         .into_iter()
         .map(|(_, key, _)| key)
         .collect();
+    // A dangling marker from an external edit must not claim a new record
+    // that happens to reuse an old INI key.
+    for (_, key, value) in doc.ini_entries(REVERSE_SECTION) {
+        used.insert(key);
+        if let Ok(key) = String::from_utf8(value) {
+            used.insert(key);
+        }
+    }
     (0u32..=u32::MAX)
-        .find(|n| !used.contains(&n.to_string()))
         .map(|n| n.to_string())
+        .find(|key| Some(key.as_str()) != reserved && !used.contains(key))
         .context(tr!("没有可用的隧道编号"))
 }
 
@@ -711,7 +867,7 @@ impl TunnelEdit {
 
         let mut begin_new = false;
         let mut begin_redraw = false;
-        let mut delete = false;
+        let mut delete = None;
         let mut save = false;
         ui.horizontal_wrapped(|ui| {
             if ui.button(tr!("新建隧道")).clicked() {
@@ -730,11 +886,17 @@ impl TunnelEdit {
             {
                 begin_redraw = true;
             }
+            let reciprocal = selected.and_then(|entry| reciprocal_tunnel(&entries, entry));
+            let delete_label = if reciprocal.is_some() {
+                tr!("删除两条往返路径")
+            } else {
+                tr!("删除所选")
+            };
             if ui
-                .add_enabled(selected.is_some(), egui::Button::new(tr!("删除所选")))
+                .add_enabled(selected.is_some(), egui::Button::new(delete_label))
                 .clicked()
             {
-                delete = true;
+                delete = selected.map(|entry| (entry, reciprocal));
             }
         });
 
@@ -814,19 +976,10 @@ impl TunnelEdit {
         {
             self.begin_redraw(entry);
         }
-        if delete {
+        if let Some((tunnel, reciprocal)) = delete {
             let result = (|| -> Result<()> {
-                let target = self.selected.clone().context(tr!("请选择一条隧道"))?;
                 let doc = editor.doc.as_mut().context(tr!("没有可编辑地图"))?;
-                let tunnel = rows(doc)
-                    .into_iter()
-                    .find(|entry| entry.target == target)
-                    .context(tr!("请选择一条隧道"))?;
-                doc.atomic(|doc| {
-                    restore_portal_backups(doc, scene, &tunnel)?;
-                    doc.set_ini(PORTAL_FACING_SECTION, &tunnel.key, None)?;
-                    doc.set(target, None)
-                })?;
+                delete_tunnel(doc, scene, tunnel, reciprocal)?;
                 editor.commit(scene, "删除隧道");
                 Ok(())
             })();
@@ -974,15 +1127,24 @@ impl TunnelEdit {
         let source_doc = editor.doc.as_ref().context(tr!("没有可编辑地图"))?;
         let target = match draft.replace.clone() {
             Some(target) => target,
-            None => Target::IniNew("Tubes".into(), next_key(source_doc)?),
+            None => Target::IniNew("Tubes".into(), next_key(source_doc, None)?),
         };
         let replaced_tunnel = rows(source_doc)
             .into_iter()
             .find(|row| row.target == target);
+        let previous_reverse = replaced_tunnel
+            .as_ref()
+            .and_then(|row| row.reverse.as_ref());
+        let physical = physical_rows(source_doc);
+        let foreign = |row: &&TunnelRecord| {
+            row.target != target
+                && previous_reverse.is_none_or(|(reverse, _)| row.target != *reverse)
+        };
         ensure!(
-            !rows(source_doc)
+            !physical
                 .iter()
-                .any(|row| row.target != target && row.entry == entry),
+                .filter(foreign)
+                .any(|row| row.entry == entry),
             "{}",
             tr!("入口格已有另一条隧道")
         );
@@ -1057,6 +1219,27 @@ impl TunnelEdit {
             Target::IniNew(_, key) => key.clone(),
             _ => unreachable!("tunnel targets are INI entries"),
         };
+        let reverse = if direction_only {
+            previous_reverse.cloned()
+        } else {
+            ensure!(entry != exit, "{}", tr!("隧道入口和出口必须位于不同格子"));
+            if let Some(exit_row) = physical
+                .iter()
+                .filter(foreign)
+                .rev()
+                .find(|row| row.entry == exit)
+            {
+                // Native direction-8 admission reads the exit Cell's [Tubes]
+                // record (Unit 0x0073F218, Infantry 0x0051BFFD).
+                ensure!(admits_exit(exit_row), "{}", tr!("出口格已有无效的隧道记录"));
+                None
+            } else if let Some(reverse) = previous_reverse {
+                Some(reverse.clone())
+            } else {
+                let key = next_key(source_doc, Some(&tunnel_key))?;
+                Some((Target::IniNew("Tubes".into(), key.clone()), key))
+            }
+        };
         let doc = editor.doc.as_mut().context(tr!("没有可编辑地图"))?;
         doc.atomic(|doc| {
             if let Some(tunnel) = &replaced_tunnel {
@@ -1067,6 +1250,24 @@ impl TunnelEdit {
                     .map_err(|_| anyhow::anyhow!(tr!("路径格子超出可用地图范围")))?;
             }
             doc.set(target.clone(), Some(Value::Ini(encoded)))?;
+            if !direction_only {
+                if let Some((reverse_target, key)) = &reverse {
+                    let back: Vec<_> = reverse_steps(&steps).collect();
+                    doc.set(
+                        reverse_target.clone(),
+                        Some(Value::Ini(serialize(exit, entry, back[0] as u8, &back))),
+                    )?;
+                    doc.set_ini(REVERSE_SECTION, &tunnel_key, Some(key.as_bytes().to_vec()))?;
+                } else {
+                    if let Some((reverse_target, _)) = previous_reverse {
+                        doc.set(reverse_target.clone(), None)?;
+                    }
+                    doc.set_ini(REVERSE_SECTION, &tunnel_key, None)?;
+                }
+            }
+            if !direction_only && let Some(tunnel) = &replaced_tunnel {
+                check_exit_dependencies(&physical, &physical_rows(doc), tunnel)?;
+            }
             doc.set_ini(
                 PORTAL_FACING_SECTION,
                 &tunnel_key,
@@ -1406,6 +1607,154 @@ mod tests {
         assert_eq!(doc.terrain([20, 20]), Some(manually_edited));
         assert_eq!(doc.terrain([28, 20]), Some(clear_terrain(&scene)));
         assert!(doc.snapshot().bytes().is_ok());
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deleting_or_moving_a_tunnel_cannot_strand_a_route_using_its_portal() {
+        let (mut editor, _ctx, root) = editor();
+        let scene = terrain_scene();
+        editor.attach(&scene);
+        draw_test_tunnel(&mut editor, &scene, vec![[20, 20], [21, 20], [22, 20]]);
+        draw_test_tunnel(&mut editor, &scene, vec![[22, 21], [22, 20]]);
+        editor.doc = Some(reopen(editor.doc.as_ref().unwrap()));
+        let doc = editor.doc.as_mut().unwrap();
+        let original = doc.snapshot().bytes().unwrap();
+        let tunnels = rows(doc);
+        assert_eq!(tunnels.len(), 2);
+        let owner = tunnels
+            .iter()
+            .find(|tunnel| tunnel.entry == [20, 20])
+            .unwrap();
+        let dependent = tunnels
+            .iter()
+            .find(|tunnel| tunnel.entry == [22, 21])
+            .unwrap();
+        assert!(delete_tunnel(doc, &scene, owner, None).is_err());
+        assert_eq!(doc.snapshot().bytes().unwrap(), original);
+
+        let mut state = std::mem::take(&mut editor.tunnel_edit);
+        state.draft = Some(TunnelDraft {
+            replace: Some(owner.target.clone()),
+            points: vec![[20, 20], [21, 20]],
+            direction: 2,
+        });
+        assert!(state.save_draft(&mut editor, &scene).is_err());
+        let doc = editor.doc.as_mut().unwrap();
+        assert_eq!(doc.snapshot().bytes().unwrap(), original);
+
+        delete_tunnel(doc, &scene, dependent, None).unwrap();
+        delete_tunnel(doc, &scene, owner, None).unwrap();
+        assert!(physical_rows(doc).is_empty());
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn new_tunnel_avoids_keys_referenced_by_stale_reverse_markers() {
+        let (mut editor, _ctx, root) = editor();
+        let scene = terrain_scene();
+        editor.attach(&scene);
+        editor
+            .doc
+            .as_mut()
+            .unwrap()
+            .set_ini(REVERSE_SECTION, "1", Some(b"0".to_vec()))
+            .unwrap();
+        draw_test_tunnel(&mut editor, &scene, vec![[20, 20], [21, 20]]);
+        let doc = reopen(editor.doc.as_ref().unwrap());
+        let tunnels = rows(&doc);
+        assert_eq!(tunnels.len(), 1);
+        assert_eq!(tunnels[0].key, "2");
+        assert_eq!(tunnels[0].reverse.as_ref().unwrap().1, "3");
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn imported_reciprocal_routes_can_be_deleted_together_without_stranding_other_routes() {
+        use egui_kittest::kittest::Queryable as _;
+        let (mut editor, _ctx, root) = editor();
+        let scene = terrain_scene();
+        editor.attach(&scene);
+        let doc = editor.doc.as_mut().unwrap();
+        for (key, route) in [
+            ("0", "20,20,2,22,20,2,2,-1"),
+            ("1", "22,20,4,20,20,4,6,7,-1"),
+            ("2", "20,21,0,20,20,0,-1"),
+        ] {
+            doc.set_ini("Tubes", key, Some(route.as_bytes().to_vec()))
+                .unwrap();
+        }
+        editor.doc = Some(reopen(doc));
+        let doc = editor.doc.as_mut().unwrap();
+        let entries = rows(doc);
+        let before = doc.snapshot().bytes().unwrap();
+        let selected = &entries[0];
+        let reverse = reciprocal_tunnel(&entries, selected).unwrap();
+        assert_eq!(reverse.key, "1");
+        assert!(delete_tunnel(doc, &scene, selected, None).is_err());
+        assert!(delete_tunnel(doc, &scene, selected, Some(reverse)).is_err());
+        assert_eq!(doc.snapshot().bytes().unwrap(), before);
+        delete_tunnel(doc, &scene, &entries[2], None).unwrap();
+        editor.commit(&scene, "删除隧道");
+        let before_pair_delete = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+
+        editor.activate_tool(Tool::Tunnel);
+        {
+            let mut harness = crate::test_support::harness()
+                .with_context_setup(|ctx| {
+                    crate::ui_theme::install(ctx);
+                    ctx.add_font_provider(std::sync::Arc::new(
+                        egui_system_font_provider::SystemFontProvider::new(),
+                    ));
+                })
+                .with_size(egui::vec2(650., 1300.))
+                .build_ui(|ui| editor.tunnel_options(ui, &scene));
+            harness
+                .get_by_label("隧道 0 · (20,20) → (22,20) · 2 步")
+                .click();
+            harness.run();
+            harness.get_by_label("删除两条往返路径").click();
+            harness.run();
+        }
+        assert!(physical_rows(editor.doc.as_ref().unwrap()).is_empty());
+        editor.history(false, &scene);
+        assert_eq!(
+            editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
+            before_pair_delete
+        );
+        editor.history(true, &scene);
+        assert!(physical_rows(editor.doc.as_ref().unwrap()).is_empty());
+        drop(editor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ambiguous_reverse_metadata_cannot_hide_or_delete_a_foreign_record() {
+        let (mut editor, _ctx, root) = editor();
+        let scene = terrain_scene();
+        editor.attach(&scene);
+        let doc = editor.doc.as_mut().unwrap();
+        for (key, value) in [
+            ("0", "20,20,2,21,20,2,-1"),
+            ("1", "21,20,6,20,20,6,-1"),
+            ("2", "20,20,2,21,20,2,-1"),
+        ] {
+            doc.set_ini("Tubes", key, Some(value.as_bytes().to_vec()))
+                .unwrap();
+        }
+        for key in ["0", "2"] {
+            doc.set_ini(REVERSE_SECTION, key, Some(b"1".to_vec()))
+                .unwrap();
+        }
+        let mut doc = reopen(doc);
+        let tunnels = rows(&doc);
+        assert_eq!(tunnels.len(), 3);
+        assert!(tunnels.iter().all(|tunnel| tunnel.reverse.is_none()));
+        delete_tunnel(&mut doc, &scene, &tunnels[0], None).unwrap();
+        assert!(doc.ini_value("Tubes", "1").is_some());
         drop(editor);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1814,8 +2163,15 @@ mod tests {
         assert_eq!(entries[0].steps, [2, 2]);
         let serialized = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
         let raw = ra2_map_document::raw_ini::RawIni::parse(serialized.into()).unwrap();
-        let (line, _) = raw.entries("Tubes").next().unwrap();
-        assert_eq!(raw.value(line), b"20,20,2,22,20,2,2,-1");
+        let records: Vec<_> = raw
+            .entries("Tubes")
+            .map(|(line, _)| raw.value(line))
+            .collect();
+        assert_eq!(
+            records,
+            [&b"20,20,2,22,20,2,2,-1"[..], &b"22,20,6,20,20,6,6,-1"[..]]
+        );
+        assert_eq!(rows(&reopen(editor.doc.as_ref().unwrap())).len(), 1);
 
         editor.history(false, &scene);
         assert!(rows(editor.doc.as_ref().unwrap()).is_empty());
@@ -1844,8 +2200,10 @@ mod tests {
         assert_eq!(rows(editor.doc.as_ref().unwrap())[0].entry, [20, 20]);
         editor.history(true, &scene);
         assert_eq!(rows(editor.doc.as_ref().unwrap())[0].entry, [22, 20]);
-        editor.doc.as_mut().unwrap().set(target, None).unwrap();
+        let tunnel = rows(editor.doc.as_ref().unwrap()).remove(0);
+        delete_tunnel(editor.doc.as_mut().unwrap(), &scene, &tunnel, None).unwrap();
         editor.commit(&scene, "删除隧道");
+        assert!(physical_rows(editor.doc.as_ref().unwrap()).is_empty());
         assert!(rows(editor.doc.as_ref().unwrap()).is_empty());
         drop(editor);
         std::fs::remove_dir_all(root).unwrap();
@@ -1920,11 +2278,7 @@ mod tests {
         assert_eq!(doc.terrain([28, 26]), before_redraw_exit);
         let tunnel = rows(doc).remove(0);
         let doc = editor.doc.as_mut().unwrap();
-        doc.atomic(|doc| {
-            restore_portal_backups(doc, &scene, &tunnel)?;
-            doc.set(tunnel.target.clone(), None)
-        })
-        .unwrap();
+        delete_tunnel(doc, &scene, &tunnel, None).unwrap();
         editor.commit(&scene, "删除隧道");
         let doc = editor.doc.as_ref().unwrap();
         assert!(rows(doc).is_empty());

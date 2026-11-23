@@ -142,6 +142,12 @@ fn expansion_migrates_objects_packs_tags_nodes_tubes_and_script_cells_as_one_his
         .unwrap();
     doc.set_ini("Tubes", "0", Some(b"24,40,2,26,40,2,2,-1".to_vec()))
         .unwrap();
+    doc.set_ini("Tubes", "1", Some(b"26,40,6,24,40,6,6,-1".to_vec()))
+        .unwrap();
+    doc.set_ini("TunnelReverse", "0", Some(b"1".to_vec()))
+        .unwrap();
+    doc.set_ini("TunnelReverse", "99", Some(b"1".to_vec()))
+        .unwrap();
     doc.set_ini("TunnelPortalFacing", "0", Some(b"2".to_vec()))
         .unwrap();
     doc.set_ini("TunnelPortalFacing", "99", Some(b"6".to_vec()))
@@ -205,6 +211,9 @@ fn expansion_migrates_objects_packs_tags_nodes_tubes_and_script_cells_as_one_his
         format!("4,{}", 43 * 128 + 27)
     );
     assert_eq!(doc.ini_text("Tubes", "0"), "27,43,2,29,43,2,2,-1");
+    assert_eq!(doc.ini_text("Tubes", "1"), "29,43,6,27,43,6,6,-1");
+    assert_eq!(doc.ini_text("TunnelReverse", "0"), "1");
+    assert!(doc.ini_value("TunnelReverse", "99").is_none());
     assert_eq!(doc.ini_text("TunnelPortalFacing", "0"), "2");
     assert!(doc.ini_value("TunnelPortalFacing", "99").is_none());
     assert_eq!(
@@ -595,4 +604,43 @@ fn author_and_starting_bases_roundtrip_and_undo() {
     let map = map_file::load_from_bytes(bytes.clone()).unwrap();
     let created = MapDocument::new(Baseline::parse(bytes.into(), &map).unwrap());
     assert_eq!(created.ini_text("Basic", "Author"), "新建作者");
+}
+
+#[test]
+fn crop_cannot_strand_a_retained_route_when_its_exit_record_is_clipped() {
+    let mut doc = document();
+    for (key, route) in [
+        ("0", "56,55,2,59,56,2,2,2,4,-1"),
+        ("1", "59,56,0,56,55,0,6,6,6,-1"),
+        ("2", "56,54,4,56,55,4,-1"),
+    ] {
+        doc.set_ini("Tubes", key, Some(route.as_bytes().to_vec()))
+            .unwrap();
+    }
+    doc.set_ini("TunnelReverse", "0", Some(b"1".to_vec()))
+        .unwrap();
+    doc.commit("fixture");
+    let mut options = Options::from_document(&doc);
+    options.height = 36;
+    options.local = [2, 4, 36, 26];
+    options.delete_outside = true;
+    let preview = plan(&doc, options.clone(), &Footprints::new()).unwrap();
+    assert!(!preview.can_apply());
+    assert!(
+        preview
+            .summary
+            .affected
+            .iter()
+            .any(|item| item.blocking && item.source == "Tubes/2/Exit")
+    );
+    doc.set_ini("Tubes", "2", None).unwrap();
+    doc.commit("remove dependent route");
+    let before = doc.snapshot().bytes().unwrap();
+    let preview = plan(&doc, options, &Footprints::new()).unwrap();
+    assert!(preview.can_apply());
+    preview.apply(&mut doc).unwrap();
+    assert!(doc.ini_entries("Tubes").is_empty());
+    assert!(doc.ini_entries("TunnelReverse").is_empty());
+    assert!(doc.undo());
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
 }

@@ -437,13 +437,12 @@ impl Editor {
                 if press && at.is_some() {
                     g.road_leg_pressed = true;
                 }
-                if release || !down {
-                    if std::mem::take(&mut g.road_leg_pressed)
-                        && let Some(at) = at.map(|at| g.road_endpoint(at))
-                        && g.path.last() != Some(&at)
-                    {
-                        g.path.push(at);
-                    }
+                if (release || !down)
+                    && std::mem::take(&mut g.road_leg_pressed)
+                    && let Some(at) = at.map(|at| g.road_endpoint(at))
+                    && g.path.last() != Some(&at)
+                {
+                    g.path.push(at);
                 }
                 return true;
             }

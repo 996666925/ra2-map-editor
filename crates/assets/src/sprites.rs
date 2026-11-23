@@ -89,7 +89,28 @@ fn preview(install: &Install, catalog: &Catalog, section: &str, id: &str) -> Spr
     };
     let entry = catalog.art.get(&image);
     let voxel = entry.is_some_and(|e| e.voxel);
-    let candidates = if section == "Infantry"
+    let theater_shp = catalog.alternate_theater_shp(section, id);
+    let metadata_image = theater_shp.map_or(image.as_str(), |appearance| &appearance.image);
+    let candidates = if let Some(appearance) = theater_shp {
+        if section == "Structures" {
+            let body_image = catalog
+                .art
+                .resolve_effective_image_id(id, &appearance.image);
+            art_data::building_body_shp_candidates(
+                Some(&catalog.art),
+                &appearance.image,
+                &body_image,
+                install.theater.extension,
+                &install.theater_name,
+            )
+        } else {
+            appearance
+                .loads
+                .iter()
+                .flat_map(|load| load.shp_names(install.theater.extension, &install.theater_name))
+                .collect()
+        }
+    } else if section == "Infantry"
         && let Some(appearance) = catalog.infantry_appearances.get(&id.to_ascii_uppercase())
     {
         // Use the game's retained LoadSHP requests, including Arctic art.
@@ -153,12 +174,12 @@ fn preview(install: &Install, catalog: &Catalog, section: &str, id: &str) -> Spr
                     let palette = building_palette(
                         install,
                         catalog,
-                        &image,
+                        metadata_image,
                         source.map(|source| (name.as_str(), source.source_archive)),
                     );
                     return decode_shp(install, name, &palette);
                 }
-                let mut custom_palette = techno_palette(install, catalog, &image);
+                let mut custom_palette = techno_palette(install, catalog, metadata_image);
                 if section == "Animations" && custom_palette.is_none() {
                     custom_palette = install
                         .manager
@@ -175,6 +196,15 @@ fn preview(install: &Install, catalog: &Catalog, section: &str, id: &str) -> Spr
                         &install.theater.unit_palette
                     }
                     "Terrain" => &install.theater.iso_palette,
+                    _ if theater_shp.is_some_and(|appearance| {
+                        catalog
+                            .art
+                            .get(&appearance.image)
+                            .is_some_and(|art| art.terrain_palette)
+                    }) =>
+                    {
+                        &install.theater.iso_palette
+                    }
                     "Smudge" => &install.theater.iso_palette,
                     "Overlay" => overlay_palette(install, catalog, id),
                     _ => &install.theater.unit_palette,

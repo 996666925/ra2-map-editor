@@ -107,10 +107,6 @@ impl MapScene {
             && !on_bridge
             && water
             && self
-                .sprites
-                .get(section, id)
-                .is_some_and(|preview| preview.voxel)
-            && self
                 .catalog
                 .water_images
                 .contains_key(&id.to_ascii_uppercase())
@@ -385,6 +381,8 @@ pub fn load_scene_bytes_controlled(
             catalog.radar = registries.radar;
             catalog.infantry_appearances = registries.infantry_appearances;
             catalog.shp_vehicle_turrets = registries.shp_vehicle_turrets;
+            catalog.shp_vehicle_body_frames = registries.shp_vehicle_body_frames;
+            catalog.alternate_theater_shps = registries.alternate_theater_shps;
             catalog.water_images = registries.water_images;
             catalog.mission_country_indices = registries.countries;
             catalog.mission_country_names = registries.country_names;
@@ -395,6 +393,8 @@ pub fn load_scene_bytes_controlled(
             let catalog = Arc::make_mut(&mut catalog);
             catalog.infantry_appearances.clear();
             catalog.shp_vehicle_turrets.clear();
+            catalog.shp_vehicle_body_frames.clear();
+            catalog.alternate_theater_shps.clear();
             catalog.water_images.clear();
             catalog.mission_country_indices.clear();
             catalog.mission_country_names.clear();

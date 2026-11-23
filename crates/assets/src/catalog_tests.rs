@@ -387,3 +387,147 @@ fn chinese_stock_fallback_translates_english_names_but_preserves_mod_renames() {
     assert_eq!(renamed.object_name_zh("TTNK"), "Custom Tesla Tank");
     assert_eq!(renamed.object_name_zh("UNKNOWN"), "UNKNOWN");
 }
+
+#[test]
+fn alternate_theater_shp_requires_ares_and_an_art_section() {
+    let fixture = Fixture::with_shp_turret();
+    let rules_path = fixture.0.join("rulesmd.ini");
+    let rules = std::fs::read_to_string(&rules_path).unwrap().replace(
+        "[TANK]\nStrength=100",
+        "[TANK]\nStrength=100\nAlternateTheaterArt=yes",
+    );
+    std::fs::write(rules_path, rules).unwrap();
+    let art_path = fixture.0.join("artmd.ini");
+    let base_art = std::fs::read_to_string(&art_path).unwrap();
+    // The file alone is insufficient. The engine first looks for the ART section.
+    let variant = fixture.0.join("tankt.shp");
+    crate::test_support::write_shp(&variant, 2);
+    for (ares, has_art, expected) in [
+        (false, true, "tank.shp"),
+        (true, false, "tank.shp"),
+        (true, true, "tankt.shp"),
+    ] {
+        let art = if has_art {
+            format!(
+                "{base_art}\n[TANKT]\nRemapable=yes\nXDrawOffset=7\nYDrawOffset=-9\nTerrainPalette=yes\n"
+            )
+        } else {
+            base_art.clone()
+        };
+        std::fs::write(&art_path, art).unwrap();
+        let mut install = fixture.install();
+        if ares {
+            install.manager = vera20k_core::assets::asset_manager::AssetManager::from_loose_root_with_ares_for_test(&fixture.0);
+        }
+        let catalog = Catalog::load(&install.manager, &install.theater);
+        let sprites = install.sprite_palette(&catalog);
+        let library = sprites
+            .get("Units", "TANK")
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap();
+        assert!(
+            library.info.name.eq_ignore_ascii_case(expected),
+            "{}",
+            library.info.name
+        );
+        let sprite = &sprites.objects[&("Units".into(), "TANK".into())];
+        let scene = sprite.image(16);
+        if ares && has_art {
+            assert_eq!(sprite.anchor, [7., -9.]);
+            assert_eq!(
+                &scene.rgba[..4],
+                &install.theater.iso_palette.to_rgba_bytes()[4..8]
+            );
+            assert_eq!(&library.rgba[..4], &scene.rgba[..4]);
+        } else {
+            assert_eq!(sprite.anchor, [0., -15.]);
+        }
+        assert!(
+            scene.info.name.eq_ignore_ascii_case(expected),
+            "{}",
+            scene.info.name
+        );
+    }
+}
+
+#[test]
+fn ares_shp_unit_uses_the_authored_heading_and_turret_ring_stride() {
+    let fixture = Fixture::with_shp_turret();
+    let rules_path = fixture.0.join("rulesmd.ini");
+    let rules = std::fs::read_to_string(&rules_path)
+        .unwrap()
+        .replace("[TANK]\nStrength=100", "[TANK]\nStrength=100\nTurret=yes");
+    std::fs::write(rules_path, rules).unwrap();
+    let art_path = fixture.0.join("artmd.ini");
+    let art = std::fs::read_to_string(&art_path).unwrap().replace(
+        "Facings=1\nWalkFrames=0\nStandingFrames=1",
+        "Facings=16\nWalkFrames=1\nStandingFrames=0",
+    );
+    std::fs::write(art_path, art).unwrap();
+    let path = fixture.0.join("tank.shp");
+    let count = 64;
+    crate::test_support::write_shp(&path, count);
+    let mut shp = std::fs::read(&path).unwrap();
+    for (frame, pixels) in [(2, [3, 0]), (3, [4, 0]), (21, [0, 2])] {
+        let start = 8 + usize::from(count) * 24 + frame * 2;
+        shp[start..start + 2].copy_from_slice(&pixels);
+    }
+    std::fs::write(path, shp).unwrap();
+    let mut install = fixture.install();
+    install.manager =
+        vera20k_core::assets::asset_manager::AssetManager::from_loose_root_with_ares_for_test(
+            &fixture.0,
+        );
+    let catalog = Catalog::load(&install.manager, &install.theater);
+    assert_eq!(catalog.shp_vehicle_turrets["TANK"].start_frame, 16);
+    let sprites = install.sprite_palette(&catalog);
+    let object = &sprites.objects[&("Units".into(), "TANK".into())];
+    assert_eq!(object.image(7).indices, [3, 2]);
+    assert_eq!(object.image(8).indices, [4, 2]);
+}
+
+#[test]
+fn ares_shp_water_image_uses_water_layout_and_original_facing_and_turret() {
+    let fixture = Fixture::with_shp_turret();
+    let path = fixture.0.join("rulesmd.ini");
+    let rules = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("0=TANK\n", "0=TANK\n1=WATER\n")
+        .replace(
+            "[TANK]\nStrength=100",
+            "[TANK]\nStrength=100\nTurret=yes\nWaterImage=WATER",
+        );
+    std::fs::write(&path, format!("{rules}\n[WATER]\nStrength=100\n")).unwrap();
+    let path = fixture.0.join("artmd.ini");
+    let art = std::fs::read_to_string(&path).unwrap().replace(
+        "Facings=1\nWalkFrames=0\nStandingFrames=1",
+        "Facings=16\nWalkFrames=1\nStandingFrames=0",
+    );
+    std::fs::write(
+        &path,
+        format!("{art}\n[WATER]\nFacings=8\nWalkFrames=2\nStandingFrames=0\n"),
+    )
+    .unwrap();
+    let path = fixture.0.join("water.shp");
+    let count = 96;
+    crate::test_support::write_shp(&path, count);
+    let mut bytes = std::fs::read(&path).unwrap();
+    for (frame, indices) in [(4, [3, 0]), (6, [4, 0]), (21, [0, 2])] {
+        let start = 8 + usize::from(count) * 24 + frame * 2;
+        bytes[start..start + 2].copy_from_slice(&indices);
+    }
+    std::fs::write(path, bytes).unwrap();
+    let mut install = fixture.install();
+    install.manager =
+        vera20k_core::assets::asset_manager::AssetManager::from_loose_root_with_ares_for_test(
+            &fixture.0,
+        );
+    let catalog = Catalog::load(&install.manager, &install.theater);
+    let sprites = install.sprite_palette(&catalog);
+    let water = &sprites.water_objects["TANK"];
+    assert!(water.image(7).info.name.eq_ignore_ascii_case("water.shp"));
+    assert_eq!(water.image(7).indices, [3, 2]);
+    assert_eq!(water.image(8).indices, [4, 2]);
+}

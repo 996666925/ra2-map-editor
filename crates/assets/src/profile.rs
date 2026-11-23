@@ -80,6 +80,14 @@ fn file_hash_cache() -> &'static Mutex<HashMap<PathBuf, CachedHash>> {
 }
 
 pub(super) fn cached_file_hash(path: &Path, stamp: FileStamp) -> Option<u64> {
+    // Quick same-size edits to loose INIs can share a filesystem timestamp.
+    // Read these inputs again so an explicit refresh sees the edited rules.
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("ini"))
+    {
+        return None;
+    }
     file_hash_cache()
         .lock()
         .unwrap_or_else(|error| error.into_inner())

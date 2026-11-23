@@ -10,13 +10,15 @@ use std::{collections::HashMap, sync::Arc};
 use vera20k_core::{
     assets::{hva_file::HvaFile, pal_file::Palette, vpl_file::VplFile, vxl_file::VxlFile},
     rules::{
+        animation_sequence::ShpVehicleTurret,
         art_data::{self, BuildingAnimKind},
         ruleset::RuleSet,
     },
 };
 
 pub struct ObjectSprite {
-    /// One image per native 32-step facing. Shared Arcs for identical SHP frames.
+    /// One image per heading for Ares SHP vehicles, or per 32-step facing for VXL and stock SHP.
+    /// Identical SHP frames share their image data.
     pub facings: Vec<Arc<DecodedImage>>,
     /// Draw anchor relative to the authored north-west cell's diamond centre.
     pub anchor: [f32; 2],
@@ -65,6 +67,9 @@ impl ShpTurretSprite {
 }
 impl ObjectSprite {
     pub fn image(&self, facing: u8) -> &Arc<DecodedImage> {
+        if self.facings.len() == 256 {
+            return &self.facings[usize::from(facing)];
+        }
         &self.facings[usize::from(vxl_raster::voxel_facing_step(facing)) % self.facings.len()]
     }
     pub fn image_at(&self, facing: u8, at: [u16; 2]) -> &Arc<DecodedImage> {
@@ -135,7 +140,10 @@ pub(crate) fn load(
             } else {
                 catalog.art.resolve_effective_image_id(id, rules_image)
             };
-            let art = catalog.art.get(&image_id);
+            let metadata_image = catalog
+                .alternate_theater_shp(section, id)
+                .map_or(image_id.as_str(), |appearance| &appearance.image);
+            let art = catalog.art.get(metadata_image);
             let mut facings = if preview.voxel {
                 match voxel_frames(
                     install,
@@ -159,50 +167,46 @@ pub(crate) fn load(
             {
                 vec![base.clone()]
             } else if let Some(base) = &preview.image {
-                let palette = object_palette(install, catalog, &image_id, section, id);
-                let mut frames = HashMap::new();
-                (0..32)
-                    .map(|step| {
-                        let facing = step * 8;
-                        let frame = if section == "Infantry" {
-                            catalog
-                                .infantry_frame(id, facing)
-                                .unwrap_or(base.info.index)
-                        } else if matches!(section.as_str(), "Units" | "Aircraft") {
-                            art.map_or(base.info.index, |a| {
-                                let stand = a
-                                    .standing_frames
-                                    .unwrap_or(u16::from(a.firing_frames.unwrap_or(0) > 0));
-                                let walk = a.walk_frames.unwrap_or(12);
-                                let slot = if a.shp_facings == 8 {
-                                    (((u16::from(facing) + 16) / 32 + 1) & 7) as usize
-                                } else {
-                                    0
-                                };
-                                if stand > 0 {
-                                    usize::from(walk) * usize::from(a.shp_facings)
-                                        + slot * usize::from(stand)
-                                } else {
-                                    slot * usize::from(walk)
-                                }
-                            })
-                        } else {
-                            base.info.index
-                        };
-                        frames
-                            .entry(frame)
-                            .or_insert_with(|| {
-                                decode_shp_frame(install, &base.info.name, &palette, frame)
-                                    .ok()
-                                    .filter(|im| {
-                                        im.rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 0)
-                                    })
-                                    .map(Arc::new)
-                                    .unwrap_or_else(|| base.clone())
-                            })
-                            .clone()
+                let palette = object_palette(install, catalog, metadata_image, section, id);
+                let native_frames = (section == "Units")
+                    .then(|| {
+                        catalog
+                            .shp_vehicle_body_frames
+                            .get(&id.to_ascii_uppercase())
                     })
-                    .collect()
+                    .flatten();
+                let facing_count = if native_frames.is_some() { 256 } else { 32 };
+                let frame_numbers = (0..facing_count).map(|step| {
+                    let facing = (step * (256 / facing_count)) as u8;
+                    if section == "Infantry" {
+                        catalog
+                            .infantry_frame(id, facing)
+                            .unwrap_or(base.info.index)
+                    } else if let Some(frames) = native_frames {
+                        frames[step].map_or(base.info.index, usize::from)
+                    } else if matches!(section.as_str(), "Units" | "Aircraft") {
+                        art.map_or(base.info.index, |a| {
+                            let stand = a
+                                .standing_frames
+                                .unwrap_or(u16::from(a.firing_frames.unwrap_or(0) > 0));
+                            let walk = a.walk_frames.unwrap_or(12);
+                            let slot = if a.shp_facings == 8 {
+                                (((u16::from(facing) + 16) / 32 + 1) & 7) as usize
+                            } else {
+                                0
+                            };
+                            if stand > 0 {
+                                usize::from(walk) * usize::from(a.shp_facings)
+                                    + slot * usize::from(stand)
+                            } else {
+                                slot * usize::from(walk)
+                            }
+                        })
+                    } else {
+                        base.info.index
+                    }
+                });
+                load_shp_facings(install, base, &palette, frame_numbers)
             } else if preview.empty_building_body {
                 // Stock NAMISL can have a blank body and visible attached art.
                 Vec::new()
@@ -213,23 +217,8 @@ pub(crate) fn load(
                 && !preview.voxel
                 && let Some(turret) = catalog.shp_vehicle_turrets.get(&id.to_ascii_uppercase())
             {
-                // UnitClass SHP draw 0x0073CCB2..0x0073CD08: the engine
-                // owns the ring's start and facing count. Static map objects
-                // have one authored heading for both body and turret; the
-                // ring shares the body draw point, with no TurretOffset.
-                let palette = object_palette(install, catalog, &image_id, section, id);
-                for (step, body) in facings.iter_mut().enumerate() {
-                    let frame = turret
-                        .start_frame
-                        .saturating_add((step as u16 + 4) % turret.facings.max(1));
-                    if let Ok(gun) =
-                        decode_shp_frame(install, &body.info.name, &palette, usize::from(frame))
-                        && let Some(combined) =
-                            composite(&[(body.clone(), [0, 0]), (Arc::new(gun), [0, 0])])
-                    {
-                        *body = Arc::new(combined);
-                    }
-                }
+                let palette = object_palette(install, catalog, metadata_image, section, id);
+                composite_shp_turret(install, &palette, &mut facings, turret);
             }
             let mut anchor = [0., 0.];
             let mut shadow = None;
@@ -250,7 +239,7 @@ pub(crate) fn load(
                 let palette = building_palette(
                     install,
                     catalog,
-                    &image_id,
+                    metadata_image,
                     preview
                         .image
                         .as_ref()
@@ -430,6 +419,67 @@ pub(crate) fn load(
     result
 }
 
+fn load_shp_facings(
+    install: &Install,
+    base: &Arc<DecodedImage>,
+    palette: &Palette,
+    frame_numbers: impl Iterator<Item = usize>,
+) -> Vec<Arc<DecodedImage>> {
+    let mut frames = HashMap::new();
+    frame_numbers
+        .map(|frame| {
+            frames
+                .entry(frame)
+                .or_insert_with(|| {
+                    decode_shp_frame(install, &base.info.name, palette, frame)
+                        .ok()
+                        .filter(|image| {
+                            image
+                                .rgba
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .any(|pixel| pixel[3] != 0)
+                        })
+                        .map(Arc::new)
+                        .unwrap_or_else(|| base.clone())
+                })
+                .clone()
+        })
+        .collect()
+}
+
+fn composite_shp_turret(
+    install: &Install,
+    palette: &Palette,
+    facings: &mut [Arc<DecodedImage>],
+    turret: &ShpVehicleTurret,
+) {
+    // UnitClass SHP draw 0x0073CCB2..0x0073CD08 uses the engine's ring
+    // start and facing count. Both layers share the body draw point.
+    let per_heading = facings.len() == 256;
+    let mut composites = HashMap::new();
+    for (step, body) in facings.iter_mut().enumerate() {
+        let turret_step = if per_heading {
+            vxl_raster::voxel_facing_step(step as u8)
+        } else {
+            step as u8
+        };
+        let frame = turret
+            .start_frame
+            .saturating_add((u16::from(turret_step) + 4) % turret.facings.max(1));
+        let combined = composites
+            .entry((body.info.index, frame))
+            .or_insert_with(|| {
+                decode_shp_frame(install, &body.info.name, palette, usize::from(frame))
+                    .ok()
+                    .and_then(|gun| composite(&[(body.clone(), [0, 0]), (Arc::new(gun), [0, 0])]))
+                    .map_or_else(|| body.clone(), Arc::new)
+            });
+        *body = combined.clone();
+    }
+}
+
 pub(crate) fn load_water(
     install: &Install,
     catalog: &Catalog,
@@ -448,7 +498,58 @@ pub(crate) fn load_water(
                 .find(|name| name.eq_ignore_ascii_case(id))?;
             let original = library.get("Units", original_id)?;
             if !original.voxel {
-                return None;
+                let appearance = selected.shp.as_ref()?;
+                let water_id = catalog
+                    .object_types
+                    .get("Units")?
+                    .iter()
+                    .find(|name| name.eq_ignore_ascii_case(&appearance.id))?;
+                let water = library.get("Units", water_id)?;
+                if water.voxel {
+                    return None;
+                }
+                let base = water.image.as_ref()?;
+                let rules_image = catalog
+                    .rules
+                    .section_or_empty(water_id)
+                    .read_name("Image", 256)
+                    .unwrap_or(water_id);
+                let metadata_image = catalog
+                    .alternate_theater_shp("Units", water_id)
+                    .map_or_else(
+                        || {
+                            catalog
+                                .art
+                                .resolve_effective_image_id(water_id, rules_image)
+                        },
+                        |appearance| appearance.image.clone(),
+                    );
+                let palette = object_palette(install, catalog, &metadata_image, "Units", water_id);
+                let mut facings = load_shp_facings(
+                    install,
+                    base,
+                    &palette,
+                    appearance
+                        .body_frames
+                        .iter()
+                        .map(|frame| frame.map_or(base.info.index, usize::from)),
+                );
+                if let Some(turret) = catalog.shp_vehicle_turrets.get(id) {
+                    composite_shp_turret(install, &palette, &mut facings, turret);
+                }
+                return Some((
+                    id.clone(),
+                    ObjectSprite {
+                        facings,
+                        anchor: library
+                            .objects
+                            .get(&("Units".to_owned(), water_id.clone()))
+                            .map_or([0.; 2], |sprite| sprite.anchor),
+                        shadow: None,
+                        shp_turret: None,
+                        voxel_turret: None,
+                    },
+                ));
             }
             // Techno706F02 reads UseBuffer from the actual type; the water model
             // supplies geometry and its ordinary base gun pair (Ares73B4A0).

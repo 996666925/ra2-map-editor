@@ -103,9 +103,35 @@ pub struct InfantryAppearance {
 #[derive(Clone)]
 pub struct WaterAppearance {
     pub image: String,
+    pub shp: Option<ShpWaterAppearance>,
     pub turret: bool,
     pub turret_offset: i32,
     pub use_buffer: bool,
+}
+
+/// Water body layout drawn with the original UnitType's facing selector.
+#[derive(Clone)]
+pub struct ShpWaterAppearance {
+    pub id: String,
+    pub body_frames: [Option<u16>; 256],
+}
+
+fn static_ares_shp_body_frames(
+    layout: &vera20k_core::rules::animation_sequence::SequenceSet,
+    actual_facings: i32,
+) -> [Option<u16>; 256] {
+    use vera20k_core::sim::animation::{resolve_shp_vehicle_body_frame, shp_vehicle_facing_slot};
+    std::array::from_fn(|step| {
+        let slot = shp_vehicle_facing_slot(actual_facings, (step as u16) << 8, false, true);
+        resolve_shp_vehicle_body_frame(layout, slot, 0, -1, -1, false, true)
+    })
+}
+
+/// The theater-aware SHP image selected by the Rules owner.
+#[derive(Clone)]
+pub struct TheaterShpAppearance {
+    pub image: String,
+    pub loads: Vec<vera20k_core::rules::object_image::ObjectImageLoad>,
 }
 
 /// Registries and appearance data from the same cold/reset Rules owner as game
@@ -115,6 +141,8 @@ pub struct NativeRegistries {
     pub infantry_appearances: BTreeMap<String, InfantryAppearance>,
     pub shp_vehicle_turrets:
         BTreeMap<String, vera20k_core::rules::animation_sequence::ShpVehicleTurret>,
+    pub shp_vehicle_body_frames: BTreeMap<String, [Option<u16>; 256]>,
+    pub alternate_theater_shps: BTreeMap<(&'static str, String), TheaterShpAppearance>,
     /// Ares WaterImage identities resolved by the production Rules owner.
     pub water_images: BTreeMap<String, WaterAppearance>,
     pub vehicle_templates: BTreeMap<String, BTreeMap<String, String>>,
@@ -148,6 +176,7 @@ pub fn scenario_registries_with_art(
 ) -> Result<NativeRegistries, String> {
     use std::sync::Arc;
     use vera20k_core::rules::{
+        object_type::ObjectCategory,
         process_owner::NativeScenarioRulesPrefix,
         retail_sources::{RetailRulesSources, select_ini},
     };
@@ -234,16 +263,32 @@ pub fn scenario_registries_with_art(
                     && object.category == vera20k_core::rules::object_type::ObjectCategory::Vehicle
             })
             .filter_map(|object| {
-                let selected = object.water_image()?;
+                let selected = rules.object(object.water_image()?)?;
+                let shp = rules.unit_shp_read_state_of(object).and_then(|actual| {
+                    let layout = rules
+                        .animation_sequence_in_category(ObjectCategory::Vehicle, &selected.id)
+                        .or_else(|| {
+                            rules
+                                .animation_sequence_in_category(ObjectCategory::Vehicle, &object.id)
+                        })?;
+                    Some(ShpWaterAppearance {
+                        id: selected.id.clone(),
+                        body_frames: static_ares_shp_body_frames(layout, actual.facings()),
+                    })
+                });
                 Some((
                     object.id.to_ascii_uppercase(),
                     WaterAppearance {
                         image: vera20k_core::rules::voxel_frame_catalog::voxel_image_id(
-                            selected,
+                            &selected.id,
                             Some(&rules),
                         ),
-                        turret: rules.object(selected)?.has_turret,
-                        turret_offset: rules.art().get(selected).map_or(0, |art| art.turret_offset),
+                        shp,
+                        turret: selected.has_turret,
+                        turret_offset: rules
+                            .art()
+                            .get(&selected.id)
+                            .map_or(0, |art| art.turret_offset),
                         use_buffer: rules
                             .art()
                             .exact_entry(&object.id)
@@ -255,11 +300,52 @@ pub fn scenario_registries_with_art(
         shp_vehicle_turrets: rules
             .all_objects()
             .filter_map(|object| {
-                (object.category == vera20k_core::rules::object_type::ObjectCategory::Vehicle)
-                    .then(|| rules.animation_sequence_in_category(object.category, &object.id))
-                    .flatten()
-                    .and_then(|set| set.shp_vehicle_turret())
-                    .map(|turret| (object.id.to_ascii_uppercase(), turret))
+                if object.category != ObjectCategory::Vehicle {
+                    return None;
+                }
+                let set = rules.animation_sequence_in_category(object.category, &object.id)?;
+                let mut turret = set.shp_vehicle_turret()?;
+                if rules.ares() {
+                    turret.start_frame = rules
+                        .unit_shp_read_state_of(object)?
+                        .ares_turret_start_frame()?;
+                }
+                Some((object.id.to_ascii_uppercase(), turret))
+            })
+            .collect(),
+        shp_vehicle_body_frames: rules
+            .all_objects()
+            .filter(|object| rules.ares() && object.category == ObjectCategory::Vehicle)
+            .filter_map(|object| {
+                let set = rules.animation_sequence_in_category(object.category, &object.id)?;
+                let facings = rules.unit_shp_read_state_of(object)?.facings();
+                let frames = static_ares_shp_body_frames(set, facings);
+                Some((object.id.to_ascii_uppercase(), frames))
+            })
+            .collect(),
+        alternate_theater_shps: rules
+            .all_objects()
+            .filter(|object| rules.ares() && !object.shp_image_loads().is_empty())
+            .filter_map(|object| {
+                let section = match object.category {
+                    ObjectCategory::Building => "Structures",
+                    ObjectCategory::Vehicle => "Units",
+                    ObjectCategory::Aircraft => "Aircraft",
+                    _ => return None,
+                };
+                if !processed_ini
+                    .section_or_empty(&object.id)
+                    .read_ares_bool("AlternateTheaterArt", false)
+                {
+                    return None;
+                }
+                Some((
+                    (section, object.id.to_ascii_uppercase()),
+                    TheaterShpAppearance {
+                        image: object.image.clone(),
+                        loads: object.shp_image_loads().to_vec(),
+                    },
+                ))
             })
             .collect(),
         infantry_appearances: rules

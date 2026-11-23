@@ -4,13 +4,16 @@
 The editor pins the engine through its Git tree entry, rather than a moving branch.
 Use `git submodule status` for the revision selected by your editor checkout.
 
-The current integration targets VERA20k 0.3.9 at
-`63253c5bb78af4eb7232abab8da727c0d1716bd5` (updated 2026-11-21).
+The current integration targets VERA20k 0.4.1 at
+`41f140f93db4d28dcc5b8f4f4a839593bf8de787` (updated 2026-11-23).
 The engine mounts `ECACHE*.MIX` and `ELOCAL*.MIX` through the shared asset
 manager. Editor building previews use its RULES slot-9 configuration and
 32-facing frame table for healthy SHP turrets; ART `TurretAnim` is ignored.
 Static SHP vehicles also draw the engine-selected 32-frame turret ring from
 the body SHP, using the authored heading and the body draw point.
+Ares previews use the engine's body-facing selector and Ares turret-ring start.
+The resource catalog and map preview follow the Rules owner's
+`AlternateTheaterArt` asset selection for the active theater.
 Scene rendering retains the building turret's independent Ground sort key and animation
 pixel depth, including `TurretAnimYSort`, `TurretAnimZAdjust` and ART draw offsets.
 VXL guns retain separate turret/barrel crops and Z seeds. SHP selection adds
@@ -22,6 +25,8 @@ lift). ZShape sampling uses the source frame offset rather than the canvas offse
 Mission audit loaders follow the engine's nonfatal Team AI diagnostics API.
 Random-map inputs share the engine's loaded Extras settings for theater fences
 and town catalogs, and allow its parallel generation to borrow tile blocks.
+Unless `[Extras] Derelicts=` supplies an override, the shared generator uses
+the active Rules' `[AI]` construction yard, barracks, battle lab and war factory lists.
 Headless mission audits retain simulation resources in the engine's shared `Arc`.
 Building voxel guns use the engine's bound physical model slots, including an
 explicit `VoxelBarrelFile`, instead of reconstructing filenames in the editor.

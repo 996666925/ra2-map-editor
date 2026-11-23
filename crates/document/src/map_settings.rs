@@ -255,6 +255,7 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
             "Tubes",
             "TunnelPortalBackup",
             "TunnelPortalFacing",
+            "TunnelReverse",
             "Actions",
             "ScriptTypes",
             "Houses",
@@ -510,6 +511,9 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
             }
         }
         let mut retained_tubes = BTreeSet::new();
+        let mut old_tube_portals = BTreeMap::new();
+        let mut retained_tube_portals = BTreeMap::new();
+        let mut retained_tube_routes = Vec::new();
         for (line, row) in raw.entries("Tubes") {
             let bytes = raw.value(line);
             let f: Vec<_> = bytes.split(|b| *b == b',').collect();
@@ -544,12 +548,20 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
                 points.push(at);
             }
             ensure!(terminated, "Tubes 路径须以 -1 结束");
+            let [entry, exit] = [points[0], points[1]];
+            let admits_exit = entry != exit && exit != [0, 0];
+            old_tube_portals.insert(entry, admits_exit);
             if points
                 .iter()
                 .all(|&at| options.translated(at, delta).is_some())
             {
-                let entry = options.translated(points[0], delta).unwrap();
-                let exit = options.translated(points[1], delta).unwrap();
+                retained_tube_portals.insert(entry, admits_exit);
+                let key = row.key.as_ref().unwrap();
+                if admits_exit {
+                    retained_tube_routes.push((key, exit));
+                }
+                let entry = options.translated(entry, delta).unwrap();
+                let exit = options.translated(exit, delta).unwrap();
                 patch.lines.insert(
                     line,
                     Some(patch_columns(
@@ -574,9 +586,27 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
                 );
             }
         }
+        // Even a route whose own cells fit the new Size still needs its exit
+        // cell's tube record. Ask the author to move or remove that route
+        // before clipping away a portal it currently depends on.
+        for (key, exit) in retained_tube_routes {
+            if old_tube_portals.get(&exit) == Some(&true)
+                && retained_tube_portals.get(&exit) != Some(&true)
+            {
+                lost(&mut summary, format!("Tubes/{key}/Exit"), exit, true);
+            }
+        }
         // Facing is keyed by tube identity and has no spatial payload.
         for (line, row) in raw.entries("TunnelPortalFacing") {
             if !retained_tubes.contains(row.key.as_ref().unwrap()) {
+                patch.lines.insert(line, None);
+            }
+        }
+        for (line, row) in raw.entries("TunnelReverse") {
+            let reverse_key = std::str::from_utf8(raw.value(line)).unwrap_or_default();
+            if !retained_tubes.contains(row.key.as_ref().unwrap())
+                || !retained_tubes.contains(reverse_key)
+            {
                 patch.lines.insert(line, None);
             }
         }
