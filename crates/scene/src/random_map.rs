@@ -9,7 +9,7 @@ use vera20k_core::{
         phases::shore::TileBlocks,
         theater_blocks::TheaterTileBlocks,
     },
-    rules::{native_processing::RulesLayerStack, ruleset::RuleSet},
+    rules::{ruleset::RuleSet, terrain_asset_catalog::TerrainAssetLoadPhase},
 };
 pub fn generate(
     install: &mut Install,
@@ -19,18 +19,30 @@ pub fn generate(
 ) -> Result<Vec<u8>> {
     options.validate()?;
     ensure!(!cancelled(), "随机地图生成已取消");
-    install.activate_theater(rmg::emit::theater_name(options.terrain.theater))?;
+    let theater_name = rmg::emit::theater_name(options.terrain.theater);
+    install.activate_theater(theater_name)?;
     let ares = install.manager.ships_ares();
     let _dialect = vera20k_core::rules::ares_switch::read_ares_way(ares);
     progress("准备随机地图地形模板…");
-    let processed = RulesLayerStack::new(install.catalog.rules.clone()).process()?;
-    let mut rules = RuleSet::from_processed_rules(&processed)?;
-    let art =
-        ra2_map_assets::assets::read_ini(&install.manager, install.manager.ini_roots().art())?;
-    rules.install_art_data(vera20k_core::rules::art_data::ArtRegistry::from_ini(&art));
+    let mut owner = ra2_map_assets::mission_resources::rules_process_owner(&install.manager, None)
+        .map_err(anyhow::Error::msg)
+        .context("随机地图规则准备失败")?;
+    // The editor generates a standalone map without a selected game mode.
+    owner.prepare_random_map_preview(None, theater_name, true)?;
+    let processed = owner
+        .prepared_random_map_rules()
+        .context("缺少随机地图规则")?;
+    let art = owner.fixed_art();
+    let mut rules = RuleSet::from_processed_rules(processed)?;
+    rules.install_art_data(vera20k_core::rules::art_data::ArtRegistry::from_ini(art));
+    rules.bind_terrain_assets(
+        &install.manager,
+        install.theater.extension,
+        TerrainAssetLoadPhase::Fresh,
+    );
     let mut settings = rmg::RmgSettings::load(&install.manager);
     let ares_urban = (ares && options.terrain.urban_areas)
-        .then(|| rmg::tech_catalog::resolve_ares_urban(&settings, &processed, &art));
+        .then(|| rmg::tech_catalog::resolve_ares_urban(&settings, processed, art));
     let resolved = ResolvedTheaterInputs::from_theater(
         &install.theater,
         &rules.terrain_rules,
@@ -46,7 +58,7 @@ pub fn generate(
     {
         return Err(missing).context("随机地图缺少悬崖地形模板");
     }
-    let tech_types = rmg::tech_catalog::resolve(processed.neutral_tech_buildings(), &art);
+    let tech_types = rmg::tech_catalog::resolve(processed.neutral_tech_buildings(), art);
     let tech = if options.tech_buildings {
         tech_types.as_slice()
     } else {
@@ -64,14 +76,14 @@ pub fn generate(
         // The engine selects civilian style families from this candidate's
         // seed. Resolve again after a rejected candidate so the saved recipe
         // regenerates the same catalog as the engine's setup/load paths.
-        if recipe.terrain.urban_enabled {
+        if recipe.terrain.wants_vera_catalog() {
             settings.vera_urban = rmg::tech_catalog::resolve_vera_urban(
                 &rules,
-                &art,
+                art,
                 &tech_types,
                 &settings.extras,
                 install.theater.extension,
-                rmg::emit::theater_name(recipe.terrain.theater),
+                theater_name,
                 recipe.terrain.seed_u16(),
                 |file| install.manager.contains(file),
             );
@@ -126,9 +138,7 @@ pub fn generate(
             .map_file
             .terrain_objects
             .retain(|t| !t.name.starts_with("TIBTRE"));
-    } else if options.terrain.resources != 3 {
-        // Native resource modes can still put a gem field in some map types.
-        // The editor's explicit gem toggle consistently means ore only.
+    } else if !options.gems {
         for entry in &mut generated.map_file.overlays {
             if matches!(entry.overlay_id, 27..=38) {
                 entry.overlay_id += 75;
@@ -240,7 +250,7 @@ fn generate_candidate(
     objects: build::GenerationObjects<'_>,
     observe: &mut dyn FnMut(GenerationPoint),
 ) -> Candidate {
-    let (generated, _) = build::generate_map_observed(
+    let (mut generated, _) = build::generate_map_observed(
         &recipe.terrain,
         settings,
         resolved,
@@ -249,6 +259,21 @@ fn generate_candidate(
         &mut |view| observe(view.point()),
     )
     .into_parts();
+    // The game applies this trace after loading its synthetic INI. Bake
+    // the final values into the exported scenario, which loads as a map.
+    if let Some(light) = generated.construction_trace.lighting {
+        let [red, green, blue] = light.rgb_percent.map(|value| f64::from(value) / 100.0);
+        let level = f64::from(light.level_units)
+            / f64::from(vera20k_core::map::lighting::GROUND_LEVEL_UNIT_SCALE);
+        generated
+            .map_file
+            .ini
+            .merge(&vera20k_core::rules::ini_parser::IniFile::from_str(
+                &format!(
+                    "[Lighting]\nRed={red:.6}\nGreen={green:.6}\nBlue={blue:.6}\nLevel={level:.6}\n"
+                ),
+            ));
+    }
     Candidate {
         map_file: generated.map_file,
         unfilled_start_slots: generated.unfilled_start_slots,

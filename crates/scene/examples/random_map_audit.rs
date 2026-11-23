@@ -45,9 +45,35 @@ fn main() -> Result<()> {
     bare.terrain.ruggedness = 0;
     bare.terrain.num_players = 8;
     cases.push(("bare-eight-players".into(), bare));
-    let mut ore_only = RandomMapOptions::default();
-    ore_only.terrain.resources = 1;
-    cases.push(("ore-without-gems".into(), ore_only));
+    cases.push((
+        "ore-without-gems".into(),
+        RandomMapOptions {
+            gems: false,
+            ..Default::default()
+        },
+    ));
+    for resources in [0, 2] {
+        let mut options = RandomMapOptions::default();
+        options.terrain.resources = resources;
+        cases.push((format!("engine-resource-level-{resources}"), options));
+    }
+    let mut derelicts = RandomMapOptions {
+        tech_buildings: false,
+        ..Default::default()
+    };
+    derelicts.terrain.derelict_amount = 100;
+    derelicts.terrain.damage_amount = 100;
+    cases.push(("engine-derelicts-without-towns".into(), derelicts));
+    let mut extras = RandomMapOptions::default();
+    extras
+        .terrain
+        .extras
+        .set(vera20k_core::map::rmg::extras::Extra::Landmark, 1);
+    extras
+        .terrain
+        .extras
+        .set(vera20k_core::map::rmg::extras::Extra::Mood, 2);
+    cases.push(("engine-landmark-and-dusk-without-towns".into(), extras));
     for size in [0, 3] {
         let mut options = RandomMapOptions::default();
         options.terrain.num_players = 8;
@@ -177,6 +203,82 @@ fn main() -> Result<()> {
                     town_baseline = Some((shape, starts, objects));
                 }
             }
+            let reopened =
+                RandomMapOptions::from_source(&source).context("recipe could not be restored")?;
+            let mut expected_terrain = options.terrain.clone();
+            expected_terrain.seed = map.ini.section_or_empty("RandomMap").read_int("Seed", -1);
+            ensure!(
+                reopened.terrain == expected_terrain,
+                "terrain recipe changed"
+            );
+            ensure!(
+                reopened.ore == options.ore
+                    && reopened.gems == options.gems
+                    && reopened.tech_buildings == options.tech_buildings,
+                "editor switches changed"
+            );
+            if options.terrain.derelict_amount > 0 {
+                use vera20k_core::map::rmg::{RmgSettings, extras::derelict_types_from_lists};
+                let mut owner =
+                    ra2_map_assets::mission_resources::rules_process_owner(&install.manager, None)
+                        .map_err(anyhow::Error::msg)?;
+                owner.prepare_random_map_preview(None, map.header.theater.as_str(), true)?;
+                let rules = vera20k_core::rules::ruleset::RuleSet::from_processed_rules(
+                    owner
+                        .prepared_random_map_rules()
+                        .context("preview rules missing")?,
+                )?;
+                let settings = RmgSettings::load(&install.manager);
+                let types = if settings.extras.derelicts.is_empty() {
+                    derelict_types_from_lists(
+                        rules.build_const_types(),
+                        &rules.build_barracks_types,
+                        &rules.build_tech_types,
+                        &rules.build_weapons_types,
+                    )
+                } else {
+                    settings.extras.derelicts
+                };
+                ensure!(
+                    !map.entities.is_empty(),
+                    "no derelicts with towns and tech buildings disabled"
+                );
+                for entity in &map.entities {
+                    ensure!(
+                        entity.category == EntityCategory::Structure
+                            && entity.owner == "Neutral"
+                            && !entity.structure_online
+                            && entity.health == 34
+                            && types
+                                .iter()
+                                .any(|id| id.eq_ignore_ascii_case(&entity.type_id)),
+                        "derelict {} lost its Rules type, owner, damage or power state",
+                        entity.type_id
+                    );
+                }
+            }
+            if name == "engine-landmark-and-dusk-without-towns" {
+                let settings = vera20k_core::map::rmg::RmgSettings::load(&install.manager);
+                ensure!(
+                    map.entities.iter().any(|entity| settings
+                        .extras
+                        .landmarks
+                        .iter()
+                        .any(|id| id.eq_ignore_ascii_case(&entity.type_id))),
+                    "no landmark generated without towns"
+                );
+                let (ambient, [red, green, blue]) = settings.extras.moods[1];
+                let light = vera20k_core::map::lighting::parse_lighting_profiles(&map.ini).normal;
+                ensure!(
+                    [
+                        light.ambient_percent,
+                        light.red_percent,
+                        light.green_percent,
+                        light.blue_percent
+                    ] == [ambient, red, green, blue],
+                    "generated mood lost in map export"
+                );
+            }
             let document = MapDocument::new(source.edit_base.map_err(anyhow::Error::msg)?);
             ensure!(
                 (map.header.width as u16, map.header.height as u16) == options.dimensions(),
@@ -287,7 +389,7 @@ fn main() -> Result<()> {
                 .count();
             if options.ore {
                 ensure!(ore > 0, "no resources");
-                if options.terrain.resources == 1 {
+                if !options.gems {
                     ensure!(
                         !map.overlays.iter().any(|o| matches!(o.overlay_id, 27..=38)),
                         "gems disabled but remain"
@@ -303,7 +405,7 @@ fn main() -> Result<()> {
                     "ore disabled but remains"
                 );
             }
-            if !options.tech_buildings {
+            if !options.tech_buildings && options.terrain.derelict_amount == 0 {
                 ensure!(
                     map.entities.iter().all(|e| e.type_id == "CABHUT"),
                     "tech buildings disabled but remain"

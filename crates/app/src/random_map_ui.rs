@@ -117,11 +117,10 @@ impl MapView {
                         ui.label(tr!("资源丰度"));
                         ui.add_enabled(options.ore, egui::Slider::new(&mut t.tiberium, 1..=100)).accessible_name(tr!("资源丰度"));
                         ui.end_row();
+                        choice(ui, "资源档位", &mut t.resources, &["低资源", "中等资源", "高资源", "极高资源"]);
                         ui.label(tr!("宝石"));
-                        let mut gems = t.resources == 3;
-                        if ui.add_enabled(options.ore, egui::Checkbox::new(&mut gems, tr!("矿区包含宝石"))).changed() {
-                            t.resources = if gems { 3 } else { 1 };
-                        }
+                        ui.add_enabled(options.ore, egui::Checkbox::new(&mut options.gems, tr!("保留生成的宝石")))
+                            .on_hover_text(tr!("关闭后将生成的宝石转为矿石。宝石是否出现由引擎根据地貌和资源档位决定。"));
                         ui.end_row();
                         ui.label(tr!("中立科技建筑"));
                         ui.checkbox(&mut options.tech_buildings, tr!("按游戏规则随机放置（可能不生成）"))
@@ -138,6 +137,27 @@ impl MapView {
                             if ui.button(tr!("换一个")).clicked() { t.seed = fresh_seed(); }
                         });
                         ui.end_row();
+                    });
+                    egui::CollapsingHeader::new(tr!("高级生成设置")).show(ui, |ui| {
+                        let t = &mut options.terrain;
+                        egui::Grid::new("random-map-advanced").num_columns(2).spacing([20., 8.]).show(ui, |ui| {
+                            choice(ui, "光照时段", &mut t.time, &["清晨", "午后", "黄昏", "夜间"]);
+                            ui.label(tr!("公平起点"));
+                            ui.checkbox(&mut t.fair_starts, tr!("平衡起点空间和附近矿量"));
+                            ui.end_row();
+                            percentage(ui, tr!("科技建筑数量"), &mut t.tech_building_amount, options.tech_buildings,
+                                tr!("0 使用引擎默认随机数量。"));
+                            percentage(ui, tr!("废弃军事建筑"), &mut t.derelict_amount, true,
+                                tr!("生成中立且断电的废弃建筑。0 不额外放置。"));
+                            percentage(ui, tr!("建筑损伤"), &mut t.damage_amount, true,
+                                tr!("提高中立建筑受损的比例和损伤程度。"));
+                            percentage(ui, tr!("额外平民"), &mut t.civilian_amount, true,
+                                tr!("在开阔地放置中立平民和车辆。"));
+                            percentage(ui, tr!("动物"), &mut t.animal_amount, true,
+                                tr!("按规则中可用的动物类型放置中立单位。"));
+                            percentage(ui, tr!("中立守军"), &mut t.wild_amount, true,
+                                tr!("在开阔地放置中立步兵和战车。"));
+                        });
                     });
                     let (width, height) = options.dimensions();
                     theme::field(ui, tr!("实际地图尺寸"), tr!("{width} × {height} 格（含边界）", width = width, height = height));

@@ -1791,7 +1791,7 @@ fn random_map_controls_follow_landscape_and_resource_availability_in_both_langua
         for (label, role) in [
             ("矿区分散程度", egui::accesskit::Role::Slider),
             ("资源丰度", egui::accesskit::Role::Slider),
-            ("矿区包含宝石", egui::accesskit::Role::CheckBox),
+            ("保留生成的宝石", egui::accesskit::Role::CheckBox),
         ] {
             assert!(
                 harness

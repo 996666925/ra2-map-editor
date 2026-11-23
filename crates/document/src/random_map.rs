@@ -22,6 +22,8 @@ pub struct RandomMapOptions {
     pub title: String,
     pub terrain: RmgOptions,
     pub ore: bool,
+    /// Keep the gems placed by the engine instead of converting them to ore.
+    pub gems: bool,
     pub tech_buildings: bool,
 }
 
@@ -45,6 +47,7 @@ impl Default for RandomMapOptions {
                 ..Default::default()
             },
             ore: true,
+            gems: true,
             tech_buildings: true,
         }
     }
@@ -71,6 +74,14 @@ impl RandomMapOptions {
         // legacy bytes instead of decoding editor-authored UTF-8.
         options.title = title.to_owned();
         options.ore = section.read_bool("EditorOre", true);
+        // Older editor maps encoded the gem checkbox as Resources=1/3.
+        // Engine recipes have no editor keys and keep their native gem fields.
+        let editor_recipe =
+            section.is_present("EditorOre") || section.is_present("EditorTechBuildings");
+        options.gems = section.read_bool(
+            "EditorGems",
+            !editor_recipe || options.terrain.resources == 3,
+        );
         options.tech_buildings = section.read_bool("EditorTechBuildings", true);
         options.validate().ok()?;
         Some(options)
@@ -108,14 +119,21 @@ impl RandomMapOptions {
                 t.accessibility,
                 t.region_size,
                 t.tiberium_layout,
-                t.urban_presence
+                t.urban_presence,
+                t.tech_building_amount,
+                t.derelict_amount,
+                t.damage_amount,
+                t.civilian_amount,
+                t.animal_amount,
+                t.wild_amount,
             ]
             .iter()
             .all(|v| (0..=100).contains(v))
                 && (1..=100).contains(&t.tiberium),
             "随机地图比例参数超出范围"
         );
-        ensure!(matches!(t.resources, 1 | 3), "资源类型无效");
+        ensure!((0..=3).contains(&t.resources), "资源类型无效");
+        ensure!((0..=3).contains(&t.time), "光照时段无效");
         let (width, height) = self.dimensions();
         NewMapOptions {
             title: self.title.clone(),
@@ -153,16 +171,19 @@ impl RandomMapOptions {
         out.extend(self.terrain.to_sed_bytes(reads_ares));
         out.extend_from_slice(
             format!(
-                "EditorOre={}\r\nEditorTechBuildings={}\r\n",
-                self.ore, self.tech_buildings
+                "EditorOre={}\r\nEditorGems={}\r\nEditorTechBuildings={}\r\n",
+                self.ore, self.gems, self.tech_buildings
             )
             .as_bytes(),
         );
         out.extend_from_slice(b"[Lighting]\r\n");
-        let lighting = map.ini.section_or_empty("Lighting");
-        for key in ["Ambient", "Red", "Green", "Blue"] {
+        if let Some(lighting) = map.ini.section("Lighting") {
+            for (key, value) in lighting.raw_entries() {
+                out.extend_from_slice(format!("{key}={value}\r\n").as_bytes());
+            }
+        } else {
             out.extend_from_slice(
-                format!("{key}={}\r\n", lighting.read_string(key, "1.000000", 64)).as_bytes(),
+                b"Ambient=1.000000\r\nRed=1.000000\r\nGreen=1.000000\r\nBlue=1.000000\r\n",
             );
         }
         let mut terrain = Vec::with_capacity(map.cells.len() * 11 + 4);
@@ -407,6 +428,42 @@ mod tests {
             );
         }
         assert_eq!(document.snapshot().bytes().unwrap(), saved);
+    }
+
+    #[test]
+    fn restores_engine_resource_modes_and_legacy_editor_gem_toggle() {
+        use vera20k_core::rules::ini_parser::IniFile;
+        for resources in 0..=3 {
+            let mut engine = RmgOptions {
+                resources,
+                seed: 42,
+                ..Default::default()
+            };
+            engine.normalize();
+            let bytes = engine.to_sed_bytes(false);
+            let ini = IniFile::from_bytes(&bytes).unwrap();
+            let restored = RandomMapOptions::from_ini(&ini, "test", false).unwrap();
+            assert_eq!(restored.terrain, engine);
+            assert!(restored.gems);
+        }
+        for resources in [1, 3] {
+            let ini = IniFile::from_str(&format!(
+                "[RandomMap]\nResources={resources}\nEditorOre=yes\n"
+            ));
+            let restored = RandomMapOptions::from_ini(&ini, "test", false).unwrap();
+            assert_eq!(restored.terrain.resources, resources);
+            assert_eq!(restored.gems, resources == 3);
+        }
+        let map = map_file::load_from_bytes(NewMapOptions::default().bytes().unwrap()).unwrap();
+        let options = RandomMapOptions {
+            gems: false,
+            ..Default::default()
+        };
+        let bytes = options.map_bytes(&map, false, Ok).unwrap();
+        let ini = IniFile::from_bytes(&bytes).unwrap();
+        let restored = RandomMapOptions::from_ini(&ini, "test", false).unwrap();
+        assert!(!restored.gems);
+        assert_eq!(restored.terrain.resources, 3);
     }
 
     #[test]
