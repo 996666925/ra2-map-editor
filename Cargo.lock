@@ -3990,7 +3990,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "ra2-map-app"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "eframe",
@@ -4016,7 +4016,7 @@ dependencies = [
 
 [[package]]
 name = "ra2-map-assets"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "egui",
@@ -4029,7 +4029,7 @@ dependencies = [
 
 [[package]]
 name = "ra2-map-document"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "flate2",
@@ -4040,7 +4040,7 @@ dependencies = [
 
 [[package]]
 name = "ra2-map-editor"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "eframe",
@@ -4053,7 +4053,7 @@ dependencies = [
 
 [[package]]
 name = "ra2-map-io"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "egui",
@@ -4069,7 +4069,7 @@ dependencies = [
 
 [[package]]
 name = "ra2-map-mission-script"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "boa_engine",
@@ -4088,7 +4088,7 @@ dependencies = [
 
 [[package]]
 name = "ra2-map-release"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "semver",
@@ -4100,7 +4100,7 @@ dependencies = [
 
 [[package]]
 name = "ra2-map-render"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4119,7 +4119,7 @@ dependencies = [
 
 [[package]]
 name = "ra2-map-scene"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "egui",
@@ -4134,7 +4134,7 @@ dependencies = [
 
 [[package]]
 name = "ra2-map-voxel"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bytemuck",
  "glam",
