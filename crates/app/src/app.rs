@@ -144,7 +144,7 @@ impl EditorApp {
             gpu,
             cameras: Default::default(),
             updater: if options.smoke_output.is_none() {
-                Some(crate::update::Updater::new(&cc.egui_ctx))
+                Some(crate::update::Updater::new(cc))
             } else {
                 None
             },
@@ -661,6 +661,10 @@ impl eframe::App for EditorApp {
             eframe::set_value(storage, "asset-selection", &self.selection);
             self.map.editor.save_playtest_settings(storage);
             crate::i18n::save(&self.ctx, storage);
+            #[cfg(windows)]
+            if let Some(updater) = &self.updater {
+                updater.save(storage);
+            }
         }
     }
 }

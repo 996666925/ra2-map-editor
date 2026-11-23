@@ -19,13 +19,37 @@ use crate::ui_theme as theme;
 
 const VERSION: &str = self_update::cargo_crate_version!();
 #[cfg(any(windows, test))]
-const WINDOWS_MANIFEST_URL: &str = "https://download.ra2.diy/manifest.json";
+const WINDOWS_UPDATE_BASE_URL: &str = "http://3bbs.top/download/";
 #[cfg(not(windows))]
 const GITHUB_API: &str = "https://api.github.com";
 
 #[cfg(windows)]
-fn check() -> Result<Option<Release>> {
-    check_static(WINDOWS_MANIFEST_URL)
+const UPDATE_LINE_STORAGE_KEY: &str = "editor-update-line";
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum UpdateLine {
+    #[default]
+    New,
+    Old,
+}
+
+#[cfg(windows)]
+impl UpdateLine {
+    fn label(self) -> &'static str {
+        match self {
+            Self::New => tr!("新线路"),
+            Self::Old => tr!("旧线路"),
+        }
+    }
+
+    fn check(self) -> Result<Option<Release>> {
+        match self {
+            Self::New => check_static(&format!("{WINDOWS_UPDATE_BASE_URL}manifest.json")),
+            Self::Old => check_static("https://download.ra2.diy/manifest.json"),
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -53,10 +77,12 @@ fn asset_name(target: &str, legacy_version: Option<&Version>) -> String {
 
 fn parse_url(value: &str) -> Result<Url> {
     let url = Url::parse(value).context("Invalid update URL")?;
-    let local = url.host_str() == Some("127.0.0.1");
+    let allow_http = url.host_str() == Some("127.0.0.1");
+    #[cfg(any(windows, test))]
+    let allow_http = allow_http || url.as_str().starts_with(WINDOWS_UPDATE_BASE_URL);
     ensure!(
-        url.scheme() == "https" || (url.scheme() == "http" && local),
-        "Updates require HTTPS (HTTP is allowed only on 127.0.0.1)"
+        url.scheme() == "https" || (url.scheme() == "http" && allow_http),
+        "HTTP is allowed only for the configured update server or 127.0.0.1"
     );
     ensure!(
         url.username().is_empty() && url.password().is_none(),
@@ -72,10 +98,13 @@ fn http_client(url: &Url) -> Result<Client> {
     if url.scheme() == "https" {
         Ok(builder.https_only(true).build()?)
     } else {
-        Ok(builder
-            .no_proxy()
-            .redirect(redirect::Policy::none())
-            .build()?)
+        let builder = builder.redirect(redirect::Policy::none());
+        let builder = if url.host_str() == Some("127.0.0.1") {
+            builder.no_proxy()
+        } else {
+            builder
+        };
+        Ok(builder.build()?)
     }
 }
 
@@ -296,16 +325,28 @@ enum Status {
 pub(crate) struct Updater {
     status: Status,
     show_dialog: bool,
+    #[cfg(windows)]
+    line: UpdateLine,
 }
 
 impl Updater {
-    pub(crate) fn new(ctx: &egui::Context) -> Self {
+    pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut updater = Self {
             status: Status::Idle,
             show_dialog: false,
+            #[cfg(windows)]
+            line: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, UPDATE_LINE_STORAGE_KEY))
+                .unwrap_or_default(),
         };
-        updater.start_check(ctx);
+        updater.start_check(&cc.egui_ctx);
         updater
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn save(&self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, UPDATE_LINE_STORAGE_KEY, &self.line);
     }
 
     fn worker(
@@ -324,8 +365,14 @@ impl Updater {
     }
 
     fn start_check(&mut self, ctx: &egui::Context) {
-        self.status = match Self::worker(ctx, || {
-            Ok(check()?.map_or(Status::UpToDate, Status::Available))
+        #[cfg(windows)]
+        let line = self.line;
+        self.status = match Self::worker(ctx, move || {
+            #[cfg(windows)]
+            let release = line.check()?;
+            #[cfg(not(windows))]
+            let release = check()?;
+            Ok(release.map_or(Status::UpToDate, Status::Available))
         }) {
             Ok(rx) => Status::Checking(rx),
             Err(error) => Self::failed(error),
@@ -378,6 +425,8 @@ impl Updater {
             return;
         }
         let installing = matches!(self.status, Status::Installing { .. });
+        #[cfg(windows)]
+        let previous_line = self.line;
         let response = theme::modal(ctx, "editor-update", |ui| {
             ui.set_width((ctx.content_rect().width() - 36.).clamp(120., 436.));
             egui::Frame::new()
@@ -385,6 +434,11 @@ impl Updater {
                 .show(ui, |ui| self.dialog_contents(ui))
                 .inner
         });
+        #[cfg(windows)]
+        if self.line != previous_line {
+            self.start_check(ctx);
+            return;
+        }
         match response.inner {
             Some(DialogAction::Install(release)) => {
                 let version = release.version().to_owned();
@@ -415,7 +469,7 @@ impl Updater {
         }
     }
 
-    fn dialog_contents(&self, ui: &mut egui::Ui) -> Option<DialogAction> {
+    fn dialog_contents(&mut self, ui: &mut egui::Ui) -> Option<DialogAction> {
         let progress = match &self.status {
             Status::Installing { progress, .. } => Some(*progress.lock().unwrap()),
             _ => None,
@@ -497,6 +551,29 @@ impl Updater {
                     Self::version_label(ui, tr!("当前版本"), VERSION, theme::TEXT);
                 }
             });
+
+        #[cfg(windows)]
+        {
+            ui.add_space(8.);
+            let can_switch = !matches!(
+                self.status,
+                Status::Installing { .. } | Status::Installed(_)
+            );
+            ui.add_enabled_ui(can_switch, |ui| {
+                ui.horizontal(|ui| {
+                    let label = ui.label(tr!("更新线路"));
+                    egui::ComboBox::from_id_salt("editor-update-line")
+                        .selected_text(self.line.label())
+                        .show_ui(ui, |ui| {
+                            for line in [UpdateLine::New, UpdateLine::Old] {
+                                ui.selectable_value(&mut self.line, line, line.label());
+                            }
+                        })
+                        .response
+                        .labelled_by(label.id);
+                });
+            });
+        }
 
         match &self.status {
             Status::Available(_) => {
@@ -654,6 +731,8 @@ mod tests {
                     Some(HELLO_HASH),
                 )),
                 show_dialog: true,
+                #[cfg(windows)]
+                line: UpdateLine::default(),
             };
             let mut harness = egui_kittest::Harness::builder()
                 .with_context_setup(|ctx| {
@@ -687,6 +766,40 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn update_dialog_switches_between_named_lines() {
+        use crate::i18n::{Language, enter};
+        use egui_kittest::kittest::Queryable as _;
+
+        let _language = enter(Language::English);
+        let updater = Updater {
+            status: Status::UpToDate,
+            show_dialog: true,
+            line: UpdateLine::default(),
+        };
+        let mut harness = egui_kittest::Harness::builder()
+            .with_context_setup(theme::install)
+            .with_size([320., 340.])
+            .build_ui_state(
+                |ui, updater| {
+                    updater.dialog_contents(ui);
+                },
+                updater,
+            );
+        assert_eq!(harness.state().line, UpdateLine::New);
+        harness.get_by_label("Update server").click();
+        harness.run();
+        harness.get_by_label("Old server").click();
+        harness.run();
+        assert_eq!(harness.state().line, UpdateLine::Old);
+        harness.get_by_label("Update server").click();
+        harness.run();
+        harness.get_by_label("New server").click();
+        harness.run();
+        assert_eq!(harness.state().line, UpdateLine::New);
+    }
+
     #[test]
     fn install_dialog_displays_download_progress_and_install_stages() {
         use crate::i18n::{Language, enter};
@@ -705,6 +818,8 @@ mod tests {
                 version: "0.9.0".into(),
             },
             show_dialog: true,
+            #[cfg(windows)]
+            line: UpdateLine::default(),
         };
         let mut harness = egui_kittest::Harness::<Updater>::builder()
             .with_context_setup(theme::install)
@@ -825,8 +940,16 @@ mod tests {
             )
             .is_err()
         );
-        assert!(parse_url(WINDOWS_MANIFEST_URL).is_ok());
-        assert!(parse_url("http://download.ra2.diy/manifest.json").is_err());
+        assert!(parse_url(&format!("{WINDOWS_UPDATE_BASE_URL}manifest.json")).is_ok());
+        assert!(
+            parse_url(&format!(
+                "{WINDOWS_UPDATE_BASE_URL}ra2-map-editor-windows-x86_64.exe"
+            ))
+            .is_ok()
+        );
+        assert!(parse_url("http://3bbs.top/manifest.json").is_err());
+        assert!(parse_url("http://3bbs.top:8080/download/manifest.json").is_err());
+        assert!(parse_url("http://3bbs.top.example.com/download/manifest.json").is_err());
         assert!(parse_url("http://127.0.0.1:8080/manifest.json").is_ok());
         assert!(parse_url("http://example.com/manifest.json").is_err());
         assert!(parse_url("https://example.com/manifest.json").is_ok());
