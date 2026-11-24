@@ -2,7 +2,7 @@
 use anyhow::{Result, ensure};
 use ra2_map_scene::map::{MapScene, pixel_depth};
 
-pub use crate::world_gpu::ViewportStats;
+pub use crate::world_gpu::{TerrainPreviewGpu, ViewportStats};
 use std::collections::HashMap;
 use std::sync::{
     Arc,
@@ -473,6 +473,33 @@ impl TerrainGpu {
         world: egui::Rect,
         options: ra2_map_scene::visual::ViewOptions,
     ) -> egui::PaintCallback {
+        self.preview_callback(rect, target, world, options, None)
+    }
+
+    pub fn prepare_terrain_preview(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &Target,
+        preview: ra2_map_scene::visual::TerrainPreview,
+    ) -> Result<Arc<TerrainPreviewGpu>> {
+        Ok(Arc::new(TerrainPreviewGpu::new(
+            device,
+            queue,
+            self.pipelines.world.clone(),
+            target,
+            preview,
+        )?))
+    }
+
+    pub fn preview_callback(
+        self: &Arc<Self>,
+        rect: egui::Rect,
+        target: Arc<Target>,
+        world: egui::Rect,
+        options: ra2_map_scene::visual::ViewOptions,
+        preview: Option<Arc<TerrainPreviewGpu>>,
+    ) -> egui::PaintCallback {
         egui_wgpu::Callback::new_paint_callback(
             rect,
             Draw {
@@ -481,6 +508,7 @@ impl TerrainGpu {
                 target,
                 world,
                 transparent: false,
+                preview,
             },
         )
     }
@@ -501,6 +529,7 @@ impl TerrainGpu {
                 target,
                 world,
                 transparent: true,
+                preview: None,
             },
         )
     }
@@ -600,6 +629,7 @@ struct Draw {
     target: Arc<Target>,
     world: egui::Rect,
     transparent: bool,
+    preview: Option<Arc<TerrainPreviewGpu>>,
 }
 impl egui_wgpu::CallbackTrait for Draw {
     fn prepare(
@@ -616,7 +646,11 @@ impl egui_wgpu::CallbackTrait for Draw {
             &self.target,
             self.world,
             self.options,
-            self.transparent,
+            if self.transparent {
+                crate::world_gpu::TerrainLayer::Transparent
+            } else {
+                crate::world_gpu::TerrainLayer::Opaque(self.preview.as_deref())
+            },
         );
         vec![]
     }

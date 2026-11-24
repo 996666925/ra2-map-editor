@@ -1,7 +1,8 @@
 //! Static terrain/SHP/VXL scene pages; all primitives test the same Z attachment.
 use crate::visibility::VisibilityIndex;
 use anyhow::{Result, ensure};
-use ra2_map_scene::visual::{ViewOptions, VisualScene};
+use ra2_map_scene::visual::{TerrainPreview, ViewOptions, VisualScene};
+use std::sync::atomic::{AtomicU64, Ordering};
 use wgpu::util::DeviceExt;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -9,6 +10,7 @@ struct FrameKey {
     rect: egui::Rect,
     flags: [u32; 4],
     transparent: bool,
+    preview: Option<u64>,
 }
 #[derive(Clone, Copy, Default, serde::Serialize)]
 pub struct ViewportStats {
@@ -37,28 +39,70 @@ struct Batch {
 struct Command {
     batch: Batch,
     range: std::ops::Range<u32>,
+    preview: bool,
+}
+
+fn append_command(commands: &mut Vec<Command>, batch: Batch, index: u32, preview: bool) {
+    if let Some(last) = commands.last_mut()
+        && last.preview == preview
+        && last.batch.page == batch.page
+        && last.batch.pipeline == batch.pipeline
+        && batch.layer < 256
+        && last.batch.layer < 256
+    {
+        last.range.end = index + 1;
+    } else {
+        commands.push(Command {
+            batch,
+            range: index..index + 1,
+            preview,
+        });
+    }
 }
 
 fn visible_commands(ids: &[u32], batches: &[Batch]) -> Vec<Command> {
-    let mut commands: Vec<Command> = Vec::new();
+    let mut commands = Vec::new();
     for (index, &id) in ids.iter().enumerate() {
-        let batch = batches[id as usize];
-        if let Some(last) = commands.last_mut()
-            && last.batch.page == batch.page
-            && last.batch.pipeline == batch.pipeline
-            && batch.layer < 256
-            && last.batch.layer < 256
-        {
-            last.range.end += 1;
-        } else {
-            commands.push(Command {
-                batch,
-                range: index as u32..index as u32 + 1,
-            });
-        }
+        append_command(&mut commands, batches[id as usize], index as u32, false);
     }
     commands
 }
+
+fn preview_commands(
+    visible: &[u32],
+    batches: &[Batch],
+    preview_visible: &[u32],
+    preview_batches: &[Batch],
+    preview_order: &[u32],
+) -> Vec<Command> {
+    let mut commands = Vec::new();
+    let mut base = visible.iter().copied().enumerate().peekable();
+    for (index, &id) in preview_visible.iter().enumerate() {
+        while let Some(&(base_index, base_id)) = base.peek() {
+            if base_id >= preview_order[id as usize] {
+                break;
+            }
+            append_command(
+                &mut commands,
+                batches[base_id as usize],
+                base_index as u32,
+                false,
+            );
+            base.next();
+        }
+        append_command(
+            &mut commands,
+            preview_batches[id as usize],
+            index as u32,
+            true,
+        );
+    }
+    for (index, id) in base {
+        append_command(&mut commands, batches[id as usize], index as u32, false);
+    }
+    commands
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Instance {
@@ -96,12 +140,60 @@ pub(crate) struct WorldGpu {
     batches: Vec<Batch>,
     visibility: VisibilityIndex,
 }
+/// GPU resources for one provisional terrain plan and viewport target.
+pub struct TerrainPreviewGpu {
+    id: u64,
+    world: WorldGpu,
+    order: Vec<u32>,
+    replaced: Vec<u32>,
+    visible: wgpu::Buffer,
+    bindings: Vec<wgpu::BindGroup>,
+}
+
+pub(crate) enum TerrainLayer<'a> {
+    Opaque(Option<&'a TerrainPreviewGpu>),
+    Transparent,
+}
+
+impl TerrainPreviewGpu {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pipelines: std::sync::Arc<[wgpu::RenderPipeline; 3]>,
+        target: &super::terrain_gpu::Target,
+        preview: TerrainPreview,
+    ) -> Result<Self> {
+        static ID: AtomicU64 = AtomicU64::new(1);
+        let world = WorldGpu::new_with_width(device, queue, &preview.visual, pipelines, 512)?;
+        let visible = world.visible_buffer(device);
+        let bindings = world.bindings(device, &target.uniform, &visible, &target.destination);
+        Ok(Self {
+            id: ID.fetch_add(1, Ordering::Relaxed),
+            world,
+            order: preview.order,
+            replaced: preview.replaced,
+            visible,
+            bindings,
+        })
+    }
+}
+
 impl WorldGpu {
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         scene: &VisualScene,
         pipelines: std::sync::Arc<[wgpu::RenderPipeline; 3]>,
+    ) -> Result<Self> {
+        Self::new_with_width(device, queue, scene, pipelines, 2048)
+    }
+
+    fn new_with_width(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &VisualScene,
+        pipelines: std::sync::Arc<[wgpu::RenderPipeline; 3]>,
+        minimum_width: u32,
     ) -> Result<Self> {
         let limit = device.limits().max_texture_dimension_2d.min(8192);
         let widest = scene
@@ -110,7 +202,7 @@ impl WorldGpu {
             .map(|surface| surface.size[0])
             .max()
             .unwrap_or(1);
-        let width = widest.max(2048).min(limit);
+        let width = widest.max(minimum_width).min(limit);
         let mut placements = Vec::new();
         let (mut x, mut y, mut row, mut page) = (0, 0, 0, 0usize);
         let mut heights = Vec::new();
@@ -487,7 +579,14 @@ impl WorldGpu {
         rect: egui::Rect,
         options: ViewOptions,
     ) {
-        self.render_layer(encoder, queue, target, rect, options, false);
+        self.render_layer(
+            encoder,
+            queue,
+            target,
+            rect,
+            options,
+            TerrainLayer::Opaque(None),
+        );
     }
 
     pub fn render_layer(
@@ -497,11 +596,16 @@ impl WorldGpu {
         target: &super::terrain_gpu::Target,
         rect: egui::Rect,
         options: ViewOptions,
-        transparent: bool,
+        layer: TerrainLayer<'_>,
     ) {
+        let (transparent, preview) = match layer {
+            TerrainLayer::Opaque(preview) => (false, preview),
+            TerrainLayer::Transparent => (true, None),
+        };
         let key = FrameKey {
             rect,
             transparent,
+            preview: preview.map(|p| p.id),
             flags: [
                 options.overlays as u32,
                 options.objects as u32,
@@ -518,11 +622,27 @@ impl WorldGpu {
         }
         let mut visible = self.visibility.visible(rect);
         visible.retain(|&id| match self.batches[id as usize].layer & 255 {
+            0 => preview.is_none_or(|p| p.replaced.binary_search(&id).is_err()),
             1 => options.overlays,
             2 => options.objects,
             _ => true,
         });
-        let commands = visible_commands(&visible, &self.batches);
+        let (commands, preview_count) = if let Some(preview) = preview {
+            let preview_visible = preview.world.visibility.visible(rect);
+            if !preview_visible.is_empty() {
+                queue.write_buffer(&preview.visible, 0, bytemuck::cast_slice(&preview_visible));
+            }
+            let commands = preview_commands(
+                &visible,
+                &self.batches,
+                &preview_visible,
+                &preview.world.batches,
+                &preview.order,
+            );
+            (commands, preview_visible.len())
+        } else {
+            (visible_commands(&visible, &self.batches), 0)
+        };
         if !visible.is_empty() {
             // Only compact IDs change when panning; art and instance data stay
             // resident. Keep painter order for shadows and non-writing bodies.
@@ -633,7 +753,12 @@ impl WorldGpu {
             });
             for command in &commands[start..cursor] {
                 pass.set_pipeline(&self.pipelines[command.batch.pipeline]);
-                pass.set_bind_group(0, &target.world_bind[command.batch.page], &[]);
+                let bindings = if command.preview {
+                    &preview.unwrap().bindings
+                } else {
+                    &target.world_bind
+                };
+                pass.set_bind_group(0, &bindings[command.batch.page], &[]);
                 pass.draw(0..6, command.range.clone());
             }
             drop(pass);
@@ -644,7 +769,7 @@ impl WorldGpu {
         }
         cache.key = Some(key);
         cache.stats.total_instances = self.batches.len();
-        cache.stats.visible_instances = visible.len();
+        cache.stats.visible_instances = visible.len() + preview_count;
         cache.stats.draw_calls = commands.len();
         cache.stats.scene_renders += 1;
     }

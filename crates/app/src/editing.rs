@@ -1377,6 +1377,18 @@ impl Editor {
         camera: &crate::camera::MapCamera,
         at: Option<Cell>,
     ) {
+        self.paint_terrain_preview(painter, scene, rect, camera, at, false);
+    }
+
+    pub(crate) fn paint_terrain_preview(
+        &mut self,
+        painter: &egui::Painter,
+        scene: &MapScene,
+        rect: egui::Rect,
+        camera: &crate::camera::MapCamera,
+        at: Option<Cell>,
+        replaces_terrain: bool,
+    ) {
         self.set_framework(self.framework);
         self.terrain_hover = at;
         if self.doc.is_some() && self.raise_lower_preview_active() {
@@ -1406,7 +1418,7 @@ impl Editor {
             return;
         };
         if self.terrain_mode.planned() {
-            self.plateau_preview(painter, scene, rect, camera, at);
+            self.plateau_preview(painter, scene, rect, camera, at, replaces_terrain);
             return;
         }
         let mut valid = true;

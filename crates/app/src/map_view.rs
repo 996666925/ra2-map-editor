@@ -2,7 +2,7 @@ use crate::i18n::tr;
 use crate::{
     map::MapScene,
     map_loader::{LoadTimings, MapCreation, MapLoader},
-    terrain_gpu::{Target, TerrainGpu},
+    terrain_gpu::{Target, TerrainGpu, TerrainPreviewGpu},
 };
 use anyhow::{Context, Result, ensure};
 use eframe::{egui, egui_wgpu};
@@ -45,6 +45,7 @@ pub struct MapView {
     pub scene: Option<MapScene>,
     gpu: Option<Arc<TerrainGpu>>,
     target: Option<Arc<Target>>,
+    cut_preview: Option<CutPreview>,
     zoom: f32,
     center: egui::Pos2,
     fit: bool,
@@ -64,6 +65,12 @@ pub struct MapView {
     directory: PathBuf,
     smoke_loads: Vec<serde_json::Value>,
 }
+struct CutPreview {
+    plan: std::sync::Weak<ra2_map_scene::cliff_tools::PlateauPlan>,
+    target: std::sync::Weak<Target>,
+    gpu: Arc<TerrainPreviewGpu>,
+}
+
 enum Leave {
     Open(PathBuf, String),
     New(PathBuf, Box<MapCreation>),
@@ -98,6 +105,7 @@ impl MapView {
             scene: None,
             gpu: None,
             target: None,
+            cut_preview: None,
             zoom: 1.,
             center: egui::Pos2::ZERO,
             fit: true,
@@ -887,6 +895,7 @@ impl MapView {
                 return;
             }
         }
+        let mut terrain_slot = None;
         if self.editor.flat_view {
             self.workbench.flat_view.draw(
                 &ui.painter().with_clip_rect(rect),
@@ -899,12 +908,19 @@ impl MapView {
             if self.target.as_ref().is_none_or(|t| t.size != size) {
                 self.target = Some(gpu.target(&state.device, size));
             }
-            ui.painter().add(gpu.callback(
-                rect,
-                self.target.as_ref().unwrap().clone(),
-                world,
-                self.editor.view_options(),
-            ));
+            let target = self.target.as_ref().unwrap();
+            if self.workbench.management.presenting_layers() {
+                ui.painter().add(gpu.callback(
+                    rect,
+                    target.clone(),
+                    world,
+                    self.editor.view_options(),
+                ));
+            } else {
+                // Keep the shared terrain/depth pass beneath the preview guides,
+                // while using the cut geometry from this frame's pointer sample.
+                terrain_slot = Some((ui.painter().add(egui::Shape::Noop), gpu, state, target));
+            }
         }
         if self.workbench.management.presenting_layers() {
             if self.workbench.management.open {
@@ -972,15 +988,58 @@ impl MapView {
                 self.editor.nudge_flatten_height(scene, at, direction > 0);
             }
         }
-        let draw_terrain_preview = |editor: &mut crate::editing::Editor| {
+        let cut_preview = &mut self.cut_preview;
+        let mut draw_terrain_preview = |editor: &mut crate::editing::Editor| {
+            if let Some((slot, gpu, state, target)) = terrain_slot {
+                let patch = if let Some(plan) = editor.cut_terrain_preview(scene, at) {
+                    if cut_preview.as_ref().is_none_or(|cached| {
+                        cached.plan.as_ptr() != Arc::as_ptr(&plan)
+                            || cached.target.as_ptr() != Arc::as_ptr(target)
+                    }) {
+                        *cut_preview = scene
+                            .visual
+                            .terrain_preview(&scene.palette, &plan.edits)
+                            .and_then(|preview| {
+                                gpu.prepare_terrain_preview(
+                                    &state.device,
+                                    &state.queue,
+                                    target,
+                                    preview,
+                                )
+                                .ok()
+                            })
+                            .map(|gpu| CutPreview {
+                                plan: Arc::downgrade(&plan),
+                                target: Arc::downgrade(target),
+                                gpu,
+                            });
+                    }
+                    cut_preview.as_ref().map(|cached| cached.gpu.clone())
+                } else {
+                    if !editor.stroking {
+                        *cut_preview = None;
+                    }
+                    None
+                };
+                let replaced = patch.is_some();
+                painter.set(
+                    slot,
+                    gpu.preview_callback(rect, target.clone(), world, editor.view_options(), patch),
+                );
+                if replaced {
+                    editor.paint_terrain_preview(&painter, scene, rect, &camera, at, true);
+                    return;
+                }
+            }
             editor.terrain_preview(&painter, scene, rect, &camera, at);
         };
-        // The shore brush guide uses the accumulated stroke, including the
-        // pointer sample delivered in this frame.
-        let shore_brush = self.editor.tool == crate::editing::Tool::Terrain
-            && self.editor.terrain_mode == ra2_map_scene::terrain_tools::TerrainMode::ShoreRepair;
+        // These guides need the press or drag sample from the current frame.
+        let preview_after_pointer = self.editor.rectangular_plateau_cut_selected()
+            || (self.editor.tool == crate::editing::Tool::Terrain
+                && self.editor.terrain_mode
+                    == ra2_map_scene::terrain_tools::TerrainMode::ShoreRepair);
         if self.editor.flat_view {
-            if !shore_brush {
+            if !preview_after_pointer {
                 draw_terrain_preview(&mut self.editor);
             }
             self.editor.tunnel_preview(&painter, scene, rect, &camera);
@@ -1000,7 +1059,7 @@ impl MapView {
                     None,
                 );
             }
-            if shore_brush {
+            if preview_after_pointer {
                 draw_terrain_preview(&mut self.editor);
             }
             for (index, color) in [
@@ -1046,7 +1105,7 @@ impl MapView {
             }
             return;
         }
-        if !shore_brush {
+        if !preview_after_pointer {
             draw_terrain_preview(&mut self.editor);
         }
         self.editor.tunnel_preview(&painter, scene, rect, &camera);
@@ -1125,7 +1184,7 @@ impl MapView {
                 marker,
             );
         }
-        if shore_brush {
+        if preview_after_pointer {
             draw_terrain_preview(&mut self.editor);
         }
         if editing && !panning && !self.workbench.cancel_secondary && !self.editor.stroking {

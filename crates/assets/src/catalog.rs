@@ -16,6 +16,7 @@ pub struct TerrainBrush {
 pub struct TerrainPalette {
     pub brushes: Vec<TerrainBrush>,
     pub images: std::collections::HashMap<TileKey, crate::assets::DecodedImage>,
+    pub depths: std::collections::HashMap<TileKey, Vec<u8>>,
     /// Geometry is decoded on the resource worker, never while dragging a tool.
     pub templates: std::collections::HashMap<(u16, u8), TerrainTemplate>,
     pub tile_ids: Option<vera20k_core::map::rmg::TileIds>,
@@ -343,6 +344,7 @@ impl Catalog {
                             palette.groups.get(&tile_id).map_or("", |g| g.name.as_str())
                         ),
                     });
+                    palette.depths.insert(key, tile.depth.clone());
                     palette.images.insert(
                         key,
                         crate::assets::DecodedImage {

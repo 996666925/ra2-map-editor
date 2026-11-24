@@ -1692,6 +1692,42 @@ fn cliff_cut_picks_one_component_and_rejects_obstructed_cuts_atomically() {
 }
 
 #[test]
+fn cliff_cut_low_ground_line_picks_the_first_wall_and_uses_the_plateau_base() {
+    let (mut doc, scene) = setup_size(95);
+    for (a, b) in [([50, 50], [72, 72]), ([78, 50], [88, 72])] {
+        reshape(&doc, &scene, cliff_tools::rectangle(a, b), 4, false)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+    }
+    let (start, end) = ([41, 61], [82, 61]);
+    let low = clear(&scene, value(&doc, &scene, start), 2).unwrap();
+    doc.set(Target::Terrain(start), Some(Value::Terrain(low)))
+        .unwrap();
+    let before = doc.snapshot().bytes().unwrap();
+    assert!(CliffCut::first_wall(&doc, &scene, start, [45, 61]).is_err());
+    let wall = CliffCut::first_wall(&doc, &scene, start, end).unwrap();
+    assert!(wall[0] < 50);
+    assert_eq!(
+        CliffCut::first_wall(&doc, &scene, start, [62, 61]).unwrap(),
+        wall
+    );
+    let cut = CliffCut::select(&doc, &scene, wall).unwrap();
+    assert_eq!(cut.base(), 4);
+    let plan = cut
+        .plan_line(&doc, &scene, [start, end], CutSide::Left, None)
+        .unwrap();
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    assert!(plan.edits.keys().all(|&[x, _]| x < 77));
+    plan.apply(&mut doc).unwrap();
+    complete(&doc, &scene, &plan);
+    assert_eq!(value(&doc, &scene, [61, 55]).level, 4);
+    assert_eq!(value(&doc, &scene, [61, 67]).level, 8);
+    assert_eq!(value(&doc, &scene, [82, 61]).level, 8);
+    assert_eq!(value(&doc, &scene, start), low);
+}
+
+#[test]
 fn cliff_cut_does_not_follow_touching_low_wall_tiles_into_another_plateau() {
     let (mut doc, scene) = setup();
     for (a, b) in [([41, 41], [54, 62]), ([58, 41], [70, 62])] {

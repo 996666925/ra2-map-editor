@@ -1383,8 +1383,13 @@ fn plateau_cut_two_click_draft_updates_settings_and_is_one_history_entry() {
     let e = harness.state_mut();
     assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
 
-    let start = [38, 28];
+    let start = [38, 20];
+    let short = [38, 22];
     let end = [38, 49];
+    assert_eq!(
+        terrain_tools::value(e.doc.as_ref().unwrap(), &scene, start).level,
+        4
+    );
     e.pointer(&scene, Some(start), true, true, false, None);
     let camera = crate::camera::MapCamera {
         center: scene.bounds.center(),
@@ -1403,15 +1408,57 @@ fn plateau_cut_two_click_draft_updates_settings_and_is_one_history_entry() {
     e.pointer(&scene, Some(end), false, true, false, None);
     e.pointer(&scene, Some(end), false, false, true, None);
     assert!(e.stroking, "drag and release don't place the second point");
+    let assert_cut_guide = |e: &mut Editor, side| {
+        let frame = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+            e.terrain_preview(ui.painter(), &scene, ui.max_rect(), &camera, Some(end));
+        });
+        let segments: Vec<_> = frame
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == Color32::from_rgb(80, 220, 170) =>
+                {
+                    Some(*points)
+                }
+                _ => None,
+            })
+            .collect();
+        let [line, ticks @ ..] = &segments[..] else {
+            panic!("missing cut line");
+        };
+        assert_eq!(ticks.len(), 3);
+        let along = (line[1] - line[0]).normalized();
+        let right = egui::vec2(-along.y, along.x);
+        let sign = if side == CutSide::Left { -1. } else { 1. };
+        for tick in ticks {
+            let delta = tick[1] - tick[0];
+            assert!((delta.dot(right) - sign * 6.).abs() < 0.01);
+            assert!(delta.dot(along).abs() < 0.01);
+        }
+    };
+    assert_cut_guide(e, CutSide::Left);
     let left = e.plateau_preview_plan(&scene, end).unwrap();
     let same_ray = e.plateau_preview_plan(&scene, [38, 45]).unwrap();
     assert!(Arc::ptr_eq(&left, &same_ray));
+    assert!(e.plateau_preview_plan(&scene, short).is_err());
+    e.pointer(&scene, Some(short), true, false, true, None);
+    assert!(
+        e.stroking,
+        "a line stopping short of the cliff keeps the anchor active"
+    );
+    assert!(e.status.contains("切线尚未穿过悬崖"));
+    assert!(Arc::ptr_eq(
+        &left,
+        &e.plateau_preview_plan(&scene, end).unwrap()
+    ));
     assert_eq!(left.edits[&[45, 40]].level, 4);
     assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
 
     e.pointer(&scene, Some(start), true, false, true, None);
     assert!(e.stroking, "a duplicate endpoint keeps the anchor active");
     assert!(e.status.contains("切线需要两个不同的点"));
+    e.plateau_preview_plan(&scene, end).unwrap();
     harness.run();
     harness.get_by_label("矩形拖选").click();
     harness.run();
@@ -1428,6 +1475,7 @@ fn plateau_cut_two_click_draft_updates_settings_and_is_one_history_entry() {
     assert_eq!(e.plateau_cut_method, PlateauCutMethod::TwoPoint);
     assert_eq!(e.cliff_cut.side, CutSide::Right);
     assert_eq!(e.cliff_cut.target, Some(6));
+    assert_cut_guide(&mut e, CutSide::Right);
     let right = e.plateau_preview_plan(&scene, end).unwrap();
     assert_eq!(right.edits[&[32, 40]].level, 6);
     assert!(!right.edits.contains_key(&[45, 40]));
@@ -1472,8 +1520,26 @@ fn plateau_cut_two_click_draft_updates_settings_and_is_one_history_entry() {
         assert_eq!(doc.terrain(at), Some(v));
     }
     let after = doc.snapshot().bytes().unwrap();
+    let pending = e
+        .cut_terrain_preview(&scene, None)
+        .expect("retain committed cut while the scene updates");
+    assert_eq!(pending.edits, right.edits);
     e.history(false, &scene);
+    assert!(
+        e.cut_terrain_preview(&scene, None).is_none(),
+        "undo clears the retained cut"
+    );
     assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.pointer(&scene, Some(start), true, false, true, None);
+    e.pointer(&scene, Some(end), true, false, true, None);
+    assert!(e.cut_terrain_preview(&scene, None).is_some());
+    let mut published = scene.clone();
+    published.visual = Arc::new((*scene.visual).clone());
+    assert!(
+        e.cut_terrain_preview(&published, None).is_none(),
+        "the published scene takes over rendering"
+    );
+    e.history(false, &scene);
     e.history(true, &scene);
     assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
     drop(e);

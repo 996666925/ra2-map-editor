@@ -16,6 +16,7 @@ fn click_polyline(mode: TerrainMode) -> bool {
 #[derive(Default)]
 pub(super) struct PlateauEdit {
     gesture: Option<Gesture>,
+    committed_cut: Option<CommittedCut>,
     preview: Option<Preview>,
     draw_order: PreviewDrawOrder,
     road_draft: RoadDraft,
@@ -34,8 +35,23 @@ pub(super) struct CutOptions {
     target: Option<u8>,
 }
 
+impl CutOptions {
+    fn height(self, base: u8) -> u8 {
+        self.target.unwrap_or(base).clamp(base, base + 3)
+    }
+}
+
+// Keep the committed terrain visible until the asynchronous scene refresh.
+struct CommittedCut {
+    plan: Arc<PlateauPlan>,
+    document: u64,
+    revision: u64,
+    previous_scene: Weak<ra2_map_scene::visual::VisualScene>,
+}
+
 struct CutDraft {
-    selection: CliffCut,
+    selection: Option<CliffCut>,
+    probe: Option<(Cell, std::result::Result<(), String>)>,
     document: u64,
     revision: u64,
     palette: Weak<ra2_map_assets::catalog::TerrainPalette>,
@@ -47,10 +63,40 @@ impl CutDraft {
             && self.revision == doc.edit_revision()
             && self.palette.as_ptr() == Arc::as_ptr(&scene.palette)
     }
+
+    fn resolve(
+        &mut self,
+        doc: &MapDocument,
+        scene: &MapScene,
+        start: Cell,
+        end: Cell,
+    ) -> std::result::Result<&CliffCut, String> {
+        if self.probe.as_ref().is_none_or(|(at, _)| *at != end) {
+            let result = (|| -> Result<()> {
+                let wall = CliffCut::first_wall(doc, scene, start, end)?;
+                if self
+                    .selection
+                    .as_ref()
+                    .is_none_or(|cut| !cut.contains_wall(wall))
+                {
+                    self.selection = Some(CliffCut::select(doc, scene, wall)?);
+                }
+                Ok(())
+            })();
+            self.probe = Some((end, result.map_err(|e| e.to_string())));
+        }
+        self.probe.as_ref().unwrap().1.clone()?;
+        Ok(self.selection.as_ref().unwrap())
+    }
+
+    fn base(&self) -> Option<u8> {
+        self.probe.as_ref()?.1.as_ref().ok()?;
+        self.selection.as_ref().map(CliffCut::base)
+    }
 }
 
-// A cut is an infinite directed line through the anchor. Endpoints on the
-// same ray select the same terrain regardless of their distance.
+// Once the segment reaches a wall, moving farther along the same ray keeps
+// the first wall and the infinite cut line unchanged.
 fn cut_ray(start: Cell, end: Cell) -> [i32; 2] {
     let [dx, dy] = [0, 1].map(|axis| i32::from(end[axis]) - i32::from(start[axis]));
     let (mut a, mut b) = (dx.abs(), dy.abs());
@@ -288,28 +334,30 @@ impl PlateauEdit {
         at: Cell,
         cut: CutOptions,
     ) -> std::result::Result<Arc<PlateauPlan>, String> {
-        let g = self.gesture.as_ref().ok_or(tr!("按下并拖动绘制高台"))?;
+        let g = self.gesture.as_mut().ok_or(tr!("按下并拖动绘制高台"))?;
         if g.mode == TerrainMode::RoadPolyline {
             return self
                 .road_draft
                 .generate(doc, scene, &g.path, g.road_endpoint(at), g.road);
         }
         let palette = Arc::as_ptr(&scene.palette) as usize;
-        let cut_key = if let Some(draft) = &g.cut {
+        let selection = if let Some(draft) = &mut g.cut {
             if !draft.is_current(doc, scene) {
                 return Err("地图或地形资源已变化，请取消后重新选择削切起点".into());
             }
-            doc.check_cell(at).map_err(|error| error.to_string())?;
-            Some((
-                CutOptions {
-                    target: Some(cut.target.unwrap_or(g.base)),
-                    ..cut
-                },
-                cut_ray(g.start, at),
-            ))
+            Some(draft.resolve(doc, scene, g.start, at)?)
         } else {
             None
         };
+        let cut_key = selection.map(|selection| {
+            (
+                CutOptions {
+                    target: Some(cut.height(selection.base())),
+                    ..cut
+                },
+                cut_ray(g.start, at),
+            )
+        });
         let path = if cut_key.is_some() {
             Vec::new()
         } else {
@@ -345,10 +393,14 @@ impl PlateauEdit {
         };
         if self.preview.as_ref().is_none_or(|p| p.key != key) {
             let result = (|| -> Result<Arc<PlateauPlan>> {
-                if let Some(draft) = &g.cut {
-                    return Ok(Arc::new(
-                        draft.selection.plan(doc, scene, at, cut.side, cut.target)?,
-                    ));
+                if let (Some(selection), Some((options, _))) = (selection, key.cut) {
+                    return Ok(Arc::new(selection.plan_line(
+                        doc,
+                        scene,
+                        [g.start, at],
+                        options.side,
+                        options.target,
+                    )?));
                 }
                 if key.mode == TerrainMode::CliffPolyline {
                     return Ok(Arc::new(cliff_authoring::polyline(
@@ -474,6 +526,12 @@ impl Editor {
             && self.plateau_cut_method == PlateauCutMethod::TwoPoint
     }
 
+    pub(crate) fn rectangular_plateau_cut_selected(&self) -> bool {
+        self.tool == Tool::Terrain
+            && self.terrain_mode == TerrainMode::PlateauCut
+            && self.plateau_cut_method == PlateauCutMethod::Rectangle
+    }
+
     pub(super) fn polyline_shortcuts(&mut self, ctx: &egui::Context, scene: &MapScene) {
         if !self
             .plateau
@@ -524,6 +582,15 @@ impl Editor {
                 Ok(cells) => {
                     self.feedback = cells.into_iter().collect();
                     self.commit(scene, mode.name());
+                    if mode == TerrainMode::PlateauCut {
+                        let doc = self.doc.as_ref().unwrap();
+                        self.plateau.committed_cut = Some(CommittedCut {
+                            plan: plan.clone(),
+                            document: doc.id,
+                            revision: doc.edit_revision(),
+                            previous_scene: Arc::downgrade(&scene.visual),
+                        });
+                    }
                     self.status = tr!(
                         "{arg0} · {arg1} 格 · {arg2} 个地形模板 · {arg3} 个桥面格",
                         arg0 = mode.name(),
@@ -551,6 +618,32 @@ impl Editor {
                 self.cliff_cut,
             )
             .map_err(anyhow::Error::msg)
+    }
+
+    pub(crate) fn cut_terrain_preview(
+        &mut self,
+        scene: &MapScene,
+        at: Option<Cell>,
+    ) -> Option<Arc<PlateauPlan>> {
+        if let Some(gesture) = &self.plateau.gesture {
+            let at = at?;
+            if gesture.mode != TerrainMode::PlateauCut
+                || gesture.cut.is_some() && at == gesture.start
+            {
+                return None;
+            }
+            return self.plateau_preview_plan(scene, at).ok();
+        }
+        let committed = self.plateau.committed_cut.as_ref()?;
+        if self.doc.as_ref().is_some_and(|doc| {
+            doc.id == committed.document && doc.edit_revision() == committed.revision
+        }) && committed.previous_scene.as_ptr() == Arc::as_ptr(&scene.visual)
+        {
+            Some(committed.plan.clone())
+        } else {
+            self.plateau.committed_cut = None;
+            None
+        }
     }
 
     pub(super) fn plateau_pointer(
@@ -614,25 +707,19 @@ impl Editor {
             };
             let two_point_cut = self.two_point_cut_selected();
             let cut = if two_point_cut {
-                match CliffCut::select(doc, scene, at) {
-                    Ok(cut) => {
-                        if let Some(target) = &mut self.cliff_cut.target {
-                            *target = (*target).clamp(cut.base(), cut.base() + 3);
-                        }
-                        self.status =
-                            tr!("移动鼠标预览削切，点击第二点提交。Esc 或右键取消。").into();
-                        Some(CutDraft {
-                            selection: cut,
-                            document: doc.id,
-                            revision: doc.edit_revision(),
-                            palette: Arc::downgrade(&scene.palette),
-                        })
-                    }
-                    Err(error) => {
-                        self.status = crate::i18n::text(&error.to_string()).into();
-                        return true;
-                    }
+                if let Err(error) = doc.check_cell(at) {
+                    self.status = crate::i18n::text(&error.to_string()).into();
+                    return true;
                 }
+                self.status =
+                    tr!("移动鼠标让切线穿过悬崖，点击第二点提交。Esc 或右键取消。").into();
+                Some(CutDraft {
+                    selection: None,
+                    probe: None,
+                    document: doc.id,
+                    revision: doc.edit_revision(),
+                    palette: Arc::downgrade(&scene.palette),
+                })
             } else {
                 None
             };
@@ -641,10 +728,11 @@ impl Editor {
             self.stroking = true;
             self.plateau.gesture = Some(Gesture {
                 mode: self.terrain_mode,
-                base: cut
-                    .as_ref()
-                    .map(|draft| draft.selection.base())
-                    .unwrap_or_else(|| self.plateau_base_for_click(doc, scene, at)),
+                base: if two_point_cut {
+                    terrain_tools::value(doc, scene, at).level
+                } else {
+                    self.plateau_base_for_click(doc, scene, at)
+                },
                 cut,
                 start: at,
                 path: vec![at],
@@ -713,6 +801,7 @@ impl Editor {
         rect: egui::Rect,
         camera: &crate::camera::MapCamera,
         at: Cell,
+        replaces_terrain: bool,
     ) {
         let Some(doc) = self.doc.as_ref() else {
             return;
@@ -757,7 +846,7 @@ impl Editor {
                 if self.picking_height {
                     tr!("点击崖顶或地面拾取高度；此次点击不会修改地图。")
                 } else if self.two_point_cut_selected() {
-                    tr!("第一点请点在已有悬崖或相连的高台顶面")
+                    tr!("第一点请点在悬崖下方的低地")
                 } else if self.terrain_mode == TerrainMode::CliffPolyline {
                     tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。")
                 } else if self.terrain_mode == TerrainMode::WaterPolyline {
@@ -784,7 +873,7 @@ impl Editor {
             painter.text(
                 rect.left_top() + egui::vec2(12., 12.),
                 egui::Align2::LEFT_TOP,
-                tr!("移动鼠标预览削切，点击第二点提交。Esc 或右键取消。"),
+                tr!("移动鼠标让切线穿过悬崖，点击第二点提交。Esc 或右键取消。"),
                 egui::FontId::proportional(13.),
                 Color32::LIGHT_GREEN,
             );
@@ -844,7 +933,7 @@ impl Editor {
         };
         match plan {
             Some(plan) => {
-                if self.framework {
+                if self.framework && !replaces_terrain {
                     for &(at, value) in self.plateau.draw_order.edits(&plan) {
                         self.ui_state.framework_textures.draw(
                             painter,
@@ -859,7 +948,7 @@ impl Editor {
                             Color32::from_white_alpha(210),
                         );
                     }
-                } else if !self.flat_view {
+                } else if !self.flat_view && !replaces_terrain {
                     // Filled water and restored ground are part of the ghost too.
                     let stamped: BTreeSet<_> =
                         plan.cliffs.iter().map(|s| (s.tile, s.origin)).collect();
@@ -952,7 +1041,7 @@ impl Editor {
                 for (&at, v) in &plan.edits {
                     outline(painter, at, v.level);
                 }
-                if !self.flat_view && !self.framework {
+                if !self.flat_view && !self.framework && !replaces_terrain {
                     let mut stamps: Vec<_> = plan.cliffs.iter().collect();
                     stamps.sort_by_key(|s| {
                         (u32::from(s.origin[0]) + u32::from(s.origin[1]), s.origin[0])
@@ -1105,7 +1194,7 @@ impl Editor {
                         })
                         .unwrap_or_else(|| {
                             if g.cut.is_some() {
-                                tr!("削至 {arg0} 层 · {arg1} 格修改 · 点击第二点提交，Esc 取消", arg0 = self.cliff_cut.target.unwrap_or(plan.base), arg1 = plan.edits.len())
+                                tr!("削至 {arg0} 层 · {arg1} 格修改 · 点击第二点提交，Esc 取消", arg0 = self.cliff_cut.height(plan.base), arg1 = plan.edits.len())
                             } else if g.mode == TerrainMode::CliffPolyline {
                                 format!("{heights} · {}", tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。"))
                             } else if g.mode == TerrainMode::WaterPolyline {
@@ -1130,10 +1219,10 @@ impl Editor {
             None => {
                 let g = self.plateau.gesture.as_ref().unwrap();
                 match g.mode {
-                    _ if g.cut.is_some() => {}
+                    // The cut tools draw their own guide on the original terrain below.
+                    TerrainMode::PlateauCut => {}
                     TerrainMode::Plateau
                     | TerrainMode::CliffHeightRepair
-                    | TerrainMode::PlateauCut
                     | TerrainMode::Water
                     | TerrainMode::LandFill
                     | TerrainMode::CoastalCliff => {
@@ -1262,27 +1351,74 @@ impl Editor {
                 );
             }
         }
-        if let Some(g) = self.plateau.gesture.as_ref().filter(|g| g.cut.is_some()) {
-            let start = cell_center(g.start, g.base + 4);
-            let end = cell_center(at, g.base + 4);
-            let guide = egui::Stroke::new(2., guide_color);
+        if let Some(rectangle_start) =
+            self.plateau.gesture.as_ref().and_then(|g| {
+                (g.mode == TerrainMode::PlateauCut && g.cut.is_none()).then_some(g.start)
+            })
+        {
+            // The cut result is projected at its new heights. Keep the drag
+            // rectangle on the unchanged surface so its corners track the mouse.
+            let [min_x, min_y] = [rectangle_start[0].min(at[0]), rectangle_start[1].min(at[1])];
+            let [max_x, max_y] = [rectangle_start[0].max(at[0]), rectangle_start[1].max(at[1])];
+            let stroke = egui::Stroke::new(2., Color32::YELLOW);
+            let surface_level = |cell| terrain_tools::value(doc, scene, cell).level;
+            let edge = |cell, a: usize, b: usize| {
+                if let Some((_, points)) = cell_points(cell, surface_level(cell)) {
+                    painter.line_segment([points[a], points[b]], stroke);
+                }
+            };
+            // Diamond vertices are ordered top, right, bottom, left.
+            for x in min_x..=max_x {
+                edge([x, min_y], 0, 1);
+                edge([x, max_y], 2, 3);
+            }
+            for y in min_y..=max_y {
+                edge([min_x, y], 3, 0);
+                edge([max_x, y], 1, 2);
+            }
+            for cell in [rectangle_start, at] {
+                let center = cell_center(cell, surface_level(cell));
+                painter.circle_filled(center, 3., stroke.color);
+            }
+        }
+        if let Some(g) = self.plateau.gesture.as_ref()
+            && let Some(draft) = &g.cut
+        {
+            let level = draft.base().map_or(g.base, |base| base + 4);
+            let start = cell_center(g.start, level);
+            let end = cell_center(at, level);
+            let guide = egui::Stroke::new(1.25, guide_color);
+            let projection = egui::Stroke::new(1., guide_color.gamma_multiply(0.55));
             for (cell, point) in [(g.start, start), (at, end)] {
                 let surface = cell_center(cell, terrain_tools::value(doc, scene, cell).level);
                 painter.circle_filled(surface, 3., guide_color);
                 if surface != point {
-                    painter.extend(egui::Shape::dashed_line(&[surface, point], guide, 4., 4.));
+                    painter.extend(egui::Shape::dashed_line(
+                        &[surface, point],
+                        projection,
+                        3.,
+                        3.,
+                    ));
                 }
             }
             let direction = end - start;
-            if direction.length() > 0. {
-                painter.arrow(start, direction, guide);
-                let right = egui::vec2(-direction.y, direction.x).normalized();
-                let cut_direction = if self.cliff_cut.side == CutSide::Left {
+            let length = direction.length();
+            if length > 0. {
+                painter.line_segment([start, end], guide);
+                let along = direction / length;
+                let right = egui::vec2(-along.y, along.x);
+                let cut_normal = if self.cliff_cut.side == CutSide::Left {
                     -right
                 } else {
                     right
                 };
-                painter.arrow(start.lerp(end, 0.5), cut_direction * 20., guide);
+                let midpoint = start.lerp(end, 0.5);
+                let tick = cut_normal * (length / 3.).min(6.);
+                let offsets: &[f32] = if length >= 24. { &[-9., 0., 9.] } else { &[0.] };
+                for &offset in offsets {
+                    let mark = midpoint + along * offset;
+                    painter.line_segment([mark, mark + tick], guide);
+                }
             }
         }
     }
@@ -1316,7 +1452,7 @@ impl Editor {
                 .gesture
                 .as_ref()
                 .and_then(|g| g.cut.as_ref())
-                .map(|draft| draft.selection.base());
+                .and_then(CutDraft::base);
             let mut manual = self.cliff_cut.target.is_some();
             if ui.checkbox(&mut manual, tr!("指定削切高度")).changed() {
                 self.cliff_cut.target = manual.then_some(base.unwrap_or(0));
@@ -1334,7 +1470,7 @@ impl Editor {
                 ui.small(tr!("默认削至崖脚"));
             }
             ui.small(tr!(
-                "先点悬崖或高台顶面，再点第二点确定切线。左右以第一点看向第二点为准。"
+                "先点悬崖下方的低地，再移动鼠标让切线穿过悬崖。左右以第一点看向第二点为准。"
             ));
             ui.small(tr!(
                 "到崖脚时重建崖壁，中间高度用坡面衔接。Esc 或右键取消。"
@@ -1553,6 +1689,7 @@ impl Editor {
             }
             TerrainMode::PlateauCut => {
                 ui.small(tr!("拖到对角格：切除所选高台，修补剩余边界；可整块删除。"));
+                ui.small(tr!("黄色框线显示拖选范围，绿色预览显示切除后的地形。"));
             }
             TerrainMode::CliffFront | TerrainMode::CliffBack => {
                 ui.small(tr!(

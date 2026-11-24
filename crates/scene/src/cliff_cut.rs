@@ -8,7 +8,10 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use ra2_map_document::document::{Cell, MapDocument, TerrainValue};
-use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
+};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -40,10 +43,39 @@ pub struct CliffCut {
 }
 
 impl CliffCut {
+    /// Find the first wall crossed by the segment between the two cell centers.
+    pub fn first_wall(doc: &MapDocument, scene: &MapScene, start: Cell, end: Cell) -> Result<Cell> {
+        doc.check_cell(start)?;
+        doc.check_cell(end)?;
+        ensure!(start != end, "切线需要两个不同的点");
+        let [dx, dy] = [0, 1].map(|axis| i32::from(end[axis]) - i32::from(start[axis]));
+        let (mut next_x, mut next_y) = (1, 1);
+        let mut at = start;
+        loop {
+            if cliff(scene, value(doc, scene, at), at).is_some() && doc.check_cell(at).is_ok() {
+                return Ok(at);
+            }
+            if at == end {
+                anyhow::bail!("切线尚未穿过悬崖，请把第二点往高台方向移");
+            }
+            // Compare the boundary crossing times in half-cell units. At an
+            // exact corner only enter the diagonally adjacent cell.
+            let crossing = (next_x * dy.abs()).cmp(&(next_y * dx.abs()));
+            if crossing != Ordering::Greater {
+                at[0] = (i32::from(at[0]) + dx.signum()) as u16;
+                next_x += 2;
+            }
+            if crossing != Ordering::Less {
+                at[1] = (i32::from(at[1]) + dy.signum()) as u16;
+                next_y += 2;
+            }
+        }
+    }
+
     pub fn select(doc: &MapDocument, scene: &MapScene, start: Cell) -> Result<Self> {
         doc.check_cell(start)?;
         let picked = value(doc, scene, start);
-        let message = "第一点请点在已有悬崖或相连的高台顶面";
+        let message = "未找到可削切的连通高台";
         let base = cliff(scene, picked, start)
             .map(|(_, _, base)| base)
             .or_else(|| picked.level.checked_sub(4))
@@ -61,6 +93,10 @@ impl CliffCut {
         })
     }
 
+    pub fn contains_wall(&self, at: Cell) -> bool {
+        self.old_cliffs.contains(&at)
+    }
+
     pub fn base(&self) -> u8 {
         self.base
     }
@@ -73,8 +109,20 @@ impl CliffCut {
         side: CutSide,
         target: Option<u8>,
     ) -> Result<PlateauPlan> {
+        self.plan_line(doc, scene, [self.start, end], side, target)
+    }
+
+    pub fn plan_line(
+        &self,
+        doc: &MapDocument,
+        scene: &MapScene,
+        [start, end]: [Cell; 2],
+        side: CutSide,
+        target: Option<u8>,
+    ) -> Result<PlateauPlan> {
+        doc.check_cell(start)?;
         doc.check_cell(end)?;
-        ensure!(self.start != end, "切线需要两个不同的点");
+        ensure!(start != end, "切线需要两个不同的点");
         let base = self.base;
         let target = target.unwrap_or(base);
         ensure!(
@@ -85,7 +133,7 @@ impl CliffCut {
             .core
             .iter()
             .copied()
-            .filter(|&at| side.contains(self.start, end, at))
+            .filter(|&at| side.contains(start, end, at))
             .collect();
         ensure!(!removed.is_empty(), "切线选中一侧没有可削切的高地");
         ensure!(

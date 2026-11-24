@@ -1389,7 +1389,10 @@ fn audit_cliff_cut(install: &mut Install, theater: &str, out: &Path) -> Result<s
     )?
     .apply(&mut source)?;
     source.commit("plateau for cutting");
-    let cut = CliffCut::select(&source, &scene, [64, 54])?;
+    let line = [[64, 42], [64, 80]];
+    ensure!(CliffCut::first_wall(&source, &scene, line[0], [64, 45]).is_err());
+    let wall = CliffCut::first_wall(&source, &scene, line[0], line[1])?;
+    let cut = CliffCut::select(&source, &scene, wall)?;
     let mut cases = Vec::new();
     for (side, lower, keep) in [
         (CutSide::Left, [72, 64], [56, 64]),
@@ -1399,7 +1402,7 @@ fn audit_cliff_cut(install: &mut Install, theater: &str, out: &Path) -> Result<s
             let name = format!("cut-{side:?}-{height}");
             let mut doc = source.fork();
             let plan = cut
-                .plan(&doc, &scene, [64, 80], side, Some(height))
+                .plan_line(&doc, &scene, line, side, Some(height))
                 .with_context(|| name.clone())?;
             let lowered = plan.edits.get(&lower).context("cut floor missing")?;
             ensure!(

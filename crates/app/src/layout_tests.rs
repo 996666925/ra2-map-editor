@@ -30,6 +30,7 @@ pub(super) fn view() -> (MapView, PathBuf) {
         scene: None,
         gpu: None,
         target: None,
+        cut_preview: None,
         zoom: 1.,
         center: egui::Pos2::ZERO,
         fit: true,
@@ -849,6 +850,127 @@ fn cliff_polyline_canvas_clicks_preview_close_enter_and_cancel_use_one_transacti
 }
 
 #[test]
+fn plateau_cut_rectangle_canvas_tracks_the_original_surface() {
+    use ra2_map_scene::{cliff_authoring, cliff_tools, terrain_tools::TerrainMode};
+    use vera20k_core::map::terrain::iso_to_screen;
+
+    let (mut view, scene, root) = flat_authoring_view();
+    let doc = view.editor.doc.as_mut().unwrap();
+    cliff_authoring::reshape(
+        doc,
+        &scene,
+        cliff_tools::rectangle([26, 26], [49, 49]),
+        4,
+        false,
+    )
+    .unwrap()
+    .apply(doc)
+    .unwrap();
+    let before = doc.snapshot().bytes().unwrap();
+    let fixture = ra2_map_assets::test_support::Fixture::with_authoring();
+    // The default fixture uses a tiny TMP. Use a full diamond so the 3D
+    // terrain picker can hit the original cell centers.
+    let mut tmp: Vec<u8> = [1u32, 1, 60, 30, 20]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    tmp.resize(72, 0);
+    tmp.resize(72 + 900, 1);
+    std::fs::write(fixture.0.join("clear01.tem"), tmp).unwrap();
+    let mut install = fixture.install();
+    install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
+    let scene = ra2_map_scene::map::load_scene_bytes(
+        &mut install,
+        "plateau.map",
+        "test".into(),
+        before.clone(),
+        Instant::now(),
+    )
+    .unwrap();
+    view.editor.attach(&scene);
+    view.editor.activate_terrain_mode(TerrainMode::PlateauCut);
+    view.editor.flat_view = false;
+    view.scene = Some(scene.clone());
+    view.zoom = 0.75;
+    let ctx = egui::Context::default();
+    setup(&ctx);
+    let frame = |view: &mut MapView, events| {
+        crate::test_support::run_ui(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200., 800.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| view.canvas_inner(ui, None),
+        )
+    };
+    frame(&mut view, vec![]);
+    let rect = view.workbench.canvas_rect.unwrap();
+    let world = crate::camera::MapCamera {
+        center: view.center,
+        zoom: view.zoom,
+    }
+    .world_rect(rect);
+    let project = |[x, y]: [u16; 2], height| {
+        let (x, y) = iso_to_screen(x, y, height);
+        rect.min + (egui::pos2(x + 30., y + 15.) - world.min) * 0.75
+    };
+    let (start, end) = ([38, 34], [53, 53]);
+    let (start_pos, end_pos) = (project(start, 8), project(end, 4));
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    let marker_at = |output: &egui::FullOutput, pos: egui::Pos2| {
+        output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Circle(circle)
+                if circle.fill == egui::Color32::YELLOW && circle.center.distance(pos) < 0.01)
+        })
+    };
+    frame(&mut view, vec![egui::Event::PointerMoved(start_pos)]);
+    let press = frame(&mut view, vec![button(start_pos, true)]);
+    assert!(view.editor.stroking);
+    assert!(
+        marker_at(&press, start_pos),
+        "draw the anchor on the press frame"
+    );
+    let drag = frame(&mut view, vec![egui::Event::PointerMoved(end_pos)]);
+    assert!(marker_at(&drag, start_pos));
+    assert!(marker_at(&drag, end_pos));
+    assert!(!marker_at(&drag, project(start, 4)));
+    assert!(drag.shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::LineSegment { stroke, .. }
+            if stroke.color == egui::Color32::YELLOW)
+    }));
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    let plan = view.editor.plateau_preview_plan(&scene, end).unwrap();
+    let release = frame(&mut view, vec![button(end_pos, false)]);
+    assert!(!marker_at(&release, start_pos));
+    assert!(!view.editor.stroking);
+    let doc = view.editor.doc.as_ref().unwrap();
+    for (&at, &value) in &plan.edits {
+        assert_eq!(doc.terrain(at), Some(value), "{at:?}");
+    }
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn plateau_cut_canvas_right_click_cancels_before_second_click_commits() {
     use egui_kittest::kittest::Queryable as _;
     use ra2_map_scene::{cliff_authoring, cliff_tools, terrain_tools::TerrainMode};
@@ -886,7 +1008,7 @@ fn plateau_cut_canvas_right_click_cancels_before_second_click_commits() {
     drop(options);
     flat_frame(&mut view, &ctx, None, None, None);
 
-    let (start, end) = ([37, 32], [37, 46]);
+    let (start, end) = ([37, 20], [37, 46]);
     flat_frame(&mut view, &ctx, Some(start), Some(true), None);
     flat_frame(&mut view, &ctx, Some(start), Some(false), None);
     flat_frame(&mut view, &ctx, Some(end), None, None);

@@ -2,9 +2,12 @@
 use crate::map::MapScene;
 use anyhow::{Result, ensure};
 use ra2_map_assets::assets::{DecodedImage, Install};
-use ra2_map_document::document::MapDocument;
+use ra2_map_document::document::{Cell, MapDocument, TerrainValue};
 use ra2_map_voxel::native_z::{self, ZGradient};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 use vera20k_core::{
     assets::shp_file::ShpFile,
     map::lighting,
@@ -138,12 +141,22 @@ pub struct VisualScene {
     light: Option<Arc<lighting::CellLightGrid>>,
     pub(crate) profile: Option<ra2_map_document::lighting::Profile>,
     static_draws: usize,
+    terrain_draws: Arc<HashMap<Cell, u32>>,
+    terrain_end: u32,
     // Body and turret own separate pass ranges so other records can sort
     // between them without invalidating incremental reuse.
     records: HashMap<(u64, bool), CachedRecord>,
     pub dirty_chunks: usize,
     pub reused_surfaces: usize,
 }
+/// Replacement terrain for a live editing gesture, ordered by the original
+/// terrain draws so overlapping TMP pixels keep their depth tie order.
+pub struct TerrainPreview {
+    pub visual: VisualScene,
+    pub order: Vec<u32>,
+    pub replaced: Vec<u32>,
+}
+
 /// Terrain changes retain materials but rebuild heights, lighting and draws.
 pub(crate) enum SceneReuse<'a> {
     Records(&'a VisualScene),
@@ -218,8 +231,12 @@ impl VisualScene {
         let mut tiles = std::mem::take(&mut out.terrain_cache);
         if let Some(old) = previous.filter(|_| !terrain_changed) {
             out.draws.extend_from_slice(&old.draws[..old.static_draws]);
+            out.terrain_draws = old.terrain_draws.clone();
+            out.terrain_end = old.terrain_end;
         }
         if previous.is_none() || terrain_changed {
+            let terrain_draws = Arc::make_mut(&mut out.terrain_draws);
+            terrain_draws.reserve(scene.cells.len());
             for (cell_index, cell) in scene.cells.iter().enumerate() {
                 if cell_index % 256 == 0 {
                     crate::work::checkpoint(cancelled)?;
@@ -247,6 +264,7 @@ impl VisualScene {
                         }));
                         id
                     });
+                terrain_draws.insert([cell.rx, cell.ry], out.draws.len() as u32);
                 out.draws.push(Draw {
                     surface,
                     position: [
@@ -260,6 +278,9 @@ impl VisualScene {
                     owner: None,
                 });
             }
+        }
+        if previous.is_none() || terrain_changed {
+            out.terrain_end = out.draws.len() as u32;
         }
         let Ok(base) = &scene.source.edit_base else {
             out.index_from(previous);
@@ -890,6 +911,80 @@ impl VisualScene {
         }
         self.bounds = bounds.is_finite().then_some(bounds);
     }
+    pub fn terrain_preview(
+        &self,
+        palette: &ra2_map_assets::catalog::TerrainPalette,
+        edits: &BTreeMap<Cell, TerrainValue>,
+    ) -> Option<TerrainPreview> {
+        use vera20k_core::map::{terrain::iso_to_screen, theater::TileKey};
+        let mut visual = Self::default();
+        let mut entries: Vec<_> = edits
+            .iter()
+            .map(|(&at, value)| (self.terrain_draws.get(&at).copied(), at, value))
+            .collect();
+        entries.sort_unstable_by_key(|&(index, at, _)| (index.unwrap_or(self.terrain_end), at));
+        let mut order = Vec::with_capacity(entries.len());
+        let mut replaced = Vec::with_capacity(entries.len());
+        for (original, [x, y], value) in entries {
+            let key = TileKey {
+                tile_id: *palette.raw_ids.get(&value.tile)?,
+                sub_tile: value.sub,
+                variant: 0,
+            };
+            let image = palette.images.get(&key)?;
+            let depth = palette.depths.get(&key)?;
+            let surface = *visual
+                .terrain_cache
+                .entry((
+                    key,
+                    if palette.framework_height_tile(key) {
+                        value.level
+                    } else {
+                        0
+                    },
+                ))
+                .or_insert_with(|| {
+                    let id = visual.surfaces.len();
+                    visual.surfaces.push(Arc::new(Surface {
+                        size: [image.info.width, image.info.height],
+                        rgba: image.rgba.clone(),
+                        original: Vec::new(),
+                        framework: palette
+                            .framework_rgba(key, value.level)
+                            .map_or_else(Vec::new, |rgba| rgba.into_owned()),
+                        depth: depth.iter().map(|&z| 32768 + u16::from(z)).collect(),
+                        blend: 0,
+                    }));
+                    id
+                });
+            if let Some(id) = original {
+                replaced.push(id);
+            }
+            order.push(original.unwrap_or(self.terrain_end));
+            let (sx, sy) = iso_to_screen(x, y, value.level);
+            visual.draws.push(Draw {
+                surface,
+                position: [
+                    sx + image.info.offset[0] as f32,
+                    sy + image.info.offset[1] as f32,
+                ],
+                base: -(i32::from(x) + i32::from(y)) * 15 - 30,
+                tint: self
+                    .light
+                    .as_ref()
+                    .map_or([1.; 3], |light| light.terrain_tile_tint_at((x, y))),
+                layer: 0,
+                writes: true,
+                owner: None,
+            });
+        }
+        Some(TerrainPreview {
+            visual,
+            order,
+            replaced,
+        })
+    }
+
     pub fn sample(&self, point: egui::Pos2, options: ViewOptions) -> ([u8; 4], Option<u64>) {
         let mut color = [11, 15, 20, 255];
         let mut depth = 65535;
