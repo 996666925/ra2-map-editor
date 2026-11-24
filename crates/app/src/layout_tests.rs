@@ -2085,7 +2085,7 @@ fn map_settings_tabs_stay_inside_the_viewport_without_document_writes() {
                 .with_context_setup(setup)
                 .with_accessibility_check(false)
                 .with_size([1280., 800.])
-                .build_ui(|ui| settings.show(ui.ctx(), &mut editor, &scene));
+                .build_ui(|ui| settings.show(ui.ctx(), &mut editor, &scene, false));
             for size in [[1280., 800.], [900., 600.]] {
                 harness.set_size(size.into());
                 harness.run();

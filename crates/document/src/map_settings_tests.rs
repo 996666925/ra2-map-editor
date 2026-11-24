@@ -176,6 +176,18 @@ fn expansion_migrates_objects_packs_tags_nodes_tubes_and_script_cells_as_one_his
         &[Node::new("GAPOWR", [24, 40]).unwrap()],
     )
     .unwrap();
+    let selected = [crate::production_settings::Restriction::Buildings]
+        .into_iter()
+        .collect();
+    let inventory = [("GAPOWR".into(), selected)].into_iter().collect();
+    crate::production_settings::apply(
+        &mut doc,
+        &[crate::production_settings::Restriction::Buildings]
+            .into_iter()
+            .collect(),
+        Some(&inventory),
+    )
+    .unwrap();
     let object = doc
         .add_record("Structures", [24, 40], "Americans", "GAPOWR")
         .unwrap();
@@ -229,6 +241,10 @@ fn expansion_migrates_objects_packs_tags_nodes_tubes_and_script_cells_as_one_his
         crate::base_nodes::read(&doc, "Americans").unwrap()[0].cell,
         [27, 43]
     );
+    assert_eq!(doc.ini_text("Americans", "NodeCount"), "0");
+    let mut restored = doc.fork();
+    crate::production_settings::apply(&mut restored, &Default::default(), None).unwrap();
+    assert_eq!(restored.ini_text("Americans", "000"), "GAPOWR,27,43");
     assert!(
         doc.records()
             .values()

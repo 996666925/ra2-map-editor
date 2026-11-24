@@ -307,65 +307,32 @@ impl MapView {
         ui.menu_button(tr!("设置"), |ui| {
             crate::i18n::language_menu(ui);
             ui.separator();
-            if ui
-                .add_enabled(
-                    self.editor.doc.is_some()
-                        && !self.loading
-                        && !self.editor.stroking
-                        && !self.workbench.mission.has_draft()
-                        && !self.workbench.map_settings.open,
-                    egui::Button::new(tr!("地图信息…")),
-                )
-                .clicked()
-            {
-                if self.editor.check_property_draft() {
-                    self.workbench.mission.open = false;
-                    self.workbench.mission_script.open = false;
-                    self.workbench.mission.campaign.open = false;
-                    self.workbench.map_settings.tab = 3;
-                    self.workbench.map_settings.open = true;
+            for (label, tab) in [
+                (tr!("地图信息…"), 3),
+                (tr!("地图尺寸与光照…"), 0),
+                (tr!("箱子设置…"), 2),
+                (tr!("生产限制…"), 4),
+            ] {
+                if ui
+                    .add_enabled(
+                        self.editor.doc.is_some()
+                            && !self.loading
+                            && !self.editor.stroking
+                            && !self.workbench.mission.has_draft()
+                            && !self.workbench.map_settings.open,
+                        egui::Button::new(label),
+                    )
+                    .clicked()
+                {
+                    if self.editor.check_property_draft() {
+                        self.workbench.mission.open = false;
+                        self.workbench.mission_script.open = false;
+                        self.workbench.mission.campaign.open = false;
+                        self.workbench.map_settings.tab = tab;
+                        self.workbench.map_settings.open = true;
+                    }
+                    ui.close();
                 }
-                ui.close();
-            }
-            if ui
-                .add_enabled(
-                    self.editor.doc.is_some()
-                        && !self.loading
-                        && !self.editor.stroking
-                        && !self.workbench.mission.has_draft()
-                        && !self.workbench.map_settings.open,
-                    egui::Button::new(tr!("地图尺寸与光照…")),
-                )
-                .clicked()
-            {
-                if self.editor.check_property_draft() {
-                    self.workbench.mission.open = false;
-                    self.workbench.mission_script.open = false;
-                    self.workbench.mission.campaign.open = false;
-                    self.workbench.map_settings.tab = 0;
-                    self.workbench.map_settings.open = true;
-                }
-                ui.close();
-            }
-            if ui
-                .add_enabled(
-                    self.editor.doc.is_some()
-                        && !self.loading
-                        && !self.editor.stroking
-                        && !self.workbench.mission.has_draft()
-                        && !self.workbench.map_settings.open,
-                    egui::Button::new(tr!("箱子设置…")),
-                )
-                .clicked()
-            {
-                if self.editor.check_property_draft() {
-                    self.workbench.mission.open = false;
-                    self.workbench.mission_script.open = false;
-                    self.workbench.mission.campaign.open = false;
-                    self.workbench.map_settings.tab = 2;
-                    self.workbench.map_settings.open = true;
-                }
-                ui.close();
             }
             if ui.button(tr!("游戏资源与地图来源…")).clicked() {
                 self.show_project_settings();
@@ -960,9 +927,10 @@ impl MapView {
         self.random_map_window(ctx, directory);
         if let Some(scene) = &self.scene {
             self.editor.finish_property_edit(ctx, scene);
+            let scene_pending = self.loading || self.editor.refresh || self.error.is_some();
             self.workbench
                 .map_settings
-                .show(ctx, &mut self.editor, scene);
+                .show(ctx, &mut self.editor, scene, scene_pending);
         }
         if self.pending.is_none()
             && !self.workbench.new_map

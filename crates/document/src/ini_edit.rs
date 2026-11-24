@@ -58,7 +58,7 @@ impl MapDocument {
         }
         entries
     }
-    fn physical_ini_entries(&self, section: &str) -> Vec<(Target, String, Vec<u8>)> {
+    pub(crate) fn physical_ini_entries(&self, section: &str) -> Vec<(Target, String, Vec<u8>)> {
         let mut out = Vec::new();
         for (line, row) in self.base.raw.entries(section) {
             let target = Target::IniLine(line);

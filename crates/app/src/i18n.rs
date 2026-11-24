@@ -314,6 +314,9 @@ mod tests {
             for field in ra2_map_document::map_information::FIELDS {
                 require(field.label);
             }
+            for restriction in ra2_map_document::production_settings::Restriction::ALL {
+                require(restriction.label());
+            }
             for group in ra2_map_document::map_information::Group::ALL {
                 require(group.label());
             }

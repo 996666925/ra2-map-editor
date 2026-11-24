@@ -602,7 +602,11 @@ pub fn diagnostics(doc: &MapDocument, external: Option<&ExternalDefinitions>) ->
                 for (_, key, _) in doc.ini_entries(&house) {
                     if let Ok(n) = key.parse::<usize>()
                         && key == format!("{n:03}")
-                        && n >= nodes.len()
+                        && n >= doc
+                            .ini_text(&house, "NodeCount")
+                            .trim()
+                            .parse::<usize>()
+                            .unwrap_or(0)
                     {
                         add(
                             Kind::House,

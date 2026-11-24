@@ -718,6 +718,13 @@ pub fn delete(doc: &mut MapDocument, kind: Kind, id: &str) -> Result<()> {
             for (target, _, _) in doc.ini_entries(id) {
                 doc.set(target, None)?;
             }
+            if kind == Kind::House {
+                for (target, key, _) in doc.physical_ini_entries(crate::base_nodes::SUPPRESSED) {
+                    if key.rsplit_once(',').is_some_and(|(owner, _)| owner == id) {
+                        doc.set(target, None)?;
+                    }
+                }
+            }
         } else {
             ensure!(kind != Kind::Basic, "不能删除任务设置");
             for section in if kind == Kind::Trigger {

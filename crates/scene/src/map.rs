@@ -371,18 +371,48 @@ pub fn load_scene_bytes_controlled(
     }
     crate::work::checkpoint(cancelled)?;
     let mut catalog = install.catalog.with_map(source.bytes());
+    let basic = map.ini.section_or_empty("Basic");
+    let multiplayer = basic.read_bool("MultiplayerOnly", false);
+    let extension = Path::new(&source.name)
+        .extension()
+        .and_then(|ext| ext.to_str());
+    // Loose .yrm files are admitted by extension. Loose .mpr files default
+    // MultiplayerOnly to true in the chooser when the field is absent.
+    let multiplayer_modes = multiplayer
+        || extension.is_some_and(|ext| ext.eq_ignore_ascii_case("yrm"))
+        || (basic.read_bool("MultiplayerOnly", true)
+            && (extension.is_some_and(|ext| ext.eq_ignore_ascii_case("mpr"))
+                || basic.read_name("GameMode", 256).is_some()));
     match ra2_map_assets::mission_resources::scenario_registries_with_art(
         &install.manager,
         &map.ini,
-        map.ini
-            .section_or_empty("Basic")
-            .read_bool("MultiplayerOnly", false),
+        multiplayer,
         None,
         None,
     ) {
-        Ok(registries) => {
+        Ok(mut registries) => {
             let catalog = Arc::make_mut(&mut catalog);
             catalog.radar = registries.radar;
+            let production = if multiplayer_modes {
+                ra2_map_assets::mission_resources::include_multiplayer_production_types(
+                    &install.manager,
+                    &map.ini,
+                    Arc::make_mut(&mut registries.production_inventory),
+                )
+            } else {
+                Ok(())
+            };
+            catalog.production_inventory = match production {
+                Ok(()) => Some(registries.production_inventory),
+                Err(error) => {
+                    diagnostics.push(Diagnostic {
+                        code: "PRODUCTION_REGISTRY",
+                        message: format!("无法读取多人模式的生产类型：{error}"),
+                        cell: None,
+                    });
+                    None
+                }
+            };
             catalog.infantry_appearances = registries.infantry_appearances;
             catalog.shp_vehicle_turrets = registries.shp_vehicle_turrets;
             catalog.shp_vehicle_body_frames = registries.shp_vehicle_body_frames;
@@ -395,6 +425,7 @@ pub fn load_scene_bytes_controlled(
         }
         Err(error) => {
             let catalog = Arc::make_mut(&mut catalog);
+            catalog.production_inventory = None;
             catalog.infantry_appearances.clear();
             catalog.shp_vehicle_turrets.clear();
             catalog.shp_vehicle_body_frames.clear();

@@ -4021,6 +4021,7 @@ dependencies = [
  "anyhow",
  "egui",
  "log",
+ "ra2-map-document",
  "ra2-map-voxel",
  "serde",
  "serde_json",

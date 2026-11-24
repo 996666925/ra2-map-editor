@@ -76,6 +76,7 @@ pub(super) fn panels() -> Vec<(String, Panel)> {
         ("map-lighting".into(), Panel::MapProperties(1)),
         ("map-crates".into(), Panel::MapProperties(2)),
         ("map-info".into(), Panel::MapProperties(3)),
+        ("map-production".into(), Panel::MapProperties(4)),
         ("base-nodes".into(), Panel::BaseNodes),
     ]);
     for kind in Kind::ALL {

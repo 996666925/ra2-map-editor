@@ -7,6 +7,7 @@ use ra2_map_document::{
     lighting::{COMPONENTS, Draft, Profile},
     map_settings::{self, Footprints, Options, Plan},
     new_map::{MAX_MAP_DIMENSION, MAX_MAP_SPAN, MIN_MAP_DIMENSION},
+    production_settings::{self, Restriction, Restrictions},
 };
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,8 @@ pub(crate) struct MapSettingsUi {
     original_crates: Option<ra2_map_document::crate_settings::Draft>,
     info: Option<ra2_map_document::map_information::Draft>,
     original_info: Option<ra2_map_document::map_information::Draft>,
+    production: Restrictions,
+    original_production: Restrictions,
     name: Option<String>,
     original_name: Option<String>,
     author: String,
@@ -63,6 +66,7 @@ impl MapSettingsUi {
             || self.light != self.original_light
             || self.crates != self.original_crates
             || self.info != self.original_info
+            || self.production != self.original_production
             || self.name != self.original_name
             || self.author != self.original_author
             || self.players != self.original_players
@@ -70,9 +74,7 @@ impl MapSettingsUi {
     pub fn allow_leave(&mut self) -> bool {
         if self.dirty() {
             self.open = true;
-            self.message =
-                tr!("请完成或取消地图信息、光照和箱子设置输入。尺寸修改可应用，或关闭窗口放弃。")
-                    .into();
+            self.message = tr!("请完成或取消地图设置中的修改。").into();
             false
         } else {
             true
@@ -88,6 +90,8 @@ impl MapSettingsUi {
         self.original_crates = self.crates.clone();
         self.info = Some(ra2_map_document::map_information::Draft::read(doc));
         self.original_info = self.info.clone();
+        self.production = production_settings::read(doc);
+        self.original_production = self.production.clone();
         self.name = Some(doc.ini_text("Basic", "Name"));
         self.original_name = self.name.clone();
         self.author = doc.ini_text("Basic", "Author");
@@ -271,7 +275,13 @@ impl MapSettingsUi {
             Ok((doc.snapshot(), Profile::Normal))
         }
     }
-    pub fn show(&mut self, ctx: &egui::Context, editor: &mut Editor, scene: &MapScene) {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        scene: &MapScene,
+        scene_pending: bool,
+    ) {
         if !self.open {
             return;
         }
@@ -283,8 +293,10 @@ impl MapSettingsUi {
         {
             self.load(doc);
         }
+        let state_before = doc.state_id;
         self.finish_edits(ctx, editor, scene);
         let doc = editor.doc.as_ref().unwrap();
+        let scene_pending = scene_pending || doc.state_id != state_before;
         let light_before = self.light.clone();
         let crates_before = self.crates.clone();
         let name_before = self.name.clone();
@@ -294,6 +306,7 @@ impl MapSettingsUi {
         let old_tab = self.tab;
         let mut open = true;
         let mut apply_map = false;
+        let mut apply_production = false;
         let mut discard = false;
         let mut changed = false;
         let mut undo = false;
@@ -305,8 +318,9 @@ impl MapSettingsUi {
                     changed|=ui.selectable_value(&mut self.tab,0,tr!("尺寸与可玩区域")).changed();
                     changed|=ui.selectable_value(&mut self.tab,1,tr!("光照")).changed();
                     changed|=ui.selectable_value(&mut self.tab,2,tr!("箱子设置")).changed();
+                    changed|=ui.selectable_value(&mut self.tab,4,tr!("生产限制")).changed();
                 });
-                if self.dirty(){ui.colored_label(egui::Color32::YELLOW,match self.tab{1=>tr!("光照输入待完成"),2=>tr!("箱子设置输入待完成"),3=>tr!("地图信息输入待完成"),_=>tr!("有未应用尺寸设置")});}
+                if self.dirty(){ui.colored_label(egui::Color32::YELLOW,match self.tab{1=>tr!("光照输入待完成"),2=>tr!("箱子设置输入待完成"),3=>tr!("地图信息输入待完成"),4=>tr!("有未应用的生产限制"),_=>tr!("有未应用尺寸设置")});}
             });
             egui::ScrollArea::vertical().max_height((ui.available_height()-100.).max(140.)).show(ui,|ui|{
                 if self.tab==0 {
@@ -413,6 +427,11 @@ impl MapSettingsUi {
                 }else if self.tab==3{
                     crate::map_information_ui::show(ui,self.info.as_mut().unwrap(),self.original_info.as_ref().unwrap(),doc,scene,
                         crate::map_information_ui::IdentityFields { name:self.name.as_mut().unwrap(),author:&mut self.author,players:&mut self.players });
+                }else if self.tab==4 {
+                    apply_production = production_fields(
+                        ui, &mut self.production, &self.original_production, doc,
+                        scene.catalog.production_inventory.as_deref(), editor.stroking || scene_pending,
+                    );
                 }else{
                     crate_fields(ui,self.crates.as_mut().unwrap());
                 }
@@ -455,6 +474,9 @@ impl MapSettingsUi {
         {
             self.info_editing = true;
         }
+        if apply_production {
+            self.apply_production(editor, scene);
+        }
         self.finish_edits(ctx, editor, scene);
         if !open {
             if self.tab == 0 {
@@ -486,6 +508,28 @@ impl MapSettingsUi {
                 self.due = None;
             } else {
                 ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+    }
+
+    fn apply_production(&mut self, editor: &mut Editor, scene: &MapScene) {
+        let doc = editor.doc.as_mut().unwrap();
+        if self.identity != Some((doc.id, doc.state_id)) {
+            self.message = tr!("文档已变化，请取消本次输入后重新编辑").into();
+            return;
+        }
+        match production_settings::apply(
+            doc,
+            &self.production,
+            scene.catalog.production_inventory.as_deref(),
+        ) {
+            Ok(count) => {
+                editor.commit(scene, "生产限制");
+                self.load(editor.doc.as_ref().unwrap());
+                self.message = tr!("已应用生产限制，涉及 {count} 种类型。", count = count);
+            }
+            Err(error) => {
+                self.message = tr!("尚未生效：{error}", error = format!("{error:#}"));
             }
         }
     }
@@ -602,6 +646,63 @@ fn crate_fields(ui: &mut egui::Ui, draft: &mut ra2_map_document::crate_settings:
     }
 }
 
+fn production_fields(
+    ui: &mut egui::Ui,
+    selected: &mut Restrictions,
+    original: &Restrictions,
+    doc: &ra2_map_document::document::MapDocument,
+    inventory: Option<&production_settings::Inventory>,
+    blocked: bool,
+) -> bool {
+    ui.label(tr!(
+        "选择当前地图禁止生产的类型。应用后可撤销，Ctrl+S 保存到地图文件。"
+    ));
+    ui.small(tr!("空军包含飞机和可飞行的步兵及载具。海军按 Naval 规则识别。预置对象和任务直接生成的对象仍可使用。"));
+    ui.add_space(8.);
+    let available = inventory.is_some_and(|types| !types.is_empty());
+    for restriction in Restriction::ALL {
+        let mut enabled = selected.contains(&restriction);
+        let mut row_changed = false;
+        ui.horizontal_wrapped(|ui| {
+            row_changed = ui
+                .add_enabled(
+                    available || enabled,
+                    egui::Checkbox::new(&mut enabled, crate::i18n::text(restriction.label())),
+                )
+                .changed();
+            if let Some(types) = inventory {
+                let count = types
+                    .values()
+                    .filter(|groups| groups.contains(&restriction))
+                    .count();
+                ui.weak(tr!("{count} 种类型", count = count));
+            }
+        });
+        if row_changed {
+            if enabled {
+                selected.insert(restriction);
+            } else {
+                selected.remove(&restriction);
+            }
+        }
+    }
+    if !available {
+        ui.small(tr!("当前游戏资源的生产类型不可用"));
+    }
+    let outdated = !blocked
+        && selected == original
+        && inventory.is_some_and(|types| production_settings::needs_apply(doc, selected, types));
+    if outdated {
+        ui.small(tr!("生产规则与当前类型清单不一致，请重新应用。"));
+    }
+    ui.add_space(8.);
+    ui.add_enabled(
+        !blocked && (selected != original || outdated) && (available || selected.is_empty()),
+        egui::Button::new(tr!("应用生产限制")),
+    )
+    .clicked()
+}
+
 pub(crate) fn footprints(scene: &MapScene, doc: &MapDocument) -> Footprints {
     doc.records()
         .values()
@@ -642,6 +743,96 @@ mod tests {
     use super::*;
 
     #[test]
+    fn production_settings_apply_and_undo_through_map_settings() {
+        use egui_kittest::kittest::Queryable as _;
+        let _language = crate::i18n::enter(crate::i18n::Language::Chinese);
+        let (mut editor, _, root) = crate::editing::tests::editor();
+        let mut scene = crate::editing::tests::terrain_scene();
+        std::sync::Arc::make_mut(&mut scene.catalog).production_inventory =
+            Some(std::sync::Arc::new(
+                [
+                    ("ORCA".into(), [Restriction::Air].into_iter().collect()),
+                    ("DEST".into(), [Restriction::Naval].into_iter().collect()),
+                ]
+                .into_iter()
+                .collect(),
+            ));
+        editor.attach(&scene);
+        let form = MapSettingsUi {
+            open: true,
+            tab: 4,
+            ..Default::default()
+        };
+        let scene = std::cell::RefCell::new(scene);
+        let loading = std::cell::Cell::new(false);
+        let mut harness = egui_kittest::Harness::<(MapSettingsUi, Editor)>::builder()
+            .with_context_setup(|ctx| {
+                crate::ui_theme::install(ctx);
+                ctx.add_font_provider(std::sync::Arc::new(
+                    egui_system_font_provider::SystemFontProvider::new(),
+                ));
+            })
+            .with_size([1000., 850.])
+            .build_ui_state(
+                |ui, (form, editor)| form.show(ui.ctx(), editor, &scene.borrow(), loading.get()),
+                (form, editor),
+            );
+        harness.get_by_label("禁止生产空军").click();
+        harness.run();
+        harness.get_by_label("禁止生产海军").click();
+        harness.run();
+        assert!(harness.state().0.dirty());
+        let doc = harness.state().1.doc.as_ref().unwrap();
+        assert!(production_settings::read(doc).is_empty());
+        harness.get_by_label("应用生产限制").click();
+        harness.run();
+        assert!(!harness.state().0.dirty());
+        let doc = harness.state().1.doc.as_ref().unwrap();
+        assert_eq!(doc.ini_text("ORCA", "TechLevel"), "-1");
+        assert_eq!(doc.ini_text("DEST", "BuildLimit"), "0");
+
+        let mut updated = scene.borrow_mut();
+        let catalog = std::sync::Arc::make_mut(&mut updated.catalog);
+        let types = std::sync::Arc::make_mut(catalog.production_inventory.as_mut().unwrap());
+        types.remove("ORCA");
+        types.insert("MODEJET".into(), [Restriction::Air].into_iter().collect());
+        drop(updated);
+        loading.set(true);
+        harness.run();
+        assert!(
+            harness
+                .query_by_label("生产规则与当前类型清单不一致，请重新应用。")
+                .is_none()
+        );
+        loading.set(false);
+        harness.run();
+        assert!(
+            harness
+                .query_by_label("生产规则与当前类型清单不一致，请重新应用。")
+                .is_some()
+        );
+        assert!(!harness.state().0.dirty());
+        harness.get_by_label("应用生产限制").click();
+        harness.run();
+        let doc = harness.state().1.doc.as_ref().unwrap();
+        assert!(doc.ini_value("ORCA", "TechLevel").is_none());
+        assert_eq!(doc.ini_text("MODEJET", "BuildLimit"), "0");
+        harness.get_by_label("撤销").click();
+        harness.run();
+        let doc = harness.state().1.doc.as_ref().unwrap();
+        assert_eq!(doc.ini_text("ORCA", "TechLevel"), "-1");
+        assert!(doc.ini_value("MODEJET", "BuildLimit").is_none());
+        harness.get_by_label("撤销").click();
+        harness.run();
+        let doc = harness.state().1.doc.as_ref().unwrap();
+        assert!(production_settings::read(doc).is_empty());
+        assert!(doc.ini_value("ORCA", "TechLevel").is_none());
+        assert!(doc.ini_value("DEST", "BuildLimit").is_none());
+        drop(harness);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn playable_area_margins_round_trip_to_native_local_size() {
         let local = [2, 4, 76, 70];
         assert_eq!(local_margins([80, 80], local), [2, 4, 2, 6]);
@@ -676,7 +867,10 @@ mod tests {
                     ));
                 })
                 .with_size([1000., 850.])
-                .build_ui_state(|ui, form| form.show(ui.ctx(), &mut editor, &scene), form);
+                .build_ui_state(
+                    |ui, form| form.show(ui.ctx(), &mut editor, &scene, false),
+                    form,
+                );
             for size in [[1000., 850.], [750., 600.], [600., 480.], [1000., 850.]] {
                 harness.set_size(size.into());
                 harness.run();
@@ -725,7 +919,7 @@ mod tests {
             })
             .with_size([1000., 850.])
             .build_ui_state(
-                |ui, (form, editor)| form.show(ui.ctx(), editor, &scene),
+                |ui, (form, editor)| form.show(ui.ctx(), editor, &scene, false),
                 (form, editor),
             );
         let role = egui::accesskit::Role::SpinButton;
@@ -876,7 +1070,7 @@ mod tests {
             })
             .with_size([1000., 1000.])
             .build_ui_state(
-                |ui, (form, editor)| form.show(ui.ctx(), editor, &scene),
+                |ui, (form, editor)| form.show(ui.ctx(), editor, &scene, false),
                 (form, editor),
             );
         harness.get_by_label("自定义模式…").scroll_to_me();
@@ -973,7 +1167,7 @@ mod tests {
         let after = editor.doc.as_ref().unwrap().snapshot().bytes().unwrap();
         editor.history(false, &scene);
         crate::test_support::run_ui(&ctx, Default::default(), |ui| {
-            form.show(ui.ctx(), &mut editor, &scene)
+            form.show(ui.ctx(), &mut editor, &scene, false)
         });
         assert_eq!(
             editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
@@ -985,7 +1179,7 @@ mod tests {
         );
         editor.history(true, &scene);
         crate::test_support::run_ui(&ctx, Default::default(), |ui| {
-            form.show(ui.ctx(), &mut editor, &scene)
+            form.show(ui.ctx(), &mut editor, &scene, false)
         });
         assert_eq!(
             editor.doc.as_ref().unwrap().snapshot().bytes().unwrap(),
@@ -1017,7 +1211,7 @@ mod tests {
             .with_size([1000., 850.])
             .build_ui_state(
                 |ui, (form, editor): &mut (MapSettingsUi, Editor)| {
-                    form.show(ui.ctx(), editor, &scene);
+                    form.show(ui.ctx(), editor, &scene, false);
                     if crate::form_edit::take_save_shortcut(ui.ctx()).is_some() {
                         form.finish_for_save(ui.ctx(), editor, &scene);
                     }
@@ -1120,7 +1314,7 @@ mod tests {
             .with_size([1000., 850.])
             .build_ui_state(
                 |ui, (form, editor)| {
-                    form.show(ui.ctx(), editor, &scene);
+                    form.show(ui.ctx(), editor, &scene, false);
                     if crate::form_edit::take_save_shortcut(ui.ctx()).is_some() {
                         form.finish_for_save(ui.ctx(), editor, &scene);
                     }
@@ -1334,7 +1528,7 @@ mod tests {
             })
             .with_size([1000., 850.])
             .build_ui_state(
-                |ui, (form, editor)| form.show(ui.ctx(), editor, &scene),
+                |ui, (form, editor)| form.show(ui.ctx(), editor, &scene, false),
                 (form, editor),
             );
         harness

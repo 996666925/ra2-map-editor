@@ -107,6 +107,7 @@ pub struct Catalog {
         BTreeMap<(&'static str, String), crate::mission_resources::TheaterShpAppearance>,
     pub water_images: BTreeMap<String, crate::mission_resources::WaterAppearance>,
     pub rules: IniFile,
+    pub production_inventory: Option<Arc<ra2_map_document::production_settings::Inventory>>,
     /// Active installation language table; shared by map-local catalog clones.
     strings: Option<Arc<CsfFile>>,
     /// Simplified display text cached on resource load, keyed by unchanged IDs.
@@ -138,6 +139,7 @@ impl Default for Catalog {
             alternate_theater_shps: BTreeMap::new(),
             water_images: BTreeMap::new(),
             rules: IniFile::empty(),
+            production_inventory: None,
             strings: None,
             object_names: BTreeMap::new(),
             art: Arc::new(vera20k_core::rules::art_data::ArtRegistry::from_ini(

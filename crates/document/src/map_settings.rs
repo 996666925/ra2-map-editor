@@ -259,6 +259,7 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
             "Actions",
             "ScriptTypes",
             "Houses",
+            crate::base_nodes::SUPPRESSED,
         ]
         .into_iter()
         .chain(
@@ -496,18 +497,10 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
                     );
                 }
             }
-            for i in 0..nodes.len() {
-                patch.set(&house, &format!("{i:03}"), None)?;
-            }
-            for (i, node) in retained.iter().enumerate() {
-                patch.set(&house, &format!("{i:03}"), Some(node.raw.clone()))?;
-            }
-            if !nodes.is_empty() {
-                patch.set(
-                    &house,
-                    "NodeCount",
-                    Some(retained.len().to_string().into_bytes()),
-                )?;
+            for (section, key, value) in
+                crate::base_nodes::plan_updates(&scratch, &house, &retained)?
+            {
+                patch.set(&section, &key, value)?;
             }
         }
         let mut retained_tubes = BTreeSet::new();

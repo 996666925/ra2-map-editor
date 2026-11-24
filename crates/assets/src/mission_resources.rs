@@ -137,6 +137,7 @@ pub struct TheaterShpAppearance {
 /// Registries and appearance data from the same cold/reset Rules owner as game
 /// loading, including LANG, map passes and implicit identities.
 pub struct NativeRegistries {
+    pub production_inventory: std::sync::Arc<ra2_map_document::production_settings::Inventory>,
     pub radar: std::sync::Arc<crate::radar::Palette>,
     pub infantry_appearances: BTreeMap<String, InfantryAppearance>,
     pub shp_vehicle_turrets:
@@ -190,6 +191,48 @@ pub fn rules_process_owner(
             .merge(&select_ini(manager, extra_art)?.ini);
     }
     sources.into_owner(Arc::new(sounds), Arc::new(eva))
+}
+
+/// A saved map carries one set of overrides. Include types that match in any
+/// selectable multiplayer mode so those overrides also work in that mode.
+pub fn include_multiplayer_production_types(
+    manager: &AssetManager,
+    map: &IniFile,
+    inventory: &mut ra2_map_document::production_settings::Inventory,
+) -> Result<(), String> {
+    use std::collections::BTreeSet;
+    use vera20k_core::{
+        map::skirmish_scenarios::{
+            SkirmishScenarioRecord, SkirmishScenarioSource, record_matches_mode,
+        },
+        rules::{process_owner::NativeScenarioRulesPrefix, retail_sources::select_mode_ini},
+        skirmish_modes::{SkirmishModeLoadError, skirmish_modes_from_assets},
+    };
+    let modes = match skirmish_modes_from_assets(manager) {
+        Ok(modes) => modes,
+        Err(SkirmishModeLoadError::MissingRoster { .. }) => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let record =
+        SkirmishScenarioRecord::concrete_from_ini(0, SkirmishScenarioSource::Synthetic, "", map);
+    let mut processed = BTreeSet::new();
+    for mode in modes
+        .iter()
+        .filter(|mode| record_matches_mode(&record, mode))
+    {
+        if !processed.insert(mode.override_file.to_ascii_lowercase()) {
+            continue;
+        }
+        let layer = select_mode_ini(manager, Some(&mode.override_file))?;
+        let mut owner = rules_process_owner(manager, None)?;
+        let loaded = owner
+            .load_scenario(NativeScenarioRulesPrefix::NonCampaign(layer.as_ref()), map)
+            .map_err(|error| format!("{}: {error}", mode.override_file))?;
+        for (id, groups) in ra2_map_document::production_settings::inventory(loaded.rules()) {
+            inventory.entry(id).or_default().extend(groups);
+        }
+    }
+    Ok(())
 }
 
 pub fn scenario_registries_with_art(
@@ -263,6 +306,7 @@ pub fn scenario_registries_with_art(
         &rules, manager, theater, extension,
     ));
     Ok(NativeRegistries {
+        production_inventory: Arc::new(ra2_map_document::production_settings::inventory(&rules)),
         radar,
         water_images: rules
             .all_objects()
@@ -468,6 +512,50 @@ mod tests {
                 ("other-filter".into(), "other-filter".into())
             ]
         );
+    }
+
+    #[test]
+    fn multiplayer_production_types_include_only_matching_mode_overlays() {
+        use ra2_map_document::production_settings::Restriction;
+        let fixture = crate::test_support::Fixture::new();
+        for (name, body) in [
+            (
+                "rulesmd.ini",
+                "[VehicleTypes]\n0=AMPHIB\n[AMPHIB]\nTechLevel=1\n",
+            ),
+            ("artmd.ini", "[Movies]\n"),
+            (
+                "mpmodesmd.ini",
+                "[Battle]\n1=GUI:Test,STT:Test,custom-mode.ini,custom,true\n2=GUI:Other,STT:Other,other.ini,other,true\n",
+            ),
+            (
+                "custom-mode.ini",
+                "[AircraftTypes]\n91=MODEJET\n[MODEJET]\nTechLevel=1\n[AMPHIB]\nNaval=yes\n",
+            ),
+            ("other.ini", "[AircraftTypes]\n91=OTHERJET\n"),
+        ] {
+            std::fs::write(fixture.0.join(name), body).unwrap();
+        }
+        let install = fixture.install();
+        let map = IniFile::from_str("[Basic]\nMultiplayerOnly=yes\nGameMode=custom\n");
+        let mut inventory = (*scenario_registries(&install.manager, &map, true, None)
+            .unwrap()
+            .production_inventory)
+            .clone();
+        assert!(!inventory.contains_key("MODEJET"));
+        assert_eq!(
+            inventory["AMPHIB"],
+            [Restriction::Land].into_iter().collect()
+        );
+        include_multiplayer_production_types(&install.manager, &map, &mut inventory).unwrap();
+        assert!(inventory["MODEJET"].contains(&Restriction::Air));
+        assert_eq!(
+            inventory["AMPHIB"],
+            [Restriction::Land, Restriction::Naval]
+                .into_iter()
+                .collect()
+        );
+        assert!(!inventory.contains_key("OTHERJET"));
     }
 
     #[test]

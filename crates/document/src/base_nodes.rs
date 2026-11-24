@@ -4,7 +4,9 @@ use crate::{
     mission::{self, Kind},
 };
 use anyhow::{Context, Result, ensure};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+pub(crate) const SUPPRESSED: &str = "YRMapEditorProductionBaseNodes";
 
 pub const MAX_NODES: usize = 10_000;
 
@@ -58,7 +60,7 @@ impl Node {
     }
 }
 
-pub fn read(doc: &MapDocument, house: &str) -> Result<Vec<Node>> {
+fn read_active(doc: &MapDocument, house: &str) -> Result<Vec<Node>> {
     ensure!(
         mission::ids(doc, Kind::House).iter().any(|id| id == house),
         "House 未注册"
@@ -101,29 +103,157 @@ pub fn read(doc: &MapDocument, house: &str) -> Result<Vec<Node>> {
         .collect()
 }
 
-/// Does not commit history; callers combine node and structure changes in one command.
-pub fn write(doc: &mut MapDocument, house: &str, nodes: &[Node]) -> Result<()> {
-    let old = read(doc, house)?;
-    ensure!(nodes.len() <= MAX_NODES, "节点数量超过编辑上限");
-    for i in old.len()..nodes.len() {
+fn suppressed_nodes(doc: &MapDocument, house: &str) -> Result<BTreeMap<usize, Node>> {
+    let mut nodes = BTreeMap::new();
+    for (_, key, raw) in doc.physical_ini_entries(SUPPRESSED) {
+        let Some((owner, index)) = key.rsplit_once(',') else {
+            continue;
+        };
+        if owner != house {
+            continue;
+        }
+        let index = index
+            .parse::<usize>()
+            .context("生产限制的基地节点索引无效")?;
+        ensure!(index < MAX_NODES, "生产限制的基地节点索引超出范围");
         ensure!(
-            doc.ini_value(house, &format!("{i:03}")).is_none(),
-            "{i:03} 位于 NodeCount 之外，不能覆盖孤立节点，请先消歧"
+            nodes.insert(index, Node::parse(raw)?).is_none(),
+            "生产限制的基地节点备份重复"
         );
     }
+    Ok(nodes)
+}
+
+/// Authoring sees the full plan, including nodes temporarily excluded from
+/// the compact plan consumed by the engine.
+pub fn read(doc: &MapDocument, house: &str) -> Result<Vec<Node>> {
+    let mut nodes = read_active(doc, house)?;
+    let suppressed = suppressed_nodes(doc, house)?;
+    ensure!(
+        nodes.len() + suppressed.len() <= MAX_NODES,
+        "节点数量超过编辑上限"
+    );
+    for (index, node) in suppressed {
+        nodes.insert(index.min(nodes.len()), node);
+    }
+    Ok(nodes)
+}
+
+fn suppressed_key(house: &str, index: usize) -> String {
+    format!("{house},{index:03}")
+}
+
+pub(crate) fn has_production_nodes(
+    doc: &MapDocument,
+    house: &str,
+    blocked: &BTreeSet<String>,
+) -> bool {
+    doc.physical_ini_entries(SUPPRESSED)
+        .iter()
+        .any(|(_, key, _)| {
+            key.rsplit_once(',')
+                .is_some_and(|(owner, _)| owner == house)
+        })
+        || has_blocked_active_node(doc, house, blocked)
+}
+
+pub(crate) fn has_blocked_active_node(
+    doc: &MapDocument,
+    house: &str,
+    blocked: &BTreeSet<String>,
+) -> bool {
+    if blocked.is_empty() {
+        return false;
+    }
+    let count = doc.ini_text(house, "NodeCount");
+    let count = if count.is_empty() {
+        0
+    } else {
+        // A matching row in an ambiguous plan must reach the strict reader.
+        count.trim().parse::<usize>().unwrap_or(usize::MAX)
+    };
+    doc.ini_entries(house).iter().any(|(_, key, raw)| {
+        key.parse::<usize>()
+            .is_ok_and(|index| index < count && *key == format!("{index:03}"))
+            && raw
+                .split(|&b| b == b',')
+                .next()
+                .and_then(|token| std::str::from_utf8(token).ok())
+                .is_some_and(|building| blocked.contains(&building.trim().to_ascii_uppercase()))
+    })
+}
+
+pub(crate) type PlanUpdate = (String, String, Option<Vec<u8>>);
+
+pub(crate) fn plan_updates(
+    doc: &MapDocument,
+    house: &str,
+    nodes: &[Node],
+) -> Result<Vec<PlanUpdate>> {
+    let old = read_active(doc, house)?;
+    ensure!(nodes.len() <= MAX_NODES, "节点数量超过编辑上限");
+    let blocked = crate::production_settings::blocked_ai_buildings(doc);
+    let mut active = Vec::new();
+    let mut suppressed = BTreeMap::new();
+    for (index, node) in nodes.iter().enumerate() {
+        let checked = Node::parse(node.raw.clone())?;
+        if blocked.contains(&checked.building.to_ascii_uppercase()) {
+            suppressed.insert(index, checked);
+        } else {
+            active.push(checked);
+        }
+    }
+    if old.len() < active.len() {
+        let existing = doc.physical_ini_entries(house);
+        for index in old.len()..active.len() {
+            let key = format!("{index:03}");
+            ensure!(
+                existing
+                    .iter()
+                    .all(|(_, existing_key, _)| *existing_key != key),
+                "{key} 位于 NodeCount 之外，不能覆盖孤立节点，请先消歧"
+            );
+        }
+    }
+    let mut edits = Vec::new();
+    for index in 0..old.len().max(active.len()) {
+        if old.get(index) != active.get(index) {
+            edits.push((
+                house.into(),
+                format!("{index:03}"),
+                active.get(index).map(|node| node.raw.clone()),
+            ));
+        }
+    }
+    if old.len() != active.len() {
+        edits.push((
+            house.into(),
+            "NodeCount".into(),
+            Some(active.len().to_string().into_bytes()),
+        ));
+    }
+    for (index, _) in suppressed_nodes(doc, house)? {
+        if !suppressed.contains_key(&index) {
+            edits.push((SUPPRESSED.into(), suppressed_key(house, index), None));
+        }
+    }
+    for (index, node) in suppressed {
+        let key = suppressed_key(house, index);
+        if doc.ini_value(SUPPRESSED, &key).as_ref() != Some(&node.raw) {
+            edits.push((SUPPRESSED.into(), key, Some(node.raw)));
+        }
+    }
+    Ok(edits)
+}
+
+/// Does not commit history; callers combine node and structure changes in one command.
+pub fn write(doc: &mut MapDocument, house: &str, nodes: &[Node]) -> Result<()> {
+    let edits = plan_updates(doc, house, nodes)?;
     doc.atomic(|doc| {
-        for (i, node) in nodes.iter().enumerate() {
-            Node::parse(node.raw.clone())?;
-            doc.set_ini(house, &format!("{i:03}"), Some(node.raw.clone()))?;
+        for (section, key, value) in edits {
+            doc.set_ini(&section, &key, value)?;
         }
-        for i in nodes.len()..old.len() {
-            doc.set_ini(house, &format!("{i:03}"), None)?;
-        }
-        doc.set_ini(
-            house,
-            "NodeCount",
-            Some(nodes.len().to_string().into_bytes()),
-        )
+        Ok(())
     })
 }
 
