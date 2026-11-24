@@ -1750,6 +1750,11 @@
   "避开威胁": "Avoid threats",
   "配置本次试玩，使用当前地图（包含未保存的修改）。": "Playtest the current map, including unsaved changes.",
   "释放驻军": "Release garrison",
+  "开局派兵驻满": "Fill garrison at mission start",
+  "驻军步兵": "Garrison infantry",
+  "开局派出 {count} 名步兵，按原版规则进入附近可驻军建筑。": "Dispatch {count} infantry at mission start. They seek a nearby eligible building under the original game rules.",
+  "这类建筑没有可用的驻军容量": "This building type has no usable garrison capacity.",
+  "请选择具有驻军能力的步兵": "Select infantry that can garrison a building.",
   "取消撤销": "Redo",
   "重做": "Redo",
   "重做  Ctrl+Y\n{arg0}": "Redo  Ctrl+Y\n{arg0}",
@@ -2254,5 +2259,6 @@
   "连续道路至少需要两个不同的点": "A road route needs at least two distinct points.",
   "点击或拖动添加路段。Enter 铺设路线，Backspace 撤回一段，Esc 取消。": "Click or drag to add road segments. Enter lays the route, Backspace removes a segment, and Esc cancels.",
   "按住 Shift 锁定下一段的轴向。": "Hold Shift to lock the next segment to a map axis.",
-  "铺设路线": "Lay road route"
+  "铺设路线": "Lay road route",
+  "更新驻军脚本": "Update garrison script"
 }

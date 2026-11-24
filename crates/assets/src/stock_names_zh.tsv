@@ -1,5 +1,5 @@
-E1	美国大兵	GI|G.I.|Allied GI
-E2	动员兵	Conscript
+E1	美国大兵	GI|G.I.|Allied GI|盟军大兵
+E2	动员兵	Conscript|征召兵
 E3	工程师	Engineer
 ENGINEER	工程师	Engineer
 SENGINEER	苏军工程师	Soviet Engineer|Engineer
@@ -21,7 +21,7 @@ TERROR	恐怖分子	Terrorist
 IVAN	疯狂伊文	Crazy Ivan
 YURI	尤里复制人	Yuri|Yuri Clone
 YURIPR	尤里改	Yuri Prime
-INIT	尤里新兵	Initiate
+INIT	尤里新兵	Initiate|教团新兵
 BRUTE	狂兽人	Brute
 VIRUS	病毒狙击手	Virus
 LUNR	登月火箭员	Cosmonaut|Lunar Infantry

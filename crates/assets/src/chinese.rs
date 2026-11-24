@@ -1,7 +1,7 @@
 //! Character conversion for editor display names, never resource or map bytes.
 use std::{collections::HashMap, sync::OnceLock};
 
-/// Translate known stock English names only; changed Mod names remain authoritative.
+/// Resolve recognized stock names to the preferred Chinese terminology.
 pub(crate) fn stock_object_name(id: &str, name: &str) -> Option<&'static str> {
     include_str!("stock_names_zh.tsv").lines().find_map(|line| {
         let mut fields = line.splitn(3, '\t');

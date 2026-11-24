@@ -208,11 +208,14 @@ fn lost(summary: &mut Summary, source: String, cell: Cell, blocking: bool) {
 pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Result<Plan> {
     options.validate()?;
     let source = doc.snapshot().bytes()?;
+    let reads_ares = doc.base.reads_ares;
+    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(reads_ares);
     let map = map_file::load_from_bytes(source.clone())?;
     let raw = RawIni::parse(source.clone().into())?;
-    let scratch = MapDocument::new(crate::document::Baseline::parse(
+    let scratch = MapDocument::new(crate::document::Baseline::parse_with_ares(
         source.clone().into(),
         &map,
+        reads_ares,
     )?);
     let delta = options.delta(map.header.width);
     let structural = options.width as u32 != map.header.width
@@ -225,6 +228,7 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
     };
     let mut summary = Summary::default();
     let mut packs = BTreeMap::new();
+    let mut clipped_buildings = Vec::new();
     if options.width as u32 != map.header.width || options.height as u32 != map.header.height {
         patch.set(
             "Map",
@@ -414,12 +418,17 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
                         })
             });
             if !fits {
-                lost(
-                    &mut summary,
-                    format!("{}/{}", record.section, record.key),
-                    at,
-                    record.section == "Waypoints",
-                );
+                if !crate::startup_garrison::owns_waypoint(&scratch, record) {
+                    lost(
+                        &mut summary,
+                        format!("{}/{}", record.section, record.key),
+                        at,
+                        record.section == "Waypoints",
+                    );
+                }
+                if record.section == "Structures" {
+                    clipped_buildings.push(record.clone());
+                }
                 if record.section == "Units" {
                     removed_units.insert(record.key.clone());
                 }
@@ -718,7 +727,18 @@ pub fn plan(doc: &MapDocument, options: Options, footprints: &Footprints) -> Res
     } else {
         raw.patch(&patch.lines, &packs, &patch.append, true)
     };
-    map_file::load_from_bytes(bytes.clone()).context("迁移后地图未通过生产解析")?;
+    let map = map_file::load_from_bytes(bytes.clone()).context("迁移后地图未通过生产解析")?;
+    let bytes = if clipped_buildings.is_empty() {
+        bytes
+    } else {
+        let mut cropped = MapDocument::new(crate::document::Baseline::parse_with_ares(
+            bytes.into(),
+            &map,
+            reads_ares,
+        )?);
+        crate::startup_garrison::remove_clipped(&mut cropped, &clipped_buildings)?;
+        cropped.snapshot().bytes()?
+    };
     Ok(Plan {
         summary,
         bytes,

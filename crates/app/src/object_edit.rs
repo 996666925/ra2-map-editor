@@ -2,14 +2,18 @@
 use super::*;
 use crate::i18n::tr;
 use ra2_map_document::object_properties::{self, Kind};
-use ra2_map_document::startup_owner;
+use ra2_map_document::{startup_garrison, startup_owner};
 
 impl Editor {
     pub(crate) fn check_property_draft(&mut self) -> bool {
         if !self.object_properties_dirty() {
             return true;
         }
-        self.status = tr!("请先完成属性输入；无效值需修正或取消本次输入。").into();
+        self.status = if self.property_error.is_empty() {
+            tr!("请先完成属性输入；无效值需修正或取消本次输入。").into()
+        } else {
+            self.property_error.clone()
+        };
         false
     }
     pub(crate) fn object_properties_dirty(&self) -> bool {
@@ -21,10 +25,10 @@ impl Editor {
         }
         let f = r.fields();
         self.property_type != r.type_id()
-            || self
-                .doc
-                .as_ref()
-                .is_some_and(|doc| startup_owner::get(doc, r) != self.property_startup_owner)
+            || self.doc.as_ref().is_some_and(|doc| {
+                startup_owner::get(doc, r) != self.property_startup_owner
+                    || startup_garrison::infantry(doc, r) != self.property_startup_garrison
+            })
             || (!matches!(r.section.as_str(), "Terrain" | "Smudge")
                 && (f.first() != Some(&self.property_owner)
                     || f.get(2).and_then(|n| n.parse().ok()).unwrap_or(256)
@@ -39,8 +43,7 @@ impl Editor {
                         .any(|(index, v)| f.get(*index) != Some(v))))
     }
     pub(crate) fn select_from_canvas(&mut self, id: Option<u64>) -> bool {
-        if self.selected != id && self.object_properties_dirty() {
-            self.status = tr!("请先完成属性输入；无效值需修正或取消本次输入。").into();
+        if self.selected != id && !self.check_property_draft() {
             return false;
         }
         if self.selected != id {
@@ -54,9 +57,14 @@ impl Editor {
         self.property_completion = Default::default();
         self.property_extra.clear();
         self.property_startup_owner = None;
+        self.property_startup_garrison = None;
         if let Some(r) = id.and_then(|id| self.records.get(&id)) {
             self.property_startup_owner =
                 self.doc.as_ref().and_then(|doc| startup_owner::get(doc, r));
+            self.property_startup_garrison = self
+                .doc
+                .as_ref()
+                .and_then(|doc| startup_garrison::infantry(doc, r));
             let f = r.fields();
             self.property_owner = f.first().cloned().unwrap_or_default();
             self.property_type = r.type_id();
@@ -91,7 +99,8 @@ impl Editor {
             match self.apply_object_properties(scene, &record, id) {
                 Ok(()) => self.status = tr!("属性已自动生效，可撤销。").into(),
                 Err(error) => {
-                    self.property_error = tr!("尚未生效：{error}", error = format!("{:#}", error))
+                    self.property_error = tr!("尚未生效：{error}", error = format!("{error:#}"));
+                    self.status = self.property_error.clone();
                 }
             }
         }
@@ -244,10 +253,34 @@ impl Editor {
             )?;
         }
         let startup_changed = startup_owner::get(doc, r) != self.property_startup_owner;
+        let garrison_changed = startup_garrison::infantry(doc, r) != self.property_startup_garrison
+            || (self.property_startup_garrison.is_some() && r.type_id() != self.property_type);
+        let garrison = if garrison_changed {
+            self.property_startup_garrison
+                .as_deref()
+                .map(|infantry| -> Result<_> {
+                    let count = garrison_capacity(scene, &self.property_type)
+                        .context(tr!("这类建筑没有可用的驻军容量"))?;
+                    ensure!(
+                        can_garrison(scene, infantry),
+                        tr!("请选择具有驻军能力的步兵")
+                    );
+                    Ok((infantry, count))
+                })
+                .transpose()?
+        } else {
+            None
+        };
         doc.atomic(|doc| {
+            if garrison_changed && garrison.is_none() {
+                startup_garrison::set(doc, id, None)?;
+            }
             doc.set(Target::Record(id), Some(Value::Record(changed)))?;
             if startup_changed {
                 startup_owner::set(doc, id, self.property_startup_owner)?;
+            }
+            if garrison_changed && garrison.is_some() {
+                startup_garrison::set(doc, id, garrison)?;
             }
             Ok(())
         })?;
@@ -255,6 +288,89 @@ impl Editor {
         self.select(Some(id));
         Ok(())
     }
+    fn garrison_properties(&mut self, ui: &mut egui::Ui, scene: &MapScene, record: &Record) {
+        let Some(doc) = &self.doc else { return };
+        if startup_garrison::has_legacy_script(doc, record)
+            && ui
+                .add_enabled(
+                    !self.object_properties_dirty(),
+                    egui::Button::new(tr!("更新驻军脚本")),
+                )
+                .clicked()
+        {
+            let result = startup_garrison::update_legacy_script(self.doc.as_mut().unwrap(), record);
+            match result {
+                Ok(true) => self.commit(scene, tr!("更新驻军脚本")),
+                Ok(false) => {}
+                Err(error) => self.property_error = format!("{error:#}"),
+            }
+        }
+        let count = garrison_capacity(scene, &self.property_type);
+        if count.is_none() && self.property_startup_garrison.is_none() {
+            return;
+        }
+        let mut enabled = self.property_startup_garrison.is_some();
+        let candidates = scene.catalog.object_types.get("Infantry");
+        let default = candidates.and_then(|types| {
+            ["E1", "E2"]
+                .into_iter()
+                .find(|id| can_garrison(scene, id))
+                .or_else(|| {
+                    types
+                        .iter()
+                        .map(String::as_str)
+                        .find(|id| can_garrison(scene, id))
+                })
+        });
+        let can_enable = count.is_some()
+            && default.is_some()
+            && self.property_startup_owner.is_none_or(|slot| slot < 8);
+        if ui
+            .add_enabled(
+                enabled || can_enable,
+                egui::Checkbox::new(&mut enabled, tr!("开局派兵驻满")),
+            )
+            .changed()
+        {
+            self.property_startup_garrison = if enabled {
+                default.map(str::to_owned)
+            } else {
+                None
+            };
+        }
+        if let Some(infantry) = &mut self.property_startup_garrison {
+            let label = |id: &str| {
+                if crate::i18n::selected_language() == crate::i18n::Language::Chinese {
+                    let name = scene.catalog.object_name_zh(id);
+                    if name != id {
+                        return format!("{name} · {id}");
+                    }
+                }
+                scene.catalog.object_label(id).into_owned()
+            };
+            egui::ComboBox::from_id_salt("startup-garrison-infantry")
+                .selected_text(label(infantry))
+                .width(ui.available_width())
+                .show_ui(ui, |ui| {
+                    for id in candidates
+                        .into_iter()
+                        .flatten()
+                        .filter(|id| can_garrison(scene, id))
+                    {
+                        ui.selectable_value(infantry, id.clone(), label(id));
+                    }
+                })
+                .response
+                .accessible_name(tr!("驻军步兵"));
+            if let Some(count) = count {
+                ui.small(tr!(
+                    "开局派出 {count} 名步兵，按原版规则进入附近可驻军建筑。",
+                    count = count
+                ));
+            }
+        }
+    }
+
     pub fn selection_properties(&mut self, ui: &mut egui::Ui, scene: &MapScene) {
         let Some((id, r)) = self
             .selected
@@ -336,6 +452,9 @@ impl Editor {
                         ui.small(tr!("对象已有关联标签，请通过任务触发器设置开局归属。"));
                     }
                 }
+                if r.section == "Structures" && self.property_type == type_id {
+                    self.garrison_properties(ui, scene, &r);
+                }
                 ui.add(egui::Slider::new(&mut self.property_health, 0..=256).text(tr!("生命")));
                 ui.add(egui::Slider::new(&mut self.property_facing, 0..=255).text(tr!("朝向")));
                 egui::CollapsingHeader::new(tr!("分类属性"))
@@ -414,4 +533,25 @@ impl Editor {
             self.delete(scene);
         }
     }
+}
+
+fn garrison_capacity(scene: &MapScene, id: &str) -> Option<u16> {
+    let rules = scene.catalog.rules.section(id)?;
+    let count = rules.read_int("MaxNumberOccupants", 0);
+    (rules.read_bool("CanBeOccupied", false)
+        && (1..=i32::from(startup_garrison::MAX_COUNT)).contains(&count))
+    .then_some(count as u16)
+}
+
+fn can_garrison(scene: &MapScene, id: &str) -> bool {
+    scene
+        .catalog
+        .object_types
+        .get("Infantry")
+        .is_some_and(|types| types.iter().any(|kind| kind == id))
+        && scene
+            .catalog
+            .rules
+            .section_or_empty(id)
+            .read_bool("Occupier", false)
 }

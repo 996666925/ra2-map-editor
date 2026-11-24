@@ -750,6 +750,79 @@ fn native_clipboard_events_copy_and_paste_complete_region_data_and_focus_protect
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
+fn startup_garrison_property_applies_and_undoes() {
+    use egui_kittest::kittest::Queryable as _;
+    use ra2_map_document::{
+        mission::{self, Kind},
+        startup_garrison,
+    };
+    use vera20k_core::rules::ini_parser::IniFile;
+
+    let (mut editor, _, root) = editor();
+    let mut scene = terrain_scene();
+    let catalog = Arc::make_mut(&mut scene.catalog);
+    catalog.object_types.insert(
+        "Infantry".into(),
+        ["E1", "E2", "INIT"].map(str::to_owned).into(),
+    );
+    catalog.rules = IniFile::from_str(
+        "[BUNKER]\nCanBeOccupied=yes\nMaxNumberOccupants=5\n\
+         [E1]\nName=盟军大兵\nOccupier=yes\n[E2]\nName=征召兵\nOccupier=yes\n\
+         [INIT]\nName=教团新兵\nOccupier=yes\n",
+    );
+    editor.attach(&scene);
+    let doc = editor.doc.as_mut().unwrap();
+    let id = doc
+        .add_record("Structures", [20, 20], "Neutral", "BUNKER")
+        .unwrap();
+    doc.commit("place bunker");
+    editor.cache(&scene);
+    editor.select(Some(id));
+    {
+        let mut harness = crate::test_support::harness()
+            .with_context_setup(|ctx| {
+                crate::ui_theme::install(ctx);
+                ctx.add_font_provider(Arc::new(
+                    egui_system_font_provider::SystemFontProvider::new(),
+                ));
+            })
+            .with_size([700., 950.])
+            .build_ui(|ui| editor.selection_properties(ui, &scene));
+        harness.get_by_label("开局派兵驻满").click();
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::ComboBox, "驻军步兵")
+            .click();
+        harness.run();
+        for label in ["美国大兵 · E1", "动员兵 · E2", "尤里新兵 · INIT"] {
+            harness.get_by_label(label);
+        }
+        harness.get_by_label("尤里新兵 · INIT").click();
+        harness.run();
+    }
+    let doc = editor.doc.as_ref().unwrap();
+    assert_eq!(
+        startup_garrison::infantry(doc, doc.record(id).unwrap()).as_deref(),
+        Some("INIT")
+    );
+    assert_eq!(mission::ids(doc, Kind::Team).len(), 1);
+    editor.history(false, &scene);
+    assert_eq!(editor.property_startup_garrison.as_deref(), Some("E1"));
+    editor.history(false, &scene);
+    let doc = editor.doc.as_ref().unwrap();
+    assert!(startup_garrison::infantry(doc, doc.record(id).unwrap()).is_none());
+    editor.history(true, &scene);
+    editor.history(true, &scene);
+    let doc = editor.doc.as_ref().unwrap();
+    assert_eq!(
+        startup_garrison::infantry(doc, doc.record(id).unwrap()).as_deref(),
+        Some("INIT")
+    );
+    drop(editor);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn property_edit_preserves_non_utf8_tail_and_aircraft_uses_its_own_recruitment_columns() {
     let (mut editor, _, root) = editor();
     let mut scene = terrain_scene();

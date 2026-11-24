@@ -660,3 +660,28 @@ fn crop_cannot_strand_a_retained_route_when_its_exit_record_is_clipped() {
     assert!(doc.undo());
     assert_eq!(doc.snapshot().bytes().unwrap(), before);
 }
+
+#[test]
+fn crop_cleans_up_a_clipped_buildings_startup_garrison() {
+    let mut doc = document();
+    let building = doc
+        .add_record("Structures", [40, 1], "Neutral", "NABNKR")
+        .unwrap();
+    crate::startup_garrison::set(&mut doc, building, Some(("E1", 5))).unwrap();
+    doc.commit("garrison on map edge");
+    let mut options = Options::from_document(&doc);
+    options.width = 36;
+    options.local = [2, 4, 32, 30];
+    options.delete_outside = true;
+    let plan = plan(&doc, options, &Footprints::new()).unwrap();
+    assert!(plan.can_apply());
+    plan.apply(&mut doc).unwrap();
+    assert!(mission::ids(&doc, Kind::Trigger).is_empty());
+    assert!(mission::ids(&doc, Kind::Team).is_empty());
+    assert!(doc.ini_entries("EditorStartupGarrison").is_empty());
+    assert!(doc.undo());
+    assert_eq!(
+        crate::startup_garrison::infantry(&doc, doc.record(building).unwrap()).as_deref(),
+        Some("E1")
+    );
+}

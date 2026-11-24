@@ -849,6 +849,15 @@ impl MapDocument {
         if let Target::Terrain(at) | Target::Overlay(at) = &target {
             self.check_cell(*at)?;
         }
+        if let Target::Record(id) = &target
+            && let Some(old) = self.record(*id).cloned()
+        {
+            let new = match &value {
+                Some(Value::Record(record)) => Some(record),
+                _ => None,
+            };
+            crate::startup_garrison::record_change(self, &old, new)?;
+        }
         self.store_validated(target, value);
         Ok(())
     }

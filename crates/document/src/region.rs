@@ -165,7 +165,9 @@ impl Clipboard {
             .records()
             .into_iter()
             .filter(|(_, r)| {
-                layers.includes(&r.section) && r.cell().is_some_and(|at| cells.contains(&at))
+                layers.includes(&r.section)
+                    && !crate::startup_garrison::owns_waypoint(doc, r)
+                    && r.cell().is_some_and(|at| cells.contains(&at))
             })
             .collect();
         let mut tags = BTreeMap::new();

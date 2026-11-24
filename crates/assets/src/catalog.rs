@@ -203,8 +203,8 @@ impl Catalog {
             .map_or_else(|| self.raw_object_name(id), String::as_str)
     }
 
-    /// Chinese authoring descriptions also cover stock IDs with English-only resources.
-    /// Only recognized stock English names are translated; Mod renames are preserved.
+    /// Chinese authoring names use preferred terminology for recognized stock names.
+    /// Custom names come from the loaded resources.
     pub fn object_name_zh<'a>(&'a self, id: &'a str) -> &'a str {
         let name = self.object_name(id);
         crate::chinese::stock_object_name(id, name).unwrap_or(name)
