@@ -1233,6 +1233,208 @@ fn coastal_cliffs_switch_both_ways_and_are_recognized_by_height_tools() {
 }
 
 #[test]
+fn shore_repair_completes_a_broken_template_without_changing_water_extent() {
+    let (mut doc, scene) = setup();
+    let lake = cliff_tools::rectangle([60, 60], [72, 72]);
+    let original = shore_tools::plan(&doc, &scene, lake.clone(), Some(true)).unwrap();
+    original.apply(&mut doc).unwrap();
+    doc.commit("lake");
+    let original_bytes = doc.snapshot().bytes().unwrap();
+
+    let broken = [60, 60];
+    let old = value(&doc, &scene, broken);
+    assert!(shore_tools::wet(&scene, old));
+    assert!(shore_tools::shore(
+        &scene,
+        shore_tools::id(&scene, old).unwrap()
+    ));
+    doc.set(
+        Target::Terrain(broken),
+        Some(Value::Terrain(TerrainValue {
+            tile: value(&doc, &scene, [66, 66]).tile,
+            sub: 0,
+            ..old
+        })),
+    )
+    .unwrap();
+    doc.commit("replace corner with plain water");
+
+    let open_water = shore_tools::plan(&doc, &scene, BTreeSet::from([[62, 62]]), None).unwrap();
+    assert!(
+        open_water.edits.is_empty(),
+        "the brush did not reach the shore"
+    );
+
+    let stroke = cliff_tools::rectangle([58, 58], [62, 62]);
+    let before = doc.snapshot().bytes().unwrap();
+    let repair = shore_tools::plan(&doc, &scene, stroke.clone(), None).unwrap();
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    assert_eq!(repair.edits.get(&broken), Some(&old));
+    assert!(repair.edits.iter().all(|(&at, &v)| {
+        shore_tools::wet(&scene, v) == lake.contains(&at)
+            && v.level == value(&doc, &scene, at).level
+    }));
+
+    doc.set(Target::Overlay(broken), Some(Value::Overlay(0, 0)))
+        .unwrap();
+    assert!(shore_tools::plan(&doc, &scene, stroke, None).is_err());
+    doc.cancel();
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+
+    undoable(&mut doc, &repair);
+    complete(&doc, &scene, &repair);
+    assert_eq!(doc.snapshot().bytes().unwrap(), original_bytes);
+}
+
+#[test]
+fn shore_repair_varies_repeated_pieces_and_keeps_complete_stamps() {
+    let (mut doc, scene) = setup();
+    let base = scene.palette.tile_ids.unwrap().shore as u16;
+    let lake = cliff_tools::rectangle([54, 62], [88, 72]);
+    let painted = shore_tools::plan(&doc, &scene, lake, Some(true)).unwrap();
+    painted.apply(&mut doc).unwrap();
+    doc.commit("paint lake");
+    let painted_bytes = doc.snapshot().bytes().unwrap();
+
+    // Simulate a saved shore made by the old fitter, with one tile per shape.
+    let straight: Vec<_> = painted
+        .cliffs
+        .iter()
+        .filter(|stamp| (base..base + 3).contains(&stamp.tile))
+        .collect();
+    assert!(straight.len() >= 10);
+    for stamp in &straight {
+        for (at, v) in cliff_authoring::stamp(&doc, &scene, base, stamp.origin, stamp.base).unwrap()
+        {
+            doc.set(Target::Terrain(at), Some(Value::Terrain(v)))
+                .unwrap();
+        }
+    }
+    doc.commit("repeat a single texture along the shore");
+
+    let stroke = cliff_tools::rectangle([52, 60], [90, 74]);
+    let repaired = shore_tools::plan(&doc, &scene, stroke.clone(), None).unwrap();
+    let repaired_styles: BTreeSet<_> = repaired
+        .cliffs
+        .iter()
+        .filter_map(|stamp| (base..base + 3).contains(&stamp.tile).then_some(stamp.tile))
+        .collect();
+    assert!(repaired_styles.len() > 1);
+    assert!(!repaired.edits.is_empty());
+    for (&at, &next) in &repaired.edits {
+        let old = value(&doc, &scene, at);
+        assert_eq!(
+            next,
+            TerrainValue {
+                tile: next.tile,
+                ..old
+            }
+        );
+        assert_eq!(
+            shore_tools::wet(&scene, next),
+            shore_tools::wet(&scene, old)
+        );
+    }
+    undoable(&mut doc, &repaired);
+    complete(&doc, &scene, &repaired);
+    assert_eq!(doc.snapshot().bytes().unwrap(), painted_bytes);
+    let second = shore_tools::plan(&doc, &scene, stroke, None).unwrap();
+    assert!(second.edits.is_empty());
+}
+
+#[test]
+fn shore_repair_snaps_a_brushed_staircase_without_moving_water_outside_the_stroke() {
+    let (mut doc, scene) = setup();
+    let water = scene.palette.tile_ids.unwrap().water_base as u16 + 8;
+    for at in cliff_tools::rectangle([48, 48], [96, 96]) {
+        if at[0] >= at[1] {
+            doc.set(
+                Target::Terrain(at),
+                Some(Value::Terrain(TerrainValue {
+                    tile: scene.catalog.raw_tiles[&water],
+                    sub: 0,
+                    ..value(&doc, &scene, at)
+                })),
+            )
+            .unwrap();
+        }
+    }
+    doc.commit("raw one-cell staircase");
+
+    let mut stroke = BTreeSet::new();
+    for center in 63..=78 {
+        stroke.extend(cliff_tools::rectangle([center - 3; 2], [center + 3; 2]));
+    }
+    let plan = shore_tools::plan(&doc, &scene, stroke.clone(), None).unwrap();
+    let adjusted: Vec<_> = plan
+        .edits
+        .iter()
+        .filter(|(at, new)| {
+            shore_tools::wet(&scene, **new) != shore_tools::wet(&scene, value(&doc, &scene, **at))
+        })
+        .collect();
+    assert!(
+        !adjusted.is_empty(),
+        "the one-cell staircase needs to be reshaped"
+    );
+    assert!(adjusted.iter().all(|(at, _)| stroke.contains(*at)));
+    assert!(
+        plan.cliffs
+            .iter()
+            .any(|stamp| shore_tools::shore(&scene, stamp.tile))
+    );
+    undoable(&mut doc, &plan);
+    complete(&doc, &scene, &plan);
+}
+
+#[test]
+fn shore_repair_retries_snaps_that_would_reach_a_higher_terrace() {
+    let (mut doc, scene) = setup();
+    let water = scene.palette.tile_ids.unwrap().water_base as u16 + 8;
+    for at in cliff_tools::rectangle([48, 48], [96, 96]) {
+        if at[0] >= at[1] {
+            doc.set(
+                Target::Terrain(at),
+                Some(Value::Terrain(TerrainValue {
+                    tile: scene.catalog.raw_tiles[&water],
+                    sub: 0,
+                    ..value(&doc, &scene, at)
+                })),
+            )
+            .unwrap();
+        }
+    }
+    for x in 60..=81 {
+        let at = [x, x + 2];
+        doc.set(
+            Target::Terrain(at),
+            Some(Value::Terrain(TerrainValue {
+                level: 5,
+                ..value(&doc, &scene, at)
+            })),
+        )
+        .unwrap();
+    }
+    doc.commit("one-cell staircase beside higher ground");
+    let mut stroke = BTreeSet::new();
+    for center in 63..=78 {
+        stroke.extend(cliff_tools::rectangle([center - 3; 2], [center + 3; 2]));
+    }
+    let repair = shore_tools::plan(&doc, &scene, stroke, None).unwrap();
+    assert!(
+        repair
+            .cliffs
+            .iter()
+            .any(|stamp| shore_tools::shore(&scene, stamp.tile))
+    );
+    for (&at, &next) in &repair.edits {
+        assert_eq!(next.level, value(&doc, &scene, at).level);
+    }
+    undoable(&mut doc, &repair);
+    complete(&doc, &scene, &repair);
+}
+
+#[test]
 fn repair_joins_raw_water_and_water_strokes_update_adjacent_cliff_templates() {
     let (mut d, s) = setup();
     let ids = s.palette.tile_ids.unwrap();

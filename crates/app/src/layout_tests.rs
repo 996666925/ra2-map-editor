@@ -833,6 +833,96 @@ fn cliff_polyline_canvas_clicks_preview_close_enter_and_cancel_use_one_transacti
 }
 
 #[test]
+fn shore_repair_canvas_brush_follows_the_drag_and_undoes_as_one_edit() {
+    use ra2_map_document::document::{Target, TerrainValue, Value, cell_line};
+    use ra2_map_scene::{
+        cliff_tools, shore_tools,
+        terrain_tools::{self, TerrainMode},
+    };
+    let (mut view, scene, root) =
+        flat_authoring_view_with(ra2_map_assets::test_support::Fixture::with_joining());
+    let ctx = egui::Context::default();
+    let lake = cliff_tools::rectangle([31, 31], [48, 46]);
+    let tile = scene.catalog.raw_tiles[&((scene.palette.tile_ids.unwrap().water_base + 8) as u16)];
+    let doc = view.editor.doc.as_mut().unwrap();
+    for &at in &lake {
+        doc.set(
+            Target::Terrain(at),
+            Some(Value::Terrain(TerrainValue {
+                tile,
+                sub: 0,
+                ..terrain_tools::value(doc, &scene, at)
+            })),
+        )
+        .unwrap();
+    }
+    view.editor.commit(&scene, "raw lake");
+    view.editor.activate_terrain_mode(TerrainMode::ShoreRepair);
+    flat_frame(&mut view, &ctx, None, None, None);
+    let snapshot = |view: &MapView| {
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap()
+    };
+    let before = snapshot(&view);
+    let (start, corner, end) = ([31, 44], [31, 31], [46, 31]);
+    for cancel in [true, false] {
+        flat_frame(&mut view, &ctx, Some(start), Some(true), None);
+        flat_frame(&mut view, &ctx, Some(corner), None, None);
+        flat_frame(&mut view, &ctx, Some(end), None, None);
+        let plan = view.editor.plateau_preview_plan(&scene, end).unwrap();
+        for cell in [[31, 37], [39, 31], [39, 34]] {
+            assert!(plan.interior.contains(&cell), "brush missed {cell:?}");
+        }
+        assert!(
+            !plan.interior.contains(&[39, 38]),
+            "brush filled the rectangle"
+        );
+        let distant_shore = [48, 42];
+        assert!(!plan.edits.contains_key(&distant_shore));
+        assert!(!plan.edits.is_empty());
+        assert!(
+            plan.edits
+                .iter()
+                .all(|(&at, &v)| shore_tools::wet(&scene, v) == lake.contains(&at))
+        );
+        assert_eq!(snapshot(&view), before);
+        if cancel {
+            flat_frame(&mut view, &ctx, Some(end), None, Some(egui::Key::Escape));
+            flat_frame(&mut view, &ctx, Some(end), Some(false), None);
+            assert_eq!(snapshot(&view), before);
+        } else {
+            // The final position can arrive with the release event.
+            let release = [48, 40];
+            let mut cells = plan.interior.clone();
+            let doc = view.editor.doc.as_ref().unwrap();
+            for [x, y] in cell_line(end, release) {
+                cells.extend(cliff_tools::rectangle([x - 3, y - 3], [x + 3, y + 3]));
+            }
+            cells.retain(|&at| doc.check_cell(at).is_ok());
+            let expected = shore_tools::plan(doc, &scene, cells, None).unwrap();
+            assert!(expected.edits.contains_key(&distant_shore));
+            flat_frame(&mut view, &ctx, Some(release), Some(false), None);
+            assert!(!view.editor.stroking, "{}", view.editor.status);
+            for (&at, &v) in &expected.edits {
+                assert_eq!(view.editor.doc.as_ref().unwrap().terrain(at), Some(v));
+            }
+            let after = snapshot(&view);
+            view.editor.history(false, &scene);
+            assert_eq!(snapshot(&view), before);
+            view.editor.history(true, &scene);
+            assert_eq!(snapshot(&view), after);
+        }
+    }
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn water_polyline_canvas_closes_fills_and_keeps_invalid_drafts_editable() {
     use ra2_map_scene::terrain_tools::TerrainMode;
     let (mut view, scene, root) =

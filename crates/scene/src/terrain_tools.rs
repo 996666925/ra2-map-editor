@@ -120,7 +120,7 @@ impl TerrainMode {
             Self::WaterOutline => "围合水域（自动岸线）",
             Self::WaterPolyline => "折线水域（自动岸线）",
             Self::LandFill => "回填陆地（修补岸线）",
-            Self::ShoreRepair => "修复岸线（矩形）",
+            Self::ShoreRepair => "修复岸线（画笔）",
             Self::Road => "道路（自动转角 / 路口）",
             Self::RoadPolyline => "连续画路",
             Self::RoadCut => "切除道路（修补端点）",

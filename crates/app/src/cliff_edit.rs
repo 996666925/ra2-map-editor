@@ -28,7 +28,37 @@ struct Gesture {
     road: RoadStyle,
     road_axis_lock: bool,
     road_leg_pressed: bool,
+    shore_brush: Option<ShoreBrush>,
 }
+
+struct ShoreBrush {
+    width: u16,
+    last: Option<Cell>,
+    cells: BTreeSet<Cell>,
+}
+
+impl ShoreBrush {
+    fn footprint(doc: &MapDocument, at: Cell, width: u16) -> impl Iterator<Item = Cell> + '_ {
+        let low = at.map(|v| v.saturating_sub(width / 2));
+        let high = at.map(|v| v.saturating_add((width - 1) / 2));
+        (low[0]..=high[0])
+            .flat_map(move |x| (low[1]..=high[1]).map(move |y| [x, y]))
+            .filter(|&cell| doc.check_cell(cell).is_ok())
+    }
+
+    fn sample(&mut self, doc: &MapDocument, at: Option<Cell>) -> bool {
+        let last = std::mem::replace(&mut self.last, at);
+        let Some(at) = at.filter(|at| Some(*at) != last) else {
+            return false;
+        };
+        let before = self.cells.len();
+        for center in cell_line(last.unwrap_or(at), at) {
+            self.cells.extend(Self::footprint(doc, center, self.width));
+        }
+        self.cells.len() != before
+    }
+}
+
 impl Gesture {
     fn road_endpoint(&self, at: Cell) -> Cell {
         if self.road_axis_lock {
@@ -202,7 +232,11 @@ impl PlateauEdit {
         let mut path = g.path.clone();
         // Water previews show the exact closure Enter will commit. Hover
         // only draws a guide for the next edge until that point is clicked.
-        if g.mode != TerrainMode::WaterPolyline && path.last() != Some(&at) {
+        if !matches!(
+            g.mode,
+            TerrainMode::WaterPolyline | TerrainMode::ShoreRepair
+        ) && path.last() != Some(&at)
+        {
             path.push(at);
         }
         if !matches!(
@@ -211,6 +245,7 @@ impl PlateauEdit {
                 | TerrainMode::CliffPolyline
                 | TerrainMode::WaterOutline
                 | TerrainMode::WaterPolyline
+                | TerrainMode::ShoreRepair
         ) {
             path = vec![
                 g.start,
@@ -268,6 +303,14 @@ impl PlateauEdit {
                         key.road_axis_lock,
                     )?));
                 }
+                if let Some(brush) = &g.shore_brush {
+                    return Ok(Arc::new(ra2_map_scene::shore_tools::plan(
+                        doc,
+                        scene,
+                        brush.cells.clone(),
+                        None,
+                    )?));
+                }
                 if key.mode.joining() {
                     if key.mode == TerrainMode::WaterPolyline {
                         return Ok(Arc::new(ra2_map_scene::shore_tools::polyline(
@@ -288,7 +331,7 @@ impl PlateauEdit {
                     let paint = match key.mode {
                         TerrainMode::Water => Some(true),
                         TerrainMode::LandFill => Some(false),
-                        _ => None,
+                        _ => unreachable!("joining mode handled above"),
                     };
                     return Ok(Arc::new(ra2_map_scene::shore_tools::plan(
                         doc, scene, cells, paint,
@@ -477,6 +520,11 @@ impl Editor {
                 bridge: self.bridge_kind,
                 road: self.road_style,
                 road_axis_lock: self.brush_shift,
+                shore_brush: (self.terrain_mode == TerrainMode::ShoreRepair).then(|| ShoreBrush {
+                    width: self.shore_brush_width,
+                    last: None,
+                    cells: BTreeSet::new(),
+                }),
                 // The first click sets the start. Only a press still held
                 // after this frame can also drag out the first leg.
                 road_leg_pressed: self.terrain_mode == TerrainMode::RoadPolyline
@@ -510,7 +558,11 @@ impl Editor {
             if g.mode == TerrainMode::Road {
                 g.road_axis_lock = self.brush_shift;
             }
-            if (down || press || release)
+            if let Some(brush) = &mut g.shore_brush {
+                if (down || press || release) && brush.sample(self.doc.as_ref().unwrap(), at) {
+                    self.plateau.preview = None;
+                }
+            } else if (down || press || release)
                 && let Some(at) = at
                 && g.path.last() != Some(&at)
             {
@@ -534,7 +586,37 @@ impl Editor {
         let Some(doc) = self.doc.as_ref() else {
             return;
         };
+        let world = camera.world_rect(rect);
+        let cell_points = |at: Cell, level: u8| {
+            let (x, y) = vera20k_core::map::terrain::iso_to_screen(
+                at[0],
+                at[1],
+                if self.flat_view { 0 } else { level },
+            );
+            let center = rect.min + (egui::pos2(x + 30., y + 15.) - world.min) * camera.zoom;
+            rect.expand(60. * camera.zoom).contains(center).then(|| {
+                let points = [[0., -15.], [30., 0.], [0., 15.], [-30., 0.]]
+                    .map(|[x, y]| center + egui::vec2(x, y) * camera.zoom);
+                (center, points)
+            })
+        };
+        let brush_guide = |cell, color: Color32| {
+            let level = terrain_tools::value(doc, scene, cell).level;
+            if let Some((_, points)) = cell_points(cell, level) {
+                painter.add(egui::Shape::convex_polygon(
+                    points.to_vec(),
+                    color.gamma_multiply(0.08),
+                    egui::Stroke::new(1., color.gamma_multiply(0.6)),
+                ));
+            }
+        };
+        let valid_color = Color32::from_rgb(80, 220, 170);
         if self.plateau.gesture.is_none() {
+            if self.terrain_mode == TerrainMode::ShoreRepair {
+                for cell in ShoreBrush::footprint(doc, at, self.shore_brush_width) {
+                    brush_guide(cell, valid_color);
+                }
+            }
             painter.text(
                 rect.left_top() + egui::vec2(12., 12.),
                 egui::Align2::LEFT_TOP,
@@ -554,7 +636,6 @@ impl Editor {
             );
             return;
         }
-        let world = camera.world_rect(rect);
         let starting_road = self.plateau.gesture.as_ref().is_some_and(|g| {
             g.mode == TerrainMode::RoadPolyline
                 && g.path.len() == 1
@@ -568,25 +649,26 @@ impl Editor {
             .map(|e| crate::i18n::text(e).to_owned());
         let plan = self.plateau.displayed_plan(result);
         let road_draft = self.plateau.road_draft_end().is_some();
-        let valid_color = Color32::from_rgb(80, 220, 170);
         let guide_color = if error.is_none() {
             valid_color
         } else {
             Color32::LIGHT_RED
         };
         let color = if road_draft { valid_color } else { guide_color };
-        let outline = |painter: &egui::Painter, at: Cell, level: u8| {
-            let (x, y) = vera20k_core::map::terrain::iso_to_screen(
-                at[0],
-                at[1],
-                if self.flat_view { 0 } else { level },
-            );
-            let center = rect.min + (egui::pos2(x + 30., y + 15.) - world.min) * camera.zoom;
-            if !rect.expand(60. * camera.zoom).contains(center) {
-                return;
+        if let Some(brush) = self
+            .plateau
+            .gesture
+            .as_ref()
+            .and_then(|g| g.shore_brush.as_ref())
+        {
+            for &cell in &brush.cells {
+                brush_guide(cell, guide_color);
             }
-            let points = [[0., -15.], [30., 0.], [0., 15.], [-30., 0.]]
-                .map(|[x, y]| center + egui::vec2(x, y) * camera.zoom);
+        }
+        let outline = |painter: &egui::Painter, at: Cell, level: u8| {
+            let Some((center, points)) = cell_points(at, level) else {
+                return;
+            };
             painter.add(egui::Shape::convex_polygon(
                 points.to_vec(),
                 if self.flat_view && !self.framework {
@@ -827,6 +909,20 @@ impl Editor {
                         arg0 = g.base,
                         arg1 = plan.base + 4
                     )
+                } else if g.mode == TerrainMode::ShoreRepair {
+                    let adjusted = plan
+                        .edits
+                        .iter()
+                        .filter(|(at, new)| {
+                            use ra2_map_scene::shore_tools::wet;
+                            wet(scene, **new) != wet(scene, terrain_tools::value(doc, scene, **at))
+                        })
+                        .count();
+                    if adjusted == 0 {
+                        tr!("保留水陆边界").into()
+                    } else {
+                        tr!("微调 {arg0} 格水陆边界", arg0 = adjusted)
+                    }
                 } else if g.mode.joining() {
                     tr!("按原高度连接地形").into()
                 } else if g.mode == TerrainMode::Bridge && !g.bridge.high() {
@@ -884,7 +980,6 @@ impl Editor {
                         | TerrainMode::PlateauCut
                         | TerrainMode::Water
                         | TerrainMode::LandFill
-                        | TerrainMode::ShoreRepair
                         | TerrainMode::CoastalCliff
                 ) {
                     for cell in cliff_tools::rectangle(g.start, at) {
@@ -892,7 +987,9 @@ impl Editor {
                     }
                 } else if !matches!(
                     g.mode,
-                    TerrainMode::WaterPolyline | TerrainMode::RoadPolyline
+                    TerrainMode::WaterPolyline
+                        | TerrainMode::RoadPolyline
+                        | TerrainMode::ShoreRepair
                 ) {
                     for (a, b) in g
                         .path
@@ -1097,7 +1194,15 @@ impl Editor {
                     tr!("拖动矩形回填为平地；自动移除旧岸线，修补湖岸和岛屿。")
                 }
                 TerrainMode::ShoreRepair => {
-                    tr!("拖动矩形修复水陆边界，保持现有水域范围；包含邻近的完整岸线模板。")
+                    ui.add_enabled(
+                        !self.stroking,
+                        egui::Slider::new(&mut self.shore_brush_width, 1..=21)
+                            .step_by(2.)
+                            .text(tr!("画笔宽度（格）")),
+                    );
+                    tr!(
+                        "按住左键沿岸线刷过要修复的区域，松开应用，Esc 取消。自动补齐岸线和沙滩过渡。单格锯齿无法拼接时，可在刷区内按 2×2 格微调水陆边界。"
+                    )
                 }
                 TerrainMode::CoastalCliff => {
                     tr!(

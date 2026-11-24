@@ -3,12 +3,13 @@
 use crate::{
     cliff_authoring,
     cliff_tools::{self, CliffStamp, PlateauPlan},
+    cliff_variants::{available, style_score},
     map::MapScene,
     terrain_tools::{self, value},
 };
 use anyhow::{Context, Result, ensure};
 use ra2_map_document::document::{Cell, MapDocument, Target, TerrainValue, Value, cell_line};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
 pub(crate) fn offset(at: Cell, dx: i32, dy: i32) -> Option<Cell> {
@@ -182,6 +183,10 @@ struct Candidate {
 
 #[derive(Debug)]
 struct ShoreGeometryError(&'static str);
+
+const NO_SHORE_FIT: ShoreGeometryError = ShoreGeometryError(
+    "岸线过窄、斜角相接或资源缺失，无法完整拼接；请让水道和陆地至少宽 2 格并加宽急转角",
+);
 impl std::fmt::Display for ShoreGeometryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.0)
@@ -237,9 +242,7 @@ fn solve(candidates: &[Candidate], by_edge: &[Vec<usize>]) -> Result<Vec<usize>>
         });
         loop {
             let Some(f) = stack.last_mut() else {
-                return Err(ShoreGeometryError(
-                    "岸线过窄、斜角相接或资源缺失，无法完整拼接；请让水道和陆地至少宽 2 格并加宽急转角",
-                ).into());
+                return Err(NO_SHORE_FIT.into());
             };
             if let Some(c) = f.active.take() {
                 for (at, _) in &candidates[c].cells {
@@ -324,8 +327,7 @@ fn polygon_cells(path: &[Cell]) -> Result<BTreeSet<Cell>> {
 /// Freehand sampling produces one-cell stair steps that complete shore TMPs
 /// cannot cover. Keep exact outlines when possible; otherwise expand to 2x2
 /// blocks, adding at most one cell per axis around the enclosed selection.
-/// Rectangle painting and repair keep their exact geometry. Only tiling
-/// failures trigger snapping; both attempts validate terrain and protection.
+/// Only tiling failures trigger snapping; both attempts validate terrain and protection.
 pub fn outline(doc: &MapDocument, scene: &MapScene, path: &[Cell]) -> Result<PlateauPlan> {
     fit_outline(doc, scene, cliff_tools::enclose(path)?)
 }
@@ -446,6 +448,168 @@ fn ground_transitions(
     Ok(())
 }
 
+/// Include both sides of painted edges and the complete footprints of
+/// existing pieces they touch. The fitting apron alone never selects a piece.
+fn repair_scope(
+    doc: &MapDocument,
+    scene: &MapScene,
+    selection: &BTreeSet<Cell>,
+    zone: &BTreeSet<Cell>,
+) -> Result<BTreeSet<Cell>> {
+    let mut scope = selection.clone();
+    for &at in selection {
+        let w = wet(scene, value(doc, scene, at));
+        for (dx, dy) in [(1, 0), (0, 1), (-1, 0), (0, -1)] {
+            if let Some(n) = offset(at, dx, dy).filter(|n| zone.contains(n))
+                && wet(scene, value(doc, scene, n)) != w
+            {
+                scope.insert(n);
+            }
+        }
+    }
+    let mut pieces = BTreeSet::new();
+    let mut invalid = Vec::new();
+    for &at in zone {
+        let v = value(doc, scene, at);
+        let Some(tile) = id(scene, v).filter(|&t| shore(scene, t)) else {
+            continue;
+        };
+        let Some(template) = scene.palette.templates.get(&(tile, 0)).filter(|template| {
+            template.width > 0
+                && template
+                    .cells
+                    .get(usize::from(v.sub))
+                    .is_some_and(Option::is_some)
+        }) else {
+            invalid.push(at);
+            continue;
+        };
+        let width = i32::from(template.width);
+        let sub = i32::from(v.sub);
+        let footprint: Vec<_> = template
+            .cells
+            .iter()
+            .enumerate()
+            .filter_map(|(i, cell)| {
+                cell.as_ref()?;
+                let i = i as i32;
+                offset(at, i % width - sub % width, i / width - sub / width)
+                    .filter(|&p| doc.check_cell(p).is_ok())
+            })
+            .collect();
+        pieces.insert(footprint);
+    }
+    loop {
+        let before = scope.len();
+        pieces.retain(|footprint| {
+            if footprint.iter().any(|at| scope.contains(at)) {
+                scope.extend(footprint);
+                false
+            } else {
+                true
+            }
+        });
+        if scope.len() == before {
+            break;
+        }
+    }
+    ensure!(invalid.iter().all(|at| !scope.contains(at)), "海岸子块无效");
+    Ok(scope)
+}
+
+/// Try small 2×2 steps when intact TMPs cannot fit the original contour.
+/// Each attempt changes water extent only on brush cells in mixed blocks.
+fn snapped_repair(
+    doc: &MapDocument,
+    scene: &MapScene,
+    selection: &BTreeSet<Cell>,
+    area: &FitArea,
+) -> Result<Option<PlateauPlan>> {
+    let mut attempts = Vec::new();
+    for phase_x in 0..=1 {
+        for phase_y in 0..=1 {
+            let origins: BTreeSet<_> = selection
+                .iter()
+                .filter_map(|&[x, y]| {
+                    Some([
+                        (x.checked_sub(phase_x)? & !1) + phase_x,
+                        (y.checked_sub(phase_y)? & !1) + phase_y,
+                    ])
+                })
+                .collect();
+            let mut candidates: [BTreeMap<Cell, bool>; 4] = Default::default();
+            for [x, y] in origins {
+                let block = [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]];
+                if block.iter().any(|&at| doc.check_cell(at).is_err()) {
+                    continue;
+                }
+                let values = block.map(|at| value(doc, scene, at));
+                let waters = values.map(|v| wet(scene, v));
+                let count = waters.iter().filter(|&&w| w).count();
+                if count == 0 || count == 4 || values.iter().any(|v| v.level != values[0].level) {
+                    continue;
+                }
+                for (target, changes) in [count >= 2, count > 2, true, false]
+                    .into_iter()
+                    .zip(&mut candidates)
+                {
+                    let changed: Vec<_> = block
+                        .into_iter()
+                        .zip(waters)
+                        .enumerate()
+                        .filter(|&(_, (_, w))| w != target)
+                        .collect();
+                    if changed.iter().all(|&(i, (at, _))| {
+                        selection.contains(&at)
+                            && (ground(scene, values[i])
+                                || flat_water(scene, values[i])
+                                || id(scene, values[i]).is_some_and(|tile| shore(scene, tile)))
+                    }) {
+                        changes.extend(changed.into_iter().map(|(_, (at, _))| (at, target)));
+                    }
+                }
+            }
+            attempts.extend(candidates.into_iter().filter(|changes| !changes.is_empty()));
+        }
+    }
+    attempts.sort_unstable_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+    attempts.dedup();
+    'attempt: for changes in attempts {
+        let mut logical = area.logical.clone();
+        let mut edges = area.edges.clone();
+        let mut edits = area.edits.clone();
+        for (&at, &water) in &changes {
+            let old = value(doc, scene, at);
+            logical.insert(at, (water, old.level));
+            edits.insert(at, base_terrain(scene, old, water, area.water)?);
+        }
+        // A snap only changes selected cells. Unchanged edges already
+        // passed validation and belong to the same fit area.
+        for &at in changes.keys() {
+            for neighbor in terrain_tools::neighbors(at) {
+                edges.remove(&edge(at, neighbor));
+            }
+        }
+        for &at in changes.keys() {
+            // Unlike an existing height mismatch, one introduced by a
+            // proposed snap only invalidates this particular contour.
+            if collect_edges(doc, scene, &logical, &mut edges, at).is_err() {
+                continue 'attempt;
+            }
+        }
+        match fit_plan(doc, scene, selection, area, &logical, edges, edits) {
+            Ok(plan) if plan.cliffs.iter().any(|stamp| shore(scene, stamp.tile)) => {
+                return Ok(Some(plan));
+            }
+            // Avoid a "repair" that only fills or drains an isolated feature.
+            Ok(_) => continue,
+            Err(e) if e.is::<ShoreGeometryError>() => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(None)
+}
+
 /// `paint`: Some(true) adds water, Some(false) fills land, None repairs only.
 /// Existing shores in the neighbourhood are first decoded back into wet/dry
 /// cells, so extending, cutting, and filling remove obsolete corners as well.
@@ -455,43 +619,79 @@ pub fn plan(
     selection: BTreeSet<Cell>,
     paint: Option<bool>,
 ) -> Result<PlateauPlan> {
+    let area = prepare_fit_area(doc, scene, &selection, paint)?;
+    match fit_plan(
+        doc,
+        scene,
+        &selection,
+        &area,
+        &area.logical,
+        area.edges.clone(),
+        area.edits.clone(),
+    ) {
+        Err(e) if paint.is_none() && e.is::<ShoreGeometryError>() => {
+            snapped_repair(doc, scene, &selection, &area)?.ok_or(e)
+        }
+        result => result,
+    }
+}
+
+struct FitArea {
+    zone: BTreeSet<Cell>,
+    repair: Option<BTreeSet<Cell>>,
+    styles: BTreeMap<u16, Vec<u16>>,
+    water: i32,
+    logical: HashMap<Cell, (bool, u8)>,
+    edges: BTreeSet<Edge>,
+    edits: BTreeMap<Cell, TerrainValue>,
+}
+
+fn prepare_fit_area(
+    doc: &MapDocument,
+    scene: &MapScene,
+    selection: &BTreeSet<Cell>,
+    paint: Option<bool>,
+) -> Result<FitArea> {
     ensure!(!selection.is_empty(), "请先选择水域范围");
     let ids = scene.palette.tile_ids.context("缺少地形配置")?;
     ensure!(
         ids.water_base >= 0 && ids.shore >= 0,
         "当前环境没有水面与海岸模板"
     );
-    let mut zone = selection.clone();
-    for &p in &selection {
-        doc.check_cell(p)?;
-        for dx in -3..=3 {
-            for dy in -3..=3 {
-                if let Some(n) = offset(p, dx, dy)
-                    && doc.check_cell(n).is_ok()
-                {
-                    zone.insert(n);
+    // Expand the three-cell apron one axis at a time. Clip only after both
+    // passes so a diagonal expansion can reenter the playable diamond.
+    let mut columns = BTreeSet::new();
+    for &at in selection {
+        doc.check_cell(at)?;
+        columns.extend((-3..=3).filter_map(|dx| offset(at, dx, 0)));
+    }
+    let mut zone = BTreeSet::new();
+    for at in columns {
+        zone.extend((-3..=3).filter_map(|dy| offset(at, 0, dy)));
+    }
+    zone.retain(|&at| doc.check_cell(at).is_ok());
+    let repair = if paint.is_none() {
+        let scope = repair_scope(doc, scene, selection, &zone)?;
+        zone.extend(&scope);
+        Some(scope)
+    } else {
+        // Include every cell of old templates crossing the local paint border.
+        let mut examined = BTreeSet::new();
+        loop {
+            let pending: Vec<_> = zone.difference(&examined).copied().collect();
+            if pending.is_empty() {
+                break;
+            }
+            for at in pending {
+                examined.insert(at);
+                let v = value(doc, scene, at);
+                if let Some(tile) = id(scene, v).filter(|&t| shore(scene, t)) {
+                    zone.extend(existing_shore(doc, scene, at, tile, v)?.into_keys());
                 }
             }
         }
-    }
-    // Include every cell of old templates crossing the local repair border.
-    let mut examined = BTreeSet::new();
-    loop {
-        let pending: Vec<_> = zone.difference(&examined).copied().collect();
-        if pending.is_empty() {
-            break;
-        }
-        for at in pending {
-            examined.insert(at);
-            let v = value(doc, scene, at);
-            let Some(tile) = id(scene, v).filter(|&t| shore(scene, t)) else {
-                continue;
-            };
-            zone.extend(existing_shore(doc, scene, at, tile, v)?.into_keys());
-        }
-    }
-    let mut logical = BTreeMap::new();
-    let mut edits = BTreeMap::new();
+        None
+    };
     let water_id = plain_water_tile(scene)?;
     let water = *scene
         .catalog
@@ -499,81 +699,140 @@ pub fn plan(
         .get(&water_id)
         .context("缺少可保存的水面编号")?;
     cliff_authoring::stamp(doc, scene, water_id, *selection.first().unwrap(), 0)?;
+    let scope = repair.as_ref().unwrap_or(&zone);
+    let mut logical = HashMap::with_capacity(zone.len());
+    let mut edits = BTreeMap::new();
     for &at in &zone {
         let old = value(doc, scene, at);
         let is_shore = id(scene, old).is_some_and(|t| shore(scene, t));
-        let selected = selection.contains(&at) && paint.is_some();
-        if selected {
+        let old_wet = wet(scene, old);
+        let painted = paint.filter(|_| selection.contains(&at));
+        if painted.is_some() {
             ensure!(
-                is_shore || wet(scene, old) || ground(scene, old),
+                is_shore || old_wet || ground(scene, old),
                 "{},{} 不是可自动拼接的平地或水面，请避开道路、悬崖和坡道",
                 at[0],
-                at[1]
+                at[1],
             );
         }
-        let w = if selected {
-            paint.unwrap()
-        } else {
-            wet(scene, old)
-        };
+        let w = painted.unwrap_or(old_wet);
         logical.insert(at, (w, old.level));
-        if is_shore || selected {
-            let mut v = if w {
-                TerrainValue {
-                    tile: water,
-                    sub: 0,
-                    ..old
-                }
-            } else {
-                cliff_authoring::clear(scene, old, old.level)?
-            };
-            if w {
-                v.ice = 0;
-            }
-            edits.insert(at, v);
+        if (is_shore && scope.contains(&at)) || painted.is_some() {
+            edits.insert(at, base_terrain(scene, old, w, water)?);
         }
     }
     let mut edges = BTreeSet::new();
-    for (&at, &(w, level)) in &logical {
-        for (dx, dy) in [(1, 0), (0, 1), (-1, 0), (0, -1)] {
-            if let Some(n) = offset(at, dx, dy)
-                && doc.check_cell(n).is_ok()
-            {
-                let (nw, nl) = logical.get(&n).copied().unwrap_or_else(|| {
-                    let v = value(doc, scene, n);
-                    (wet(scene, v), v.level)
-                });
-                if w != nw
-                    && (edits.contains_key(&at)
-                        || edits.contains_key(&n)
-                        || selection.contains(&at)
-                        || selection.contains(&n))
-                {
-                    let dry = if w { n } else { at };
-                    if crate::coastal_cliffs::barrier(scene, value(doc, scene, dry)) {
-                        continue;
-                    }
-                    ensure!(level == nl, "水陆边界高度不同，请使用悬崖或先平整地形");
-                    edges.insert(edge(at, n));
-                }
-            }
+    // Only edges with at least one selected or edited endpoint need a fit.
+    for &at in selection
+        .iter()
+        .chain(edits.keys().filter(|&at| !selection.contains(at)))
+    {
+        collect_edges(doc, scene, &logical, &mut edges, at)?;
+    }
+    Ok(FitArea {
+        zone,
+        repair,
+        styles: shore_styles(scene, ids.shore),
+        water,
+        logical,
+        edges,
+        edits,
+    })
+}
+
+fn base_terrain(
+    scene: &MapScene,
+    old: TerrainValue,
+    wet: bool,
+    water: i32,
+) -> Result<TerrainValue> {
+    if wet {
+        Ok(TerrainValue {
+            tile: water,
+            sub: 0,
+            ice: 0,
+            ..old
+        })
+    } else {
+        cliff_authoring::clear(scene, old, old.level)
+    }
+}
+
+fn collect_edges(
+    doc: &MapDocument,
+    scene: &MapScene,
+    logical: &HashMap<Cell, (bool, u8)>,
+    edges: &mut BTreeSet<Edge>,
+    at: Cell,
+) -> Result<()> {
+    let (w, level) = logical[&at];
+    for n in terrain_tools::neighbors(at) {
+        let (nw, nl) = if let Some(&neighbor) = logical.get(&n) {
+            neighbor
+        } else if doc.check_cell(n).is_ok() {
+            let v = value(doc, scene, n);
+            (wet(scene, v), v.level)
+        } else {
+            continue;
+        };
+        let dry = if w { n } else { at };
+        if w != nw && !crate::coastal_cliffs::barrier(scene, value(doc, scene, dry)) {
+            ensure!(level == nl, "水陆边界高度不同，请使用悬崖或先平整地形");
+            edges.insert(edge(at, n));
         }
     }
-    let fitted = fit_pieces(doc, scene, &logical, edges, |p| {
-        let old = value(doc, scene, p);
-        ground(scene, old) || wet(scene, old) || id(scene, old).is_some_and(|t| shore(scene, t))
-    })?;
+    Ok(())
+}
+
+fn fit_plan(
+    doc: &MapDocument,
+    scene: &MapScene,
+    selection: &BTreeSet<Cell>,
+    area: &FitArea,
+    logical: &HashMap<Cell, (bool, u8)>,
+    edges: BTreeSet<Edge>,
+    mut edits: BTreeMap<Cell, TerrainValue>,
+) -> Result<PlateauPlan> {
+    let scope = area.repair.as_ref().unwrap_or(&area.zone);
+    let fitted = fit_pieces(
+        doc,
+        scene,
+        logical,
+        edges,
+        area.styles.keys().copied(),
+        |p| {
+            let old = value(doc, scene, p);
+            if id(scene, old).is_some_and(|t| shore(scene, t)) {
+                scope.contains(&p)
+            } else {
+                ground(scene, old) || wet(scene, old)
+            }
+        },
+    )?;
     let mut cliffs = Vec::new();
-    for c in fitted {
-        edits.extend(c.cells);
-        cliffs.push(c.stamp);
+    for mut candidate in fitted {
+        // Use the anchor to keep the same look through preview, save, and repair.
+        let tile = area.styles[&candidate.stamp.tile]
+            .iter()
+            .copied()
+            .min_by_key(|&tile| style_score(candidate.stamp.origin, tile))
+            .unwrap_or(candidate.stamp.tile);
+        if tile != candidate.stamp.tile {
+            candidate.stamp.tile = tile;
+            let raw = scene.catalog.raw_tiles[&tile];
+            for (_, cell) in &mut candidate.cells {
+                cell.tile = raw;
+            }
+        }
+        edits.extend(candidate.cells);
+        cliffs.push(candidate.stamp);
     }
-    cliffs.extend(crate::coastal_cliffs::gather(doc, scene, &zone)?);
+    cliffs.extend(crate::coastal_cliffs::gather(doc, scene, scope)?);
     let mut result = PlateauPlan {
         edits,
         overlays: BTreeMap::new(),
         cliffs,
-        interior: selection,
+        interior: selection.clone(),
         base: 0,
     };
     if scene
@@ -583,27 +842,87 @@ pub fn plan(
     {
         crate::coastal_cliffs::adapt(doc, scene, &mut result)?;
     }
-    ground_transitions(doc, scene, &zone, &mut result)?;
+    if let Some(scope) = &area.repair {
+        let mut transitions = scope.clone();
+        transitions.extend(result.edits.keys().copied());
+        ground_transitions(doc, scene, &transitions, &mut result)?;
+    } else {
+        ground_transitions(doc, scene, &area.zone, &mut result)?;
+    }
     result.edits.retain(|&at, v| *v != value(doc, scene, at));
     protect(doc, scene, &result.edits)?;
     Ok(result)
 }
 
+/// Index the four oriented water/land joins by axis and the wet side of
+/// the first endpoint in grid order.
+fn join_direction(along_y: bool, first_wet: bool) -> usize {
+    2 * usize::from(along_y) + usize::from(first_wet)
+}
+
+struct ShorePattern {
+    tile: u16,
+    cells: Vec<(i32, i32, bool, u8)>,
+    joins: [Vec<[i32; 2]>; 4],
+}
+
+impl ShorePattern {
+    fn new(scene: &MapScene, tile: u16) -> Option<Self> {
+        let template = &scene.palette.templates[&(tile, 0)];
+        if template.width == 0 || template.cells.first().is_none_or(Option::is_none) {
+            return None;
+        }
+        let width = i32::from(template.width);
+        let cells: Vec<_> = template
+            .cells
+            .iter()
+            .enumerate()
+            .filter_map(|(sub, meta)| {
+                let meta = (*meta)?;
+                Some((
+                    sub as i32 % width,
+                    sub as i32 / width,
+                    matches!(meta.terrain, 9 | 10),
+                    meta.height,
+                ))
+            })
+            .collect();
+        if template.cells.iter().flatten().any(|meta| meta.slope != 0) {
+            return None;
+        }
+        let mut joins: [Vec<_>; 4] = Default::default();
+        for &(x, y, wet, _) in &cells {
+            for (nx, ny) in [(x + 1, y), (x, y + 1)] {
+                if cells
+                    .iter()
+                    .any(|&(px, py, w, _)| (px, py) == (nx, ny) && w != wet)
+                {
+                    joins[join_direction(x == nx, wet)].push([x, y]);
+                }
+            }
+        }
+        Some(Self { tile, cells, joins })
+    }
+}
+
 fn fit_pieces(
     doc: &MapDocument,
     scene: &MapScene,
-    logical: &BTreeMap<Cell, (bool, u8)>,
+    logical: &HashMap<Cell, (bool, u8)>,
     edges: BTreeSet<Edge>,
+    tiles: impl Iterator<Item = u16>,
     replaceable: impl Fn(Cell) -> bool,
 ) -> Result<Vec<Candidate>> {
-    let ids = scene.palette.tile_ids.context("缺少地形配置")?;
     let edge_list: Vec<_> = edges.into_iter().collect();
     let mut incident: HashMap<Cell, Vec<usize>> = HashMap::new();
     for (i, &(a, b)) in edge_list.iter().enumerate() {
         incident.entry(a).or_default().push(i);
         incident.entry(b).or_default().push(i);
     }
-    let mut origins = BTreeSet::new();
+    let patterns: Vec<_> = tiles
+        .filter_map(|tile| ShorePattern::new(scene, tile))
+        .collect();
+    let mut origins = HashSet::new();
     for &(a, b) in &edge_list {
         for p in [a, b] {
             for dx in -2..=0 {
@@ -618,90 +937,75 @@ fn fit_pieces(
         }
     }
     let mut candidates = Vec::new();
-    let mut seen = BTreeSet::new();
-    // Only the standard 40 joining pieces. The last two are decorative beach
-    // scenes, not repeatable coast geometry.
-    for tile in ids.shore..ids.shore + 40 {
-        let tile = tile as u16;
-        let Some(t) = scene.palette.templates.get(&(tile, 0)) else {
-            continue;
+    let mut has_candidate = vec![false; edge_list.len()];
+    let mut tried = HashSet::new();
+    // Align template water/land joins to actual coast edges. This avoids
+    // stamping every shape at every nearby anchor, and lets us stop as soon
+    // as an edge cannot be covered by any complete template.
+    for (i, &(a, b)) in edge_list.iter().enumerate() {
+        let Some(&(wet_a, _)) = logical.get(&a) else {
+            return Err(NO_SHORE_FIT.into());
         };
-        if t.cells.iter().enumerate().any(|(sub, s)| {
-            s.is_some()
-                && !scene
-                    .palette
-                    .images
-                    .contains_key(&vera20k_core::map::theater::TileKey {
-                        tile_id: tile,
-                        sub_tile: sub as u8,
-                        variant: 0,
-                    })
-        }) {
-            continue;
-        }
-        let pattern: Vec<_> = t
-            .cells
-            .iter()
-            .map(|s| s.map(|s| (matches!(s.terrain, 9 | 10), s.height, s.slope)))
-            .collect();
-        if !seen.insert((t.width, t.height, pattern)) {
-            continue;
-        }
-        for &at in &origins {
-            let Some(&(w, base)) = logical.get(&at) else {
-                continue;
-            };
-            if t.cells
-                .first()
-                .and_then(|s| *s)
-                .is_none_or(|s| matches!(s.terrain, 9 | 10) != w)
-            {
-                continue;
-            }
-            let Ok(cells) = cliff_authoring::stamp(doc, scene, tile, at, base) else {
-                continue;
-            };
-            if !cells.iter().all(|(p, v)| {
-                let Some(&(wet, level)) = logical.get(p) else {
-                    return false;
+        let direction = join_direction(a[0] == b[0], wet_a);
+        for pattern in &patterns {
+            for &[dx, dy] in &pattern.joins[direction] {
+                let Some(at) = offset(a, -dx, -dy).filter(|at| origins.contains(at)) else {
+                    continue;
                 };
-                let s = t.cells[usize::from(v.sub)].unwrap();
-                wet == matches!(s.terrain, 9 | 10)
-                    && level == v.level
-                    && s.slope == 0
-                    && replaceable(*p)
-            }) {
-                continue;
+                if !tried.insert((pattern.tile, at)) {
+                    continue;
+                }
+                let base = logical[&at].1;
+                if !pattern.cells.iter().all(|&(dx, dy, wet, height)| {
+                    offset(at, dx, dy).is_some_and(|p| {
+                        logical.get(&p).is_some_and(|&(expected_wet, level)| {
+                            wet == expected_wet
+                                && level.checked_sub(base) == Some(height)
+                                && replaceable(p)
+                        })
+                    })
+                }) {
+                    continue;
+                }
+                let Ok(cells) = cliff_authoring::stamp(doc, scene, pattern.tile, at, base) else {
+                    continue;
+                };
+                let mut covered = Vec::new();
+                let mut complete = true;
+                for p in cells.keys() {
+                    for &e in incident.get(p).into_iter().flatten() {
+                        let (a, b) = edge_list[e];
+                        if !cells.contains_key(if *p == a { &b } else { &a }) {
+                            complete = false;
+                            break;
+                        }
+                        if *p == a {
+                            covered.push(e);
+                        }
+                    }
+                    if !complete {
+                        break;
+                    }
+                }
+                if !complete {
+                    continue;
+                }
+                for &e in &covered {
+                    has_candidate[e] = true;
+                }
+                candidates.push(Candidate {
+                    stamp: CliffStamp {
+                        tile: pattern.tile,
+                        origin: at,
+                        base,
+                    },
+                    cells: cells.into_iter().collect(),
+                    edges: covered,
+                });
             }
-            let potential: BTreeSet<_> = cells
-                .keys()
-                .flat_map(|p| incident.get(p).into_iter().flatten().copied())
-                .collect();
-            let covered: Vec<_> = potential
-                .into_iter()
-                .filter(|&e| {
-                    let (a, b) = edge_list[e];
-                    cells.contains_key(&a) && cells.contains_key(&b)
-                })
-                .collect();
-            if covered.is_empty()
-                || cells.keys().any(|p| {
-                    incident
-                        .get(p)
-                        .is_some_and(|es| es.iter().any(|e| !covered.contains(e)))
-                })
-            {
-                continue;
-            }
-            candidates.push(Candidate {
-                stamp: CliffStamp {
-                    tile,
-                    origin: at,
-                    base,
-                },
-                cells: cells.into_iter().collect(),
-                edges: covered,
-            });
+        }
+        if !has_candidate[i] {
+            return Err(NO_SHORE_FIT.into());
         }
     }
     candidates.sort_by_key(|c| {
@@ -724,6 +1028,35 @@ fn fit_pieces(
         .into_iter()
         .filter_map(|i| candidates[i].take())
         .collect())
+}
+
+/// Solve with one representative per geometry. Retain identical TMP
+/// metadata as alternate art for that representative.
+fn shore_styles(scene: &MapScene, shore_base: i32) -> BTreeMap<u16, Vec<u16>> {
+    let mut geometry = BTreeMap::new();
+    let mut styles = BTreeMap::<_, Vec<_>>::new();
+    // The two decorative beach scenes after these 40 pieces do not join.
+    for tile in (shore_base..shore_base + 40).filter_map(|tile| u16::try_from(tile).ok()) {
+        if !available(scene, tile) {
+            continue;
+        }
+        let t = &scene.palette.templates[&(tile, 0)];
+        let pattern: Vec<_> = t
+            .cells
+            .iter()
+            .map(|s| s.map(|s| (matches!(s.terrain, 9 | 10), s.height, s.slope)))
+            .collect();
+        let representative = *geometry.entry((t.width, t.height, pattern)).or_insert(tile);
+        let original = &scene.palette.templates[&(representative, 0)];
+        if t.cells
+            .iter()
+            .map(|s| s.map(|s| s.terrain))
+            .eq(original.cells.iter().map(|s| s.map(|s| s.terrain)))
+        {
+            styles.entry(representative).or_default().push(tile);
+        }
+    }
+    styles
 }
 
 fn plain_water_tile(scene: &MapScene) -> Result<u16> {
@@ -926,7 +1259,7 @@ fn fitted_ramp_coast(
             land.insert(forward(across(first, i)?, step)?);
         }
     }
-    let mut logical = BTreeMap::new();
+    let mut logical = HashMap::new();
     let mut edges = BTreeSet::new();
     for &at in &land {
         doc.check_cell(at).ok()?;
@@ -954,11 +1287,17 @@ fn fitted_ramp_coast(
     }
     let mut edits = BTreeMap::new();
     let mut stamps = Vec::new();
-    for part in fit_pieces(doc, scene, &logical, edges, |_| true).ok()? {
+    let ids = scene.palette.tile_ids?;
+    // Ramp recognition also reconstructs legacy approaches with these IDs.
+    let styles = shore_styles(scene, ids.shore);
+    for part in fit_pieces(doc, scene, &logical, edges, styles.keys().copied(), |_| {
+        true
+    })
+    .ok()?
+    {
         edits.extend(part.cells);
         stamps.push(part.stamp);
     }
-    let ids = scene.palette.tile_ids?;
     let green = u16::try_from(ids.green).ok().filter(|&id| {
         let Some(template) = scene.palette.templates.get(&(id, 0)) else {
             return false;

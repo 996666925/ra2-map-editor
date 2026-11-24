@@ -972,9 +972,17 @@ impl MapView {
                 self.editor.nudge_flatten_height(scene, at, direction > 0);
             }
         }
+        let draw_terrain_preview = |editor: &mut crate::editing::Editor| {
+            editor.terrain_preview(&painter, scene, rect, &camera, at);
+        };
+        // The shore brush guide uses the accumulated stroke, including the
+        // pointer sample delivered in this frame.
+        let shore_brush = self.editor.tool == crate::editing::Tool::Terrain
+            && self.editor.terrain_mode == ra2_map_scene::terrain_tools::TerrainMode::ShoreRepair;
         if self.editor.flat_view {
-            self.editor
-                .terrain_preview(&painter, scene, rect, &camera, at);
+            if !shore_brush {
+                draw_terrain_preview(&mut self.editor);
+            }
             self.editor.tunnel_preview(&painter, scene, rect, &camera);
             for &cell in &self.editor.feedback {
                 painter.add(egui::Shape::closed_line(
@@ -991,6 +999,9 @@ impl MapView {
                     primary_release,
                     None,
                 );
+            }
+            if shore_brush {
+                draw_terrain_preview(&mut self.editor);
             }
             for (index, color) in [
                 (self.hover, egui::Color32::YELLOW),
@@ -1035,8 +1046,9 @@ impl MapView {
             }
             return;
         }
-        self.editor
-            .terrain_preview(&painter, scene, rect, &camera, at);
+        if !shore_brush {
+            draw_terrain_preview(&mut self.editor);
+        }
         self.editor.tunnel_preview(&painter, scene, rect, &camera);
         let marker = self
             .editor
@@ -1112,6 +1124,9 @@ impl MapView {
                 release,
                 marker,
             );
+        }
+        if shore_brush {
+            draw_terrain_preview(&mut self.editor);
         }
         if editing && !panning && !self.workbench.cancel_secondary && !self.editor.stroking {
             if response.secondary_clicked() && marker.is_some() {

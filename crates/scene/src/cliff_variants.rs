@@ -114,7 +114,7 @@ pub(crate) fn narrow_halves(scene: &MapScene, stamp: &CliffStamp) -> Option<[Cli
     })
 }
 
-fn score(origin: Cell, tile: u16) -> u64 {
+pub(crate) fn style_score(origin: Cell, tile: u16) -> u64 {
     // SplitMix64 finalizer provides a stable coordinate hash across sessions.
     let mut n = u64::from(origin[0]) | (u64::from(origin[1]) << 16) | (u64::from(tile) << 32);
     n = (n ^ (n >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
@@ -128,7 +128,7 @@ fn pick_style(
     tangent: Option<[i16; 2]>,
 ) -> Option<u16> {
     let ids = candidates.into_iter().flatten();
-    let best_at = |at| ids.clone().min_by_key(|&tile| score(at, tile));
+    let best_at = |at| ids.clone().min_by_key(|&tile| style_score(at, tile));
     let Some(step) = tangent else {
         return best_at(origin);
     };
@@ -139,7 +139,7 @@ fn pick_style(
         let mut line = origin;
         line[axis] = 0;
         return ids.min_by_key(|&tile| {
-            let rank = score(line, tile);
+            let rank = style_score(line, tile);
             if even_pair { rank } else { !rank }
         });
     }
@@ -152,7 +152,7 @@ fn pick_style(
     let after = offset(origin, step.map(|d| 2 * d)).and_then(best_at);
     ids.clone()
         .filter(|&tile| Some(tile) != before && Some(tile) != after)
-        .min_by_key(|&tile| score(origin, tile))
+        .min_by_key(|&tile| style_score(origin, tile))
         .or_else(|| best_at(origin))
 }
 
