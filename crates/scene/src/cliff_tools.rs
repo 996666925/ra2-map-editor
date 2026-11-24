@@ -5,7 +5,7 @@
 use crate::{map::MapScene, terrain_tools::value};
 use anyhow::{Context, Result, ensure};
 use ra2_map_document::document::{Cell, MapDocument, Target, TerrainValue, Value, cell_line};
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque, btree_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 use vera20k_core::map::theater::TileKey;
 
@@ -161,15 +161,59 @@ const DIRECTIONS: [(i32, i32, u8); 8] = [
     (-1, -1, 0x40),
 ];
 type Point = (i32, i32);
-fn mask(levels: &HashMap<Point, u8>, stamped: &BTreeMap<Cell, TerrainValue>, p: Point) -> u8 {
-    let target = levels.get(&p).copied().unwrap_or(0).saturating_add(4);
-    DIRECTIONS
-        .iter()
-        .filter(|&&(dx, dy, _)| {
-            let n = (p.0 + dx, p.1 + dy);
-            levels.get(&n) == Some(&target) && !stamped.contains_key(&[n.0 as u16, n.1 as u16])
+
+/// Bounded row-major working grid. The high bit records a stamped cell;
+/// heights themselves never exceed MAX_CLIFF_LEVEL.
+struct CliffGrid {
+    lo: Point,
+    hi: Point,
+    width: usize,
+    cells: Vec<u8>,
+}
+
+impl CliffGrid {
+    const STAMPED: u8 = 0x80;
+
+    fn new(lo: Point, hi: Point, level: u8) -> Self {
+        let width = (hi.0 - lo.0 + 1) as usize;
+        let rows = (hi.1 - lo.1 + 1) as usize;
+        Self {
+            lo,
+            hi,
+            width,
+            cells: vec![level; width * rows],
+        }
+    }
+
+    fn index(&self, (x, y): Point) -> Option<usize> {
+        if x < self.lo.0 || x > self.hi.0 || y < self.lo.1 || y > self.hi.1 {
+            return None;
+        }
+        Some((y - self.lo.1) as usize * self.width + (x - self.lo.0) as usize)
+    }
+
+    fn get(&self, p: Point) -> Option<u8> {
+        self.index(p).map(|i| self.cells[i])
+    }
+
+    fn set(&mut self, p: Point, value: u8) {
+        let index = self.index(p).expect("cliff cell must fit the padded grid");
+        self.cells[index] = value;
+    }
+
+    fn facing(&self, p: Point) -> u8 {
+        let target = self.get(p).map_or(0, |v| v & MAX_CLIFF_LEVEL) + 4;
+        if target > MAX_CLIFF_LEVEL {
+            return 0;
+        }
+        DIRECTIONS.iter().fold(0, |mask, &(dx, dy, bit)| {
+            if self.get((p.0 + dx, p.1 + dy)) == Some(target) {
+                mask | bit
+            } else {
+                mask
+            }
         })
-        .fold(0, |m, &(_, _, bit)| m | bit)
+    }
 }
 
 /// Stable representatives of the game's equivalent piece triples. 1-based.
@@ -248,7 +292,7 @@ pub(crate) fn open_geometry(
     base: u8,
     edge: &BTreeSet<Cell>,
 ) -> Result<PlateauPlan> {
-    geometry_impl(doc, scene, interior, base, Some(edge), false)
+    geometry_impl(doc, scene, interior, base, Some(edge), false, false)
 }
 
 /// Pure topology compiler, shared by new plateaus and existing-terrain edits.
@@ -258,7 +302,16 @@ pub(crate) fn geometry(
     interior: BTreeSet<Cell>,
     base: u8,
 ) -> Result<PlateauPlan> {
-    geometry_impl(doc, scene, interior, base, None, false)
+    geometry_impl(doc, scene, interior, base, None, false, false)
+}
+
+pub(super) fn cut_geometry(
+    doc: &MapDocument,
+    scene: &MapScene,
+    interior: BTreeSet<Cell>,
+    base: u8,
+) -> Result<PlateauPlan> {
+    geometry_impl(doc, scene, interior, base, None, false, true)
 }
 
 /// Inward-facing cliffs with a lowered floor; ordinary exterior ground is
@@ -269,7 +322,7 @@ pub(crate) fn pit_geometry(
     interior: BTreeSet<Cell>,
     base: u8,
 ) -> Result<PlateauPlan> {
-    geometry_impl(doc, scene, interior, base, None, true)
+    geometry_impl(doc, scene, interior, base, None, true, false)
 }
 
 fn geometry_impl(
@@ -279,6 +332,7 @@ fn geometry_impl(
     base: u8,
     edge: Option<&BTreeSet<Cell>>,
     low_inside: bool,
+    cut: bool,
 ) -> Result<PlateauPlan> {
     ensure!(
         base <= MAX_CLIFF_BASE,
@@ -315,36 +369,36 @@ fn geometry_impl(
             && hi.1 < i32::from(MAX_CELL_SIDE),
         "高台及悬崖边界超出固定格网，请留出 3 格空间"
     );
-    let mut levels = HashMap::new();
-    for x in lo.0..=hi.0 {
-        for y in lo.1..=hi.1 {
-            levels.insert(
-                (x, y),
-                base + if interior.contains(&[x as u16, y as u16]) != low_inside {
-                    4
-                } else {
-                    0
-                },
-            );
-        }
+    let mut levels = CliffGrid::new(lo, hi, base + if low_inside { 4 } else { 0 });
+    for &[x, y] in &interior {
+        levels.set(
+            (i32::from(x), i32::from(y)),
+            base + if low_inside { 0 } else { 4 },
+        );
     }
-    let mut coords: Vec<_> = levels.keys().copied().collect();
-    coords.sort_unstable_by_key(|&(x, y)| (x + y, x));
+    // Process in the same (x + y, x) order as the cliff selector without
+    // allocating and sorting one coordinate per cell of the bounding box.
+    let coords = (lo.0 + lo.1..=hi.0 + hi.1)
+        .flat_map(|sum| (lo.0.max(sum - hi.1)..=hi.0.min(sum - lo.1)).map(move |x| (x, sum - x)));
     let mut stamped = BTreeMap::new();
     let mut cliffs = Vec::new();
     for (x, y) in coords {
         if edge.is_some_and(|edge| !edge.contains(&[x as u16, y as u16])) {
             continue;
         }
-        if stamped.contains_key(&[x as u16, y as u16]) {
+        let state = levels.get((x, y)).unwrap();
+        if state != base {
             continue;
         }
-        let m = mask(&levels, &stamped, (x, y));
+        let m = levels.facing((x, y));
+        if m == 0 {
+            continue;
+        }
         let Some(selected) = piece(
             m,
-            mask(&levels, &stamped, (x, y + 1)),
-            mask(&levels, &stamped, (x + 1, y)),
-            mask(&levels, &stamped, (x + 1, y + 1)),
+            levels.facing((x, y + 1)),
+            levels.facing((x + 1, y)),
+            levels.facing((x + 1, y + 1)),
         ) else {
             continue;
         };
@@ -390,7 +444,7 @@ fn geometry_impl(
             .get(&tile)
             .copied()
             .context("悬崖模板无法映射到地图编号")?;
-        let anchor = levels[&(x, y)];
+        let anchor = state;
         let mut cells = Vec::new();
         for (sub, metadata) in t.cells.iter().enumerate() {
             let Some(metadata) = metadata else {
@@ -436,7 +490,9 @@ fn geometry_impl(
         }
         ensure!(!cells.is_empty(), "悬崖模板没有有效子块");
         for (at, v) in cells {
-            levels.insert((i32::from(at[0]), i32::from(at[1])), v.level);
+            let point = (i32::from(at[0]), i32::from(at[1]));
+            ensure!(levels.index(point).is_some(), "悬崖延伸到轮廓之外");
+            levels.set(point, v.level | CliffGrid::STAMPED);
             stamped.insert(at, v);
         }
         cliffs.push(CliffStamp {
@@ -460,22 +516,29 @@ fn geometry_impl(
             continue;
         }
         ensure!(
-            levels.get(&(i32::from(at[0]), i32::from(at[1]))) == Some(&(base + 4)),
+            levels
+                .get((i32::from(at[0]), i32::from(at[1])))
+                .map(|state| state & MAX_CLIFF_LEVEL)
+                == Some(base + 4),
             "轮廓过窄，无法保留连续高台内部；请扩大区域"
         );
     }
     // Every height discontinuity must be covered by the complete cliff stamps.
     // This rejects an open contour rather than leaving invisible height walls.
-    for (&(x, y), &level) in &levels {
-        for (dx, dy) in [(1, 0), (0, 1)] {
-            let next = (x + dx, y + dy);
-            if let Some(&other) = levels.get(&next)
-                && other != level
-            {
+    for (i, &state) in levels.cells.iter().enumerate() {
+        for next in [
+            ((i + 1) % levels.width != 0).then_some(i + 1),
+            Some(i + levels.width),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|next| levels.cells.get(next).copied())
+        {
+            if (next ^ state) & MAX_CLIFF_LEVEL != 0 {
+                // Compiled terrain has just two possible heights; the stamp
+                // bit identifies which side covers the discontinuity.
                 ensure!(
-                    level.abs_diff(other) == 4
-                        && (stamped.contains_key(&[x as u16, y as u16])
-                            || stamped.contains_key(&[next.0 as u16, next.1 as u16])),
+                    (state | next) & CliffGrid::STAMPED != 0,
                     "轮廓无法闭合，请加宽狭窄区域或转角"
                 );
             }
@@ -492,11 +555,9 @@ fn geometry_impl(
         interior
     };
     let mut edits = stamped;
-    for (&(x, y), &level) in &levels {
-        let at = [x as u16, y as u16];
-        if (!low_inside && level == base + 4 || low_inside && interior.contains(&at))
-            && let Entry::Vacant(entry) = edits.entry(at)
-        {
+    for &at in &interior {
+        let level = if low_inside { base } else { base + 4 };
+        if let Entry::Vacant(entry) = edits.entry(at) {
             let old = value(doc, scene, at);
             // An island needs dry high ground inside its cliff walls.
             let next = if !low_inside && crate::shore_tools::flat_water(scene, old) {
@@ -504,9 +565,12 @@ fn geometry_impl(
             } else {
                 TerrainValue { level, ..old }
             };
-            entry.insert(next);
+            if !cut || next != old {
+                entry.insert(next);
+            }
         }
     }
+
     Ok(PlateauPlan {
         edits,
         overlays: BTreeMap::new(),
@@ -547,12 +611,6 @@ fn validate_impl(
 ) -> Result<()> {
     ensure!(base <= MAX_CLIFF_BASE, "低地高度超出悬崖基准范围");
     let ids = scene.palette.tile_ids.context("当前环境没有地形配置")?;
-    let translated: HashMap<_, _> = scene
-        .catalog
-        .raw_tiles
-        .iter()
-        .map(|(&tile, &raw)| (raw, tile))
-        .collect();
     let mut checked_shore = BTreeSet::new();
     for (&at, v) in edits {
         doc.check_cell(at)?;
@@ -560,7 +618,7 @@ fn validate_impl(
         if existing && old == *v {
             continue;
         }
-        let tile = translated.get(&old.tile).copied();
+        let tile = scene.palette.raw_ids.get(&old.tile).copied();
         let geometry = tile
             .and_then(|tile| scene.palette.templates.get(&(tile, 0)))
             .and_then(|t| t.cells.get(usize::from(old.sub)))

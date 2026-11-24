@@ -9,6 +9,10 @@ use ra2_map_document::document::{Cell, MapDocument, TerrainValue, cell_line};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use vera20k_core::map::cell_index::MAX_CELL_SIDE;
 
+#[path = "cliff_cut.rs"]
+mod cut;
+pub use cut::{CliffCut, CutSide};
+
 fn tile(scene: &MapScene, raw: i32) -> Option<u16> {
     scene.palette.raw_ids.get(&raw).copied()
 }
@@ -53,11 +57,12 @@ fn existing(
     scene: &MapScene,
     seeds: &BTreeSet<Cell>,
     base: u8,
+    padding: i32,
 ) -> Result<(BTreeSet<Cell>, BTreeSet<Cell>)> {
     let mut queue = VecDeque::new();
     for &at in seeds {
-        for dx in -2..=2 {
-            for dy in -2..=2 {
+        for dx in -padding..=padding {
+            for dy in -padding..=padding {
                 if let Some(p) = offset(at, dx, dy) {
                     queue.push_back(p);
                 }
@@ -115,44 +120,48 @@ fn existing(
                 old.insert(p);
             }
         }
-        let piece = crate::coastal_cliffs::piece(scene, id)
-            .context("无法识别已有悬崖")?
-            .0
-            + 1;
-        let dirs: &[(i32, i32)] = match piece {
-            1 | 3..=4 | 35..=38 => &[(1, 0)],
-            2 => &[(1, -1)],
-            5..=8 => &[(0, -1)],
-            9..=11 | 34 => &[(0, -1), (-1, 0)],
-            12..=14 => &[(-1, -1)],
-            15..=18 => &[(-1, 0)],
-            19..=21 | 23..=26 => &[(0, 1)],
-            22 => &[(-1, 1)],
-            27..=30 => &[(1, 1)],
-            31..=33 => &[(1, 0), (0, 1)],
-            39 => &[(1, 0), (0, -1)],
-            40 => &[(-1, 0), (0, 1)],
-            _ => &[],
-        };
-        let stamp = cliff_tools::CliffStamp {
-            tile: id,
-            origin,
-            base,
-        };
-        let second =
-            crate::cliff_variants::narrow_halves(scene, &stamp).map(|halves| halves[1].origin);
-        for anchor in std::iter::once(origin).chain(second) {
-            for &(dx, dy) in dirs {
-                if let Some(p) = offset(anchor, dx, dy)
-                    && doc.check_cell(p).is_ok()
-                    && value(doc, scene, p).level == base + 4
-                {
-                    core.insert(p);
-                }
-            }
-        }
+        core.extend(
+            cliff_rim(scene, id, origin, base).filter(|&at| {
+                doc.check_cell(at).is_ok() && value(doc, scene, at).level == base + 4
+            }),
+        );
     }
     Ok((core, old))
+}
+
+/// Recover the logical high-side cells of an existing standard cliff stamp.
+fn cliff_rim(scene: &MapScene, id: u16, origin: Cell, base: u8) -> impl Iterator<Item = Cell> {
+    let piece = crate::coastal_cliffs::piece(scene, id)
+        .expect("recognized cliff stamp")
+        .0
+        + 1;
+    let dirs: &[(i32, i32)] = match piece {
+        1 | 3..=4 | 35..=38 => &[(1, 0)],
+        2 => &[(1, -1)],
+        5..=8 => &[(0, -1)],
+        9..=11 | 34 => &[(0, -1), (-1, 0)],
+        12..=14 => &[(-1, -1)],
+        15..=18 => &[(-1, 0)],
+        19..=21 | 23..=26 => &[(0, 1)],
+        22 => &[(-1, 1)],
+        27..=30 => &[(1, 1)],
+        31..=33 => &[(1, 0), (0, 1)],
+        39 => &[(1, 0), (0, -1)],
+        40 => &[(-1, 0), (0, 1)],
+        _ => &[],
+    };
+    let stamp = cliff_tools::CliffStamp {
+        tile: id,
+        origin,
+        base,
+    };
+    let second = crate::cliff_variants::narrow_halves(scene, &stamp).map(|halves| halves[1].origin);
+    std::iter::once(origin)
+        .chain(second)
+        .flat_map(move |anchor| {
+            dirs.iter()
+                .filter_map(move |&(dx, dy)| offset(anchor, dx, dy))
+        })
 }
 
 pub fn infer_base(doc: &MapDocument, scene: &MapScene, at: Cell) -> u8 {
@@ -319,12 +328,10 @@ fn portals(
     Ok(protected)
 }
 
-fn preserve_portals(
-    doc: &MapDocument,
-    scene: &MapScene,
-    p: &mut PlateauPlan,
-    protected: &BTreeSet<Cell>,
-) {
+fn preserve_portals(scene: &MapScene, p: &mut PlateauPlan, protected: &BTreeSet<Cell>) {
+    if protected.is_empty() {
+        return;
+    }
     let mut restore = protected.clone();
     p.cliffs.retain(|s| {
         let t = &scene.palette.templates[&(s.tile, 0)];
@@ -351,7 +358,6 @@ fn preserve_portals(
     for at in restore {
         p.edits.remove(&at);
     }
-    p.edits.retain(|&at, v| *v != value(doc, scene, at));
 }
 
 /// Union/subtraction rebuilds the touched connected components, including old
@@ -368,7 +374,7 @@ pub fn reshape(
         "低地高度须在 0～{} 层",
         cliff_tools::MAX_CLIFF_BASE
     );
-    let (mut core, mut old) = existing(doc, scene, &selection, base)?;
+    let (mut core, mut old) = existing(doc, scene, &selection, base, 2)?;
     let protected = portals(doc, scene, &mut core, &selection, base)?;
     if cut {
         ensure!(!core.is_empty(), "所选区域没有可切除的同层高台");
@@ -384,27 +390,51 @@ pub fn reshape(
     } else {
         core.extend(selection);
     }
-    if core.is_empty() {
-        let edits = old
-            .into_iter()
-            .map(|at| Ok((at, clear(scene, value(doc, scene, at), base)?)))
-            .collect::<Result<BTreeMap<_, _>>>()?;
-        cliff_tools::validate(doc, scene, &edits, base, true)?;
-        return Ok(PlateauPlan {
-            edits,
+    let plan = remesh(doc, scene, core, old, base, &protected, None)?;
+    cliff_tools::validate(doc, scene, &plan.edits, base, true)?;
+    Ok(plan)
+}
+
+fn remesh(
+    doc: &MapDocument,
+    scene: &MapScene,
+    core: BTreeSet<Cell>,
+    old: BTreeSet<Cell>,
+    base: u8,
+    protected: &BTreeSet<Cell>,
+    lowered: Option<&BTreeSet<Cell>>,
+) -> Result<PlateauPlan> {
+    let mut p = if core.is_empty() {
+        PlateauPlan {
+            edits: BTreeMap::new(),
             overlays: BTreeMap::new(),
             cliffs: vec![],
             interior: core,
             base,
-        });
+        }
+    } else if lowered.is_some() {
+        cliff_tools::cut_geometry(doc, scene, core, base)?
+    } else {
+        cliff_tools::geometry(doc, scene, core, base)?
+    };
+    if let Some(lowered) = lowered {
+        // Ordinary ground keeps its original material. Old wall pieces are
+        // restored separately by finish, including any covered high cells.
+        for &at in lowered {
+            p.edits.entry(at).or_insert_with(|| TerrainValue {
+                level: base,
+                ..value(doc, scene, at)
+            });
+        }
     }
-    let p = cliff_tools::geometry(doc, scene, core, base)?;
-    let mut p = finish(doc, scene, p, old)?;
-    preserve_portals(doc, scene, &mut p, &protected);
+    p = finish(doc, scene, p, old)?;
+    if p.cliffs.is_empty() {
+        return Ok(p);
+    }
+    preserve_portals(scene, &mut p, protected);
     crate::coastal_cliffs::adapt(doc, scene, &mut p)?;
     crate::cliff_variants::apply(doc, scene, &mut p);
     p.edits.retain(|&at, v| *v != value(doc, scene, at));
-    cliff_tools::validate(doc, scene, &p.edits, base, true)?;
     Ok(p)
 }
 

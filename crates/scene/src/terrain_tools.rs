@@ -113,7 +113,7 @@ impl TerrainMode {
             Self::CliffPolyline => "折线悬崖",
             Self::CliffFront => "悬崖线段（正面）",
             Self::CliffBack => "悬崖线段（背面）",
-            Self::PlateauCut => "切除高台（矩形）",
+            Self::PlateauCut => "切除高台",
             Self::RampEntrance => "插入高台坡道",
             Self::Bridge => "桥梁（拖动连接两端）",
             Self::Water => "矩形水域（自动岸线）",
@@ -163,7 +163,7 @@ impl TerrainMode {
 }
 
 pub fn value(doc: &MapDocument, scene: &MapScene, at: Cell) -> TerrainValue {
-    doc.terrain(at).unwrap_or(TerrainValue {
+    doc.terrain(at).unwrap_or_else(|| TerrainValue {
         tile: scene
             .palette
             .tile_ids

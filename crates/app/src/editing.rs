@@ -143,6 +143,8 @@ pub struct Editor {
     cliff_repair_base: u8,
     shore_brush_width: u16,
     cliff_high_left: bool,
+    plateau_cut_method: cliff_edit::PlateauCutMethod,
+    cliff_cut: cliff_edit::CutOptions,
     road_style: ra2_map_scene::road_tools::RoadStyle,
     pub bridge_kind: ra2_map_scene::bridge_tools::BridgeKind,
     pub auto_walls: bool,
@@ -252,6 +254,8 @@ impl Editor {
             cliff_repair_base: 0,
             shore_brush_width: 7,
             cliff_high_left: true,
+            plateau_cut_method: Default::default(),
+            cliff_cut: Default::default(),
             road_style: Default::default(),
             bridge_kind: Default::default(),
             auto_walls: true,
@@ -312,6 +316,8 @@ impl Editor {
         self.template_level = None;
         self.terrain_hover = None;
         self.cliff_repair_base = 0;
+        self.plateau_cut_method = Default::default();
+        self.cliff_cut = Default::default();
         self.document_name = scene.source.name.clone();
         self.doc = if scene.images.is_empty() {
             None

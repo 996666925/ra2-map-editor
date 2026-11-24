@@ -1,9 +1,10 @@
 //! Deferred plateau gestures and cached, side-effect-free generation previews.
 use super::*;
 use crate::i18n::tr;
-use ra2_map_scene::cliff_authoring;
+use ra2_map_scene::cliff_authoring::{self, CliffCut, CutSide};
 use ra2_map_scene::cliff_tools::{self, PlateauPlan};
 use ra2_map_scene::road_tools::{self, RoadStyle};
+use std::sync::Weak;
 
 fn click_polyline(mode: TerrainMode) -> bool {
     matches!(
@@ -16,8 +17,49 @@ fn click_polyline(mode: TerrainMode) -> bool {
 pub(super) struct PlateauEdit {
     gesture: Option<Gesture>,
     preview: Option<Preview>,
+    draw_order: PreviewDrawOrder,
     road_draft: RoadDraft,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum PlateauCutMethod {
+    #[default]
+    Rectangle,
+    TwoPoint,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct CutOptions {
+    side: CutSide,
+    target: Option<u8>,
+}
+
+struct CutDraft {
+    selection: CliffCut,
+    document: u64,
+    revision: u64,
+    palette: Weak<ra2_map_assets::catalog::TerrainPalette>,
+}
+
+impl CutDraft {
+    fn is_current(&self, doc: &MapDocument, scene: &MapScene) -> bool {
+        self.document == doc.id
+            && self.revision == doc.edit_revision()
+            && self.palette.as_ptr() == Arc::as_ptr(&scene.palette)
+    }
+}
+
+// A cut is an infinite directed line through the anchor. Endpoints on the
+// same ray select the same terrain regardless of their distance.
+fn cut_ray(start: Cell, end: Cell) -> [i32; 2] {
+    let [dx, dy] = [0, 1].map(|axis| i32::from(end[axis]) - i32::from(start[axis]));
+    let (mut a, mut b) = (dx.abs(), dy.abs());
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    [dx / a.max(1), dy / a.max(1)]
+}
+
 struct Gesture {
     mode: TerrainMode,
     start: Cell,
@@ -29,6 +71,7 @@ struct Gesture {
     road_axis_lock: bool,
     road_leg_pressed: bool,
     shore_brush: Option<ShoreBrush>,
+    cut: Option<CutDraft>,
 }
 
 struct ShoreBrush {
@@ -80,12 +123,33 @@ struct Key {
     bridge: ra2_map_scene::bridge_tools::BridgeKind,
     road: RoadStyle,
     road_axis_lock: bool,
+    cut: Option<(CutOptions, [i32; 2])>,
 }
 struct Preview {
     key: Key,
     result: std::result::Result<Arc<PlateauPlan>, String>,
     bridge_draft: Option<Arc<PlateauPlan>>,
 }
+#[derive(Default)]
+struct PreviewDrawOrder {
+    plan: Weak<PlateauPlan>,
+    edits: Vec<(Cell, crate::document::TerrainValue)>,
+}
+
+impl PreviewDrawOrder {
+    fn edits(&mut self, plan: &Arc<PlateauPlan>) -> &[(Cell, crate::document::TerrainValue)] {
+        if self.plan.as_ptr() != Arc::as_ptr(plan) {
+            self.plan = Arc::downgrade(plan);
+            self.edits.clear();
+            self.edits
+                .extend(plan.edits.iter().map(|(&at, &v)| (at, v)));
+            self.edits
+                .sort_unstable_by_key(|(at, _)| (u32::from(at[0]) + u32::from(at[1]), at[0]));
+        }
+        &self.edits
+    }
+}
+
 #[derive(PartialEq, Eq)]
 struct RoadDraftKey {
     document: u64,
@@ -222,6 +286,7 @@ impl PlateauEdit {
         doc: &MapDocument,
         scene: &MapScene,
         at: Cell,
+        cut: CutOptions,
     ) -> std::result::Result<Arc<PlateauPlan>, String> {
         let g = self.gesture.as_ref().ok_or(tr!("按下并拖动绘制高台"))?;
         if g.mode == TerrainMode::RoadPolyline {
@@ -229,36 +294,45 @@ impl PlateauEdit {
                 .road_draft
                 .generate(doc, scene, &g.path, g.road_endpoint(at), g.road);
         }
-        let mut path = g.path.clone();
-        // Water previews show the exact closure Enter will commit. Hover
-        // only draws a guide for the next edge until that point is clicked.
-        if !matches!(
-            g.mode,
-            TerrainMode::WaterPolyline | TerrainMode::ShoreRepair
-        ) && path.last() != Some(&at)
-        {
-            path.push(at);
-        }
-        if !matches!(
-            g.mode,
-            TerrainMode::CliffOutline
-                | TerrainMode::CliffPolyline
-                | TerrainMode::WaterOutline
-                | TerrainMode::WaterPolyline
-                | TerrainMode::ShoreRepair
-        ) {
-            path = vec![
-                g.start,
-                if g.mode == TerrainMode::HeightFill {
-                    g.start
-                } else {
-                    at
+        let palette = Arc::as_ptr(&scene.palette) as usize;
+        let cut_key = if let Some(draft) = &g.cut {
+            if !draft.is_current(doc, scene) {
+                return Err("地图或地形资源已变化，请取消后重新选择削切起点".into());
+            }
+            doc.check_cell(at).map_err(|error| error.to_string())?;
+            Some((
+                CutOptions {
+                    target: Some(cut.target.unwrap_or(g.base)),
+                    ..cut
                 },
-            ];
-        }
+                cut_ray(g.start, at),
+            ))
+        } else {
+            None
+        };
+        let path = if cut_key.is_some() {
+            Vec::new()
+        } else {
+            match g.mode {
+                TerrainMode::CliffOutline
+                | TerrainMode::CliffPolyline
+                | TerrainMode::WaterOutline => {
+                    let mut path = g.path.clone();
+                    if path.last() != Some(&at) {
+                        path.push(at);
+                    }
+                    path
+                }
+                // Water previews show the exact closure Enter will commit. Hover
+                // only draws a guide for the next edge until that point is clicked.
+                TerrainMode::WaterPolyline | TerrainMode::ShoreRepair => g.path.clone(),
+                TerrainMode::HeightFill => vec![g.start, g.start],
+                _ => vec![g.start, at],
+            }
+        };
         let key = Key {
             document: doc.id,
-            palette: Arc::as_ptr(&scene.palette) as usize,
+            palette,
             state: doc.edit_revision(),
             mode: g.mode,
             path,
@@ -267,9 +341,15 @@ impl PlateauEdit {
             bridge: g.bridge,
             road: g.road,
             road_axis_lock: g.road_axis_lock,
+            cut: cut_key,
         };
         if self.preview.as_ref().is_none_or(|p| p.key != key) {
             let result = (|| -> Result<Arc<PlateauPlan>> {
+                if let Some(draft) = &g.cut {
+                    return Ok(Arc::new(
+                        draft.selection.plan(doc, scene, at, cut.side, cut.target)?,
+                    ));
+                }
                 if key.mode == TerrainMode::CliffPolyline {
                     return Ok(Arc::new(cliff_authoring::polyline(
                         doc,
@@ -389,6 +469,11 @@ impl PlateauEdit {
     }
 }
 impl Editor {
+    fn two_point_cut_selected(&self) -> bool {
+        self.terrain_mode == TerrainMode::PlateauCut
+            && self.plateau_cut_method == PlateauCutMethod::TwoPoint
+    }
+
     pub(super) fn polyline_shortcuts(&mut self, ctx: &egui::Context, scene: &MapScene) {
         if !self
             .plateau
@@ -418,13 +503,17 @@ impl Editor {
         };
         let last = *g.path.last().unwrap();
         let mode = g.mode;
+        let two_point_cut = g.cut.is_some();
         let result = self
             .plateau
-            .generate(self.doc.as_ref().unwrap(), scene, last);
-        // Keep an invalid polyline editable so its last vertex can be removed.
-        if click_polyline(mode)
+            .generate(self.doc.as_ref().unwrap(), scene, last, self.cliff_cut);
+        // Invalid clicks leave the existing draft available for correction.
+        if (click_polyline(mode) || two_point_cut)
             && let Err(ref e) = result
         {
+            if two_point_cut {
+                self.plateau.gesture.as_mut().unwrap().path.truncate(1);
+            }
             self.status = crate::i18n::text(e).to_owned();
             return;
         }
@@ -455,7 +544,12 @@ impl Editor {
         at: Cell,
     ) -> Result<Arc<PlateauPlan>> {
         self.plateau
-            .generate(self.doc.as_ref().context(tr!("没有地图文档"))?, scene, at)
+            .generate(
+                self.doc.as_ref().context(tr!("没有地图文档"))?,
+                scene,
+                at,
+                self.cliff_cut,
+            )
             .map_err(anyhow::Error::msg)
     }
 
@@ -471,6 +565,15 @@ impl Editor {
             && !(self.tool == Tool::Terrain && self.terrain_mode.planned())
         {
             return false;
+        }
+        if let Some(g) = self.plateau.gesture.as_mut()
+            && g.cut.is_some()
+        {
+            if press && let Some(at) = at {
+                g.path.push(at);
+                self.finish_plateau(scene);
+            }
+            return true;
         }
         if let Some(g) = self.plateau.gesture.as_mut()
             && click_polyline(g.mode)
@@ -509,11 +612,40 @@ impl Editor {
             let Some(doc) = self.doc.as_ref() else {
                 return true;
             };
+            let two_point_cut = self.two_point_cut_selected();
+            let cut = if two_point_cut {
+                match CliffCut::select(doc, scene, at) {
+                    Ok(cut) => {
+                        if let Some(target) = &mut self.cliff_cut.target {
+                            *target = (*target).clamp(cut.base(), cut.base() + 3);
+                        }
+                        self.status =
+                            tr!("移动鼠标预览削切，点击第二点提交。Esc 或右键取消。").into();
+                        Some(CutDraft {
+                            selection: cut,
+                            document: doc.id,
+                            revision: doc.edit_revision(),
+                            palette: Arc::downgrade(&scene.palette),
+                        })
+                    }
+                    Err(error) => {
+                        self.status = crate::i18n::text(&error.to_string()).into();
+                        return true;
+                    }
+                }
+            } else {
+                None
+            };
             self.plateau.cancel();
             self.feedback.clear();
             self.stroking = true;
             self.plateau.gesture = Some(Gesture {
                 mode: self.terrain_mode,
+                base: cut
+                    .as_ref()
+                    .map(|draft| draft.selection.base())
+                    .unwrap_or_else(|| self.plateau_base_for_click(doc, scene, at)),
+                cut,
                 start: at,
                 path: vec![at],
                 high_left: self.cliff_high_left,
@@ -530,27 +662,8 @@ impl Editor {
                 road_leg_pressed: self.terrain_mode == TerrainMode::RoadPolyline
                     && down
                     && !release,
-                base: if self.terrain_mode == TerrainMode::HeightFill {
-                    self.flatten_level
-                } else if self.terrain_mode == TerrainMode::CliffHeightRepair {
-                    self.cliff_repair_base
-                } else {
-                    self.template_level.unwrap_or_else(|| {
-                        if self.terrain_mode.joining()
-                            || self.terrain_mode == TerrainMode::CliffPolyline
-                        {
-                            terrain_tools::value(doc, scene, at).level
-                        } else if self.terrain_mode == TerrainMode::Bridge {
-                            terrain_tools::value(doc, scene, at)
-                                .level
-                                .saturating_sub(if self.bridge_kind.high() { 4 } else { 0 })
-                        } else {
-                            cliff_authoring::infer_base(doc, scene, at)
-                        }
-                    })
-                },
             });
-            if click_polyline(self.terrain_mode) {
+            if click_polyline(self.terrain_mode) || two_point_cut {
                 return true;
             }
         }
@@ -575,6 +688,24 @@ impl Editor {
         true
     }
 
+    fn plateau_base_for_click(&self, doc: &MapDocument, scene: &MapScene, at: Cell) -> u8 {
+        match self.terrain_mode {
+            TerrainMode::HeightFill => self.flatten_level,
+            TerrainMode::CliffHeightRepair => self.cliff_repair_base,
+            mode => self.template_level.unwrap_or_else(|| {
+                if mode.joining() || mode == TerrainMode::CliffPolyline {
+                    terrain_tools::value(doc, scene, at).level
+                } else if mode == TerrainMode::Bridge {
+                    terrain_tools::value(doc, scene, at)
+                        .level
+                        .saturating_sub(if self.bridge_kind.high() { 4 } else { 0 })
+                } else {
+                    cliff_authoring::infer_base(doc, scene, at)
+                }
+            }),
+        }
+    }
+
     pub(super) fn plateau_preview(
         &mut self,
         painter: &egui::Painter,
@@ -587,13 +718,16 @@ impl Editor {
             return;
         };
         let world = camera.world_rect(rect);
-        let cell_points = |at: Cell, level: u8| {
+        let cell_center = |at: Cell, level: u8| {
             let (x, y) = vera20k_core::map::terrain::iso_to_screen(
                 at[0],
                 at[1],
                 if self.flat_view { 0 } else { level },
             );
-            let center = rect.min + (egui::pos2(x + 30., y + 15.) - world.min) * camera.zoom;
+            rect.min + (egui::pos2(x + 30., y + 15.) - world.min) * camera.zoom
+        };
+        let cell_points = |at: Cell, level: u8| {
+            let center = cell_center(at, level);
             rect.expand(60. * camera.zoom).contains(center).then(|| {
                 let points = [[0., -15.], [30., 0.], [0., 15.], [-30., 0.]]
                     .map(|[x, y]| center + egui::vec2(x, y) * camera.zoom);
@@ -622,6 +756,8 @@ impl Editor {
                 egui::Align2::LEFT_TOP,
                 if self.picking_height {
                     tr!("点击崖顶或地面拾取高度；此次点击不会修改地图。")
+                } else if self.two_point_cut_selected() {
+                    tr!("第一点请点在已有悬崖或相连的高台顶面")
                 } else if self.terrain_mode == TerrainMode::CliffPolyline {
                     tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。")
                 } else if self.terrain_mode == TerrainMode::WaterPolyline {
@@ -636,12 +772,30 @@ impl Editor {
             );
             return;
         }
+        let gesture = self.plateau.gesture.as_ref().unwrap();
+        if at == gesture.start
+            && gesture
+                .cut
+                .as_ref()
+                .is_some_and(|draft| draft.is_current(doc, scene))
+        {
+            let surface = cell_center(at, terrain_tools::value(doc, scene, at).level);
+            painter.circle_filled(surface, 3., valid_color);
+            painter.text(
+                rect.left_top() + egui::vec2(12., 12.),
+                egui::Align2::LEFT_TOP,
+                tr!("移动鼠标预览削切，点击第二点提交。Esc 或右键取消。"),
+                egui::FontId::proportional(13.),
+                Color32::LIGHT_GREEN,
+            );
+            return;
+        }
         let starting_road = self.plateau.gesture.as_ref().is_some_and(|g| {
             g.mode == TerrainMode::RoadPolyline
                 && g.path.len() == 1
                 && g.road_endpoint(at) == g.start
         });
-        let result = self.plateau.generate(doc, scene, at);
+        let result = self.plateau.generate(doc, scene, at, self.cliff_cut);
         let error = result
             .as_ref()
             .err()
@@ -691,9 +845,7 @@ impl Editor {
         match plan {
             Some(plan) => {
                 if self.framework {
-                    let mut cells: Vec<_> = plan.edits.iter().collect();
-                    cells.sort_by_key(|(at, _)| (u32::from(at[0]) + u32::from(at[1]), at[0]));
-                    for (&at, &value) in cells {
+                    for &(at, value) in self.plateau.draw_order.edits(&plan) {
                         self.ui_state.framework_textures.draw(
                             painter,
                             scene,
@@ -707,120 +859,66 @@ impl Editor {
                             Color32::from_white_alpha(210),
                         );
                     }
-                }
-                // Filled water and restored ground are part of the ghost too.
-                let stamped: BTreeSet<_> = plan.cliffs.iter().map(|s| (s.tile, s.origin)).collect();
-                let mut preview_cells: Vec<_> = plan.edits.iter().collect();
-                preview_cells.sort_by_key(|(at, _)| (u32::from(at[0]) + u32::from(at[1]), at[0]));
-                for (&at, v) in preview_cells {
-                    if self.flat_view || self.framework {
-                        continue;
-                    }
-                    let Some(&tile) = scene.palette.raw_ids.get(&v.tile) else {
-                        continue;
-                    };
-                    if matches!(
-                        self.plateau.gesture.as_ref().unwrap().mode,
-                        TerrainMode::HeightFill | TerrainMode::CliffHeightRepair
-                    ) {
-                        let key = vera20k_core::map::theater::TileKey {
-                            tile_id: tile,
-                            sub_tile: v.sub,
-                            variant: 0,
-                        };
-                        let Some(image) = scene.palette.images.get(&key) else {
+                } else if !self.flat_view {
+                    // Filled water and restored ground are part of the ghost too.
+                    let stamped: BTreeSet<_> =
+                        plan.cliffs.iter().map(|s| (s.tile, s.origin)).collect();
+                    for &(at, v) in self.plateau.draw_order.edits(&plan) {
+                        let Some(&tile) = scene.palette.raw_ids.get(&v.tile) else {
                             continue;
                         };
-                        let (x, y) =
-                            vera20k_core::map::terrain::iso_to_screen(at[0], at[1], v.level);
-                        let origin = egui::pos2(
-                            x + image.info.offset[0] as f32,
-                            y + image.info.offset[1] as f32,
-                        );
-                        let target = egui::Rect::from_min_size(
-                            rect.min + (origin - world.min) * camera.zoom,
-                            egui::vec2(image.info.width as f32, image.info.height as f32)
-                                * camera.zoom,
-                        );
-                        if target.intersects(rect)
-                            && let Some(texture) = terrain_ui::subtile_texture(
-                                &mut self.ui_state,
-                                painter.ctx(),
-                                scene,
-                                key,
-                            )
-                        {
-                            painter.image(
-                                texture.id(),
-                                target,
-                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                                Color32::from_white_alpha(180),
+                        if matches!(
+                            self.plateau.gesture.as_ref().unwrap().mode,
+                            TerrainMode::HeightFill | TerrainMode::CliffHeightRepair
+                        ) {
+                            let key = vera20k_core::map::theater::TileKey {
+                                tile_id: tile,
+                                sub_tile: v.sub,
+                                variant: 0,
+                            };
+                            let Some(image) = scene.palette.images.get(&key) else {
+                                continue;
+                            };
+                            let (x, y) =
+                                vera20k_core::map::terrain::iso_to_screen(at[0], at[1], v.level);
+                            let origin = egui::pos2(
+                                x + image.info.offset[0] as f32,
+                                y + image.info.offset[1] as f32,
                             );
+                            let target = egui::Rect::from_min_size(
+                                rect.min + (origin - world.min) * camera.zoom,
+                                egui::vec2(image.info.width as f32, image.info.height as f32)
+                                    * camera.zoom,
+                            );
+                            if target.intersects(rect)
+                                && let Some(texture) = terrain_ui::subtile_texture(
+                                    &mut self.ui_state,
+                                    painter.ctx(),
+                                    scene,
+                                    key,
+                                )
+                            {
+                                painter.image(
+                                    texture.id(),
+                                    target,
+                                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                                    Color32::from_white_alpha(180),
+                                );
+                            }
+                            continue;
                         }
-                        continue;
-                    }
-                    let Some(t) = scene.palette.templates.get(&(tile, 0)) else {
-                        continue;
-                    };
-                    if t.width != 1 || t.height != 1 || stamped.contains(&(tile, at)) {
-                        continue;
-                    }
-                    let Some(image) = scene.palette.previews.get(&(tile, 0)) else {
-                        continue;
-                    };
-                    let origin =
-                        egui::pos2(
+                        let Some(t) = scene.palette.templates.get(&(tile, 0)) else {
+                            continue;
+                        };
+                        if t.width != 1 || t.height != 1 || stamped.contains(&(tile, at)) {
+                            continue;
+                        }
+                        let Some(image) = scene.palette.previews.get(&(tile, 0)) else {
+                            continue;
+                        };
+                        let origin = egui::pos2(
                             (f32::from(at[0]) - f32::from(at[1])) * 30.,
                             f32::from(at[0] + at[1]) * 15. - f32::from(v.level) * 15.,
-                        ) + egui::vec2(image.info.offset[0] as f32, image.info.offset[1] as f32);
-                    let target = egui::Rect::from_min_size(
-                        rect.min + (origin - world.min) * camera.zoom,
-                        egui::vec2(image.info.width as f32, image.info.height as f32) * camera.zoom,
-                    );
-                    if target.intersects(rect)
-                        && let Some(texture) = terrain_ui::template_texture(
-                            &mut self.ui_state,
-                            painter.ctx(),
-                            scene,
-                            vera20k_core::map::theater::TileKey {
-                                tile_id: tile,
-                                sub_tile: 0,
-                                variant: 0,
-                            },
-                        )
-                    {
-                        painter.image(
-                            texture.id(),
-                            target,
-                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                            Color32::from_white_alpha(180),
-                        );
-                    }
-                }
-                for (&at, v) in &plan.edits {
-                    outline(painter, at, v.level);
-                }
-                let mut stamps: Vec<_> = plan.cliffs.iter().collect();
-                stamps.sort_by_key(|s| {
-                    (u32::from(s.origin[0]) + u32::from(s.origin[1]), s.origin[0])
-                });
-                for stamp in stamps {
-                    if self.flat_view || self.framework {
-                        continue;
-                    }
-                    let key = vera20k_core::map::theater::TileKey {
-                        tile_id: stamp.tile,
-                        sub_tile: 0,
-                        variant: 0,
-                    };
-                    if let Some(texture) =
-                        terrain_ui::template_texture(&mut self.ui_state, painter.ctx(), scene, key)
-                    {
-                        let image = &scene.palette.previews[&(stamp.tile, 0)];
-                        let origin = egui::pos2(
-                            (f32::from(stamp.origin[0]) - f32::from(stamp.origin[1])) * 30.,
-                            f32::from(stamp.origin[0] + stamp.origin[1]) * 15.
-                                - f32::from(stamp.base) * 15.,
                         ) + egui::vec2(
                             image.info.offset[0] as f32,
                             image.info.offset[1] as f32,
@@ -830,13 +928,69 @@ impl Editor {
                             egui::vec2(image.info.width as f32, image.info.height as f32)
                                 * camera.zoom,
                         );
-                        if target.intersects(rect) {
+                        if target.intersects(rect)
+                            && let Some(texture) = terrain_ui::template_texture(
+                                &mut self.ui_state,
+                                painter.ctx(),
+                                scene,
+                                vera20k_core::map::theater::TileKey {
+                                    tile_id: tile,
+                                    sub_tile: 0,
+                                    variant: 0,
+                                },
+                            )
+                        {
                             painter.image(
                                 texture.id(),
                                 target,
                                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
                                 Color32::from_white_alpha(180),
                             );
+                        }
+                    }
+                }
+                for (&at, v) in &plan.edits {
+                    outline(painter, at, v.level);
+                }
+                if !self.flat_view && !self.framework {
+                    let mut stamps: Vec<_> = plan.cliffs.iter().collect();
+                    stamps.sort_by_key(|s| {
+                        (u32::from(s.origin[0]) + u32::from(s.origin[1]), s.origin[0])
+                    });
+                    for stamp in stamps {
+                        let key = vera20k_core::map::theater::TileKey {
+                            tile_id: stamp.tile,
+                            sub_tile: 0,
+                            variant: 0,
+                        };
+                        if let Some(texture) = terrain_ui::template_texture(
+                            &mut self.ui_state,
+                            painter.ctx(),
+                            scene,
+                            key,
+                        ) {
+                            let image = &scene.palette.previews[&(stamp.tile, 0)];
+                            let origin = egui::pos2(
+                                (f32::from(stamp.origin[0]) - f32::from(stamp.origin[1])) * 30.,
+                                f32::from(stamp.origin[0] + stamp.origin[1]) * 15.
+                                    - f32::from(stamp.base) * 15.,
+                            ) + egui::vec2(
+                                image.info.offset[0] as f32,
+                                image.info.offset[1] as f32,
+                            );
+                            let target = egui::Rect::from_min_size(
+                                rect.min + (origin - world.min) * camera.zoom,
+                                egui::vec2(image.info.width as f32, image.info.height as f32)
+                                    * camera.zoom,
+                            );
+                            if target.intersects(rect) {
+                                painter.image(
+                                    texture.id(),
+                                    target,
+                                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                                    Color32::from_white_alpha(180),
+                                );
+                            }
                         }
                     }
                 }
@@ -950,7 +1104,9 @@ impl Editor {
                             )
                         })
                         .unwrap_or_else(|| {
-                            if g.mode == TerrainMode::CliffPolyline {
+                            if g.cut.is_some() {
+                                tr!("削至 {arg0} 层 · {arg1} 格修改 · 点击第二点提交，Esc 取消", arg0 = self.cliff_cut.target.unwrap_or(plan.base), arg1 = plan.edits.len())
+                            } else if g.mode == TerrainMode::CliffPolyline {
                                 format!("{heights} · {}", tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。"))
                             } else if g.mode == TerrainMode::WaterPolyline {
                                 tr!("点击添加折点，点击起点或按 Enter 闭合填水。Backspace 撤回折点，Esc 取消。").into()
@@ -973,32 +1129,31 @@ impl Editor {
             }
             None => {
                 let g = self.plateau.gesture.as_ref().unwrap();
-                if matches!(
-                    g.mode,
+                match g.mode {
+                    _ if g.cut.is_some() => {}
                     TerrainMode::Plateau
-                        | TerrainMode::CliffHeightRepair
-                        | TerrainMode::PlateauCut
-                        | TerrainMode::Water
-                        | TerrainMode::LandFill
-                        | TerrainMode::CoastalCliff
-                ) {
-                    for cell in cliff_tools::rectangle(g.start, at) {
-                        outline(painter, cell, g.base);
-                    }
-                } else if !matches!(
-                    g.mode,
-                    TerrainMode::WaterPolyline
-                        | TerrainMode::RoadPolyline
-                        | TerrainMode::ShoreRepair
-                ) {
-                    for (a, b) in g
-                        .path
-                        .iter()
-                        .chain(std::iter::once(&at))
-                        .zip(g.path.iter().skip(1).chain(std::iter::once(&at)))
-                    {
-                        for cell in cell_line(*a, *b) {
+                    | TerrainMode::CliffHeightRepair
+                    | TerrainMode::PlateauCut
+                    | TerrainMode::Water
+                    | TerrainMode::LandFill
+                    | TerrainMode::CoastalCliff => {
+                        for cell in cliff_tools::rectangle(g.start, at) {
                             outline(painter, cell, g.base);
+                        }
+                    }
+                    TerrainMode::WaterPolyline
+                    | TerrainMode::RoadPolyline
+                    | TerrainMode::ShoreRepair => {}
+                    _ => {
+                        for (a, b) in g
+                            .path
+                            .iter()
+                            .chain(std::iter::once(&at))
+                            .zip(g.path.iter().skip(1).chain(std::iter::once(&at)))
+                        {
+                            for cell in cell_line(*a, *b) {
+                                outline(painter, cell, g.base);
+                            }
                         }
                     }
                 }
@@ -1107,9 +1262,85 @@ impl Editor {
                 );
             }
         }
+        if let Some(g) = self.plateau.gesture.as_ref().filter(|g| g.cut.is_some()) {
+            let start = cell_center(g.start, g.base + 4);
+            let end = cell_center(at, g.base + 4);
+            let guide = egui::Stroke::new(2., guide_color);
+            for (cell, point) in [(g.start, start), (at, end)] {
+                let surface = cell_center(cell, terrain_tools::value(doc, scene, cell).level);
+                painter.circle_filled(surface, 3., guide_color);
+                if surface != point {
+                    painter.extend(egui::Shape::dashed_line(&[surface, point], guide, 4., 4.));
+                }
+            }
+            let direction = end - start;
+            if direction.length() > 0. {
+                painter.arrow(start, direction, guide);
+                let right = egui::vec2(-direction.y, direction.x).normalized();
+                let cut_direction = if self.cliff_cut.side == CutSide::Left {
+                    -right
+                } else {
+                    right
+                };
+                painter.arrow(start.lerp(end, 0.5), cut_direction * 20., guide);
+            }
+        }
     }
 
     pub(super) fn plateau_options(&mut self, ui: &mut egui::Ui, scene: &MapScene) {
+        if self.terrain_mode == TerrainMode::PlateauCut {
+            ui.add_enabled_ui(!self.stroking, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(tr!("切除方式"));
+                    ui.selectable_value(
+                        &mut self.plateau_cut_method,
+                        PlateauCutMethod::Rectangle,
+                        tr!("矩形拖选"),
+                    );
+                    ui.selectable_value(
+                        &mut self.plateau_cut_method,
+                        PlateauCutMethod::TwoPoint,
+                        tr!("两点切线"),
+                    );
+                });
+            });
+        }
+        if self.two_point_cut_selected() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(tr!("削切方向"));
+                ui.selectable_value(&mut self.cliff_cut.side, CutSide::Left, tr!("左侧"));
+                ui.selectable_value(&mut self.cliff_cut.side, CutSide::Right, tr!("右侧"));
+            });
+            let base = self
+                .plateau
+                .gesture
+                .as_ref()
+                .and_then(|g| g.cut.as_ref())
+                .map(|draft| draft.selection.base());
+            let mut manual = self.cliff_cut.target.is_some();
+            if ui.checkbox(&mut manual, tr!("指定削切高度")).changed() {
+                self.cliff_cut.target = manual.then_some(base.unwrap_or(0));
+            }
+            if let Some(height) = &mut self.cliff_cut.target {
+                let bounds = base.map_or(0..=cliff_tools::MAX_CLIFF_LEVEL - 1, |b| b..=b + 3);
+                ui.add(
+                    egui::Slider::new(height, bounds)
+                        .smart_aim(false)
+                        .text(tr!("目标高度")),
+                );
+            } else if let Some(base) = base {
+                ui.small(tr!("自动削至崖脚 {arg0} 层", arg0 = base));
+            } else {
+                ui.small(tr!("默认削至崖脚"));
+            }
+            ui.small(tr!(
+                "先点悬崖或高台顶面，再点第二点确定切线。左右以第一点看向第二点为准。"
+            ));
+            ui.small(tr!(
+                "到崖脚时重建崖壁，中间高度用坡面衔接。Esc 或右键取消。"
+            ));
+            return;
+        }
         if self.terrain_mode == TerrainMode::CliffPolyline {
             ui.add_enabled_ui(!self.stroking, |ui| {
                 let label = ui.label(tr!("高侧方向"));

@@ -161,9 +161,12 @@ fn road_route_hover_keeps_confirmed_diagonal_and_displays_it_behind_an_error() {
                 .collect::<Vec<_>>()
         );
     }
-    let result = editor
-        .plateau
-        .generate(editor.doc.as_ref().unwrap(), &scene, blocked);
+    let result = editor.plateau.generate(
+        editor.doc.as_ref().unwrap(),
+        &scene,
+        blocked,
+        CutOptions::default(),
+    );
     assert!(result.is_err());
     assert!(Arc::ptr_eq(
         &confirmed,
@@ -823,11 +826,21 @@ fn plateau_preview_is_cached_and_matches_release_even_after_tool_and_height_chan
     e.pointer(&scene, Some([38, 38]), false, true, false, None);
     let plan = e
         .plateau
-        .generate(e.doc.as_ref().unwrap(), &scene, [38, 38])
+        .generate(
+            e.doc.as_ref().unwrap(),
+            &scene,
+            [38, 38],
+            CutOptions::default(),
+        )
         .unwrap();
     let same = e
         .plateau
-        .generate(e.doc.as_ref().unwrap(), &scene, [38, 38])
+        .generate(
+            e.doc.as_ref().unwrap(),
+            &scene,
+            [38, 38],
+            CutOptions::default(),
+        )
         .unwrap();
     assert!(Arc::ptr_eq(&plan, &same));
     let output = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
@@ -909,12 +922,22 @@ fn bridge_gesture_freezes_type_previews_and_commits_all_rows_once() {
     e.pointer(&scene, Some([30, 30]), true, true, false, None);
     let p = e
         .plateau
-        .generate(e.doc.as_ref().unwrap(), &scene, [42, 30])
+        .generate(
+            e.doc.as_ref().unwrap(),
+            &scene,
+            [42, 30],
+            CutOptions::default(),
+        )
         .unwrap();
     assert_eq!(p.overlays.len(), 39);
     let same = e
         .plateau
-        .generate(e.doc.as_ref().unwrap(), &scene, [42, 30])
+        .generate(
+            e.doc.as_ref().unwrap(),
+            &scene,
+            [42, 30],
+            CutOptions::default(),
+        )
         .unwrap();
     assert!(Arc::ptr_eq(&p, &same));
     let output = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
@@ -1259,6 +1282,196 @@ fn tall_plateau_gesture_automatically_infers_base_above_fourteen_and_undoes_once
     e.pointer(&scene, None, false, false, true, None);
     assert_eq!(e.doc.as_ref().unwrap().terrain([35, 35]).unwrap().level, 28);
     let after = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.history(true, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn plateau_cut_defaults_to_rectangle_and_can_remove_the_whole_plateau() {
+    let (mut e, _, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    let doc = e.doc.as_mut().unwrap();
+    cliff_authoring::reshape(
+        doc,
+        &scene,
+        cliff_tools::rectangle([26, 26], [50, 50]),
+        4,
+        false,
+    )
+    .unwrap()
+    .apply(doc)
+    .unwrap();
+    e.commit(&scene, TerrainMode::Plateau.name());
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.activate_terrain_mode(TerrainMode::PlateauCut);
+    assert_eq!(e.plateau_cut_method, PlateauCutMethod::Rectangle);
+
+    let (start, end) = ([24, 24], [52, 52]);
+    e.pointer(&scene, Some(start), true, true, false, None);
+    e.pointer(&scene, Some(end), false, true, false, None);
+    let plan = e.plateau_preview_plan(&scene, end).unwrap();
+    assert_eq!(plan.edits[&[38, 38]].level, 4);
+    assert!(plan.cliffs.is_empty());
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+
+    e.pointer(&scene, Some(end), false, false, true, None);
+    let doc = e.doc.as_ref().unwrap();
+    assert!(!e.stroking, "{}", e.status);
+    assert_eq!(doc.undo_name(), Some(TerrainMode::PlateauCut.name()));
+    for (&at, &v) in &plan.edits {
+        assert_eq!(doc.terrain(at), Some(v));
+    }
+    let after = doc.snapshot().bytes().unwrap();
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.history(true, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn plateau_cut_two_click_draft_updates_settings_and_is_one_history_entry() {
+    use egui_kittest::kittest::Queryable as _;
+    let (mut e, ctx, root) = editor();
+    let scene = scene();
+    e.attach(&scene);
+    let doc = e.doc.as_mut().unwrap();
+    cliff_authoring::reshape(
+        doc,
+        &scene,
+        cliff_tools::rectangle([26, 26], [50, 50]),
+        4,
+        false,
+    )
+    .unwrap()
+    .apply(doc)
+    .unwrap();
+    e.commit(&scene, TerrainMode::Plateau.name());
+    let before = e.doc.as_ref().unwrap().snapshot().bytes().unwrap();
+    e.activate_terrain_mode(TerrainMode::PlateauCut);
+    let mut harness = egui_kittest::Harness::<Editor>::builder()
+        .with_context_setup(|ctx| {
+            ctx.add_font_provider(Arc::new(
+                egui_system_font_provider::SystemFontProvider::new(),
+            ));
+        })
+        .with_accessibility_check(false)
+        .with_size([420., 600.])
+        .build_ui_state(|ui, e| e.plateau_options(ui, &scene), e);
+    harness.run();
+    assert!(harness.query_by_label("指定低地基准高度").is_some());
+    assert!(harness.query_by_label("削切方向").is_none());
+    harness.get_by_label("两点切线").click();
+    harness.run();
+    assert!(harness.query_by_label("指定低地基准高度").is_none());
+    assert!(harness.query_by_label("削切方向").is_some());
+    harness.get_by_label("矩形拖选").click();
+    harness.run();
+    assert!(harness.query_by_label("指定低地基准高度").is_some());
+    harness.get_by_label("两点切线").click();
+    harness.run();
+    assert_eq!(
+        harness.state().plateau_cut_method,
+        PlateauCutMethod::TwoPoint
+    );
+    let e = harness.state_mut();
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+
+    let start = [38, 28];
+    let end = [38, 49];
+    e.pointer(&scene, Some(start), true, true, false, None);
+    let camera = crate::camera::MapCamera {
+        center: scene.bounds.center(),
+        zoom: 0.75,
+    };
+    let first_frame = crate::test_support::run_ui(&ctx, Default::default(), |ui| {
+        e.terrain_preview(ui.painter(), &scene, ui.max_rect(), &camera, Some(start));
+    });
+    assert!(first_frame.shapes.iter().any(|s| matches!(&s.shape,
+        egui::Shape::Text(t) if t.galley.text().contains("点击第二点提交")
+    )));
+    assert!(
+        e.plateau.preview.is_none(),
+        "a stationary first point needs no plan"
+    );
+    e.pointer(&scene, Some(end), false, true, false, None);
+    e.pointer(&scene, Some(end), false, false, true, None);
+    assert!(e.stroking, "drag and release don't place the second point");
+    let left = e.plateau_preview_plan(&scene, end).unwrap();
+    let same_ray = e.plateau_preview_plan(&scene, [38, 45]).unwrap();
+    assert!(Arc::ptr_eq(&left, &same_ray));
+    assert_eq!(left.edits[&[45, 40]].level, 4);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+
+    e.pointer(&scene, Some(start), true, false, true, None);
+    assert!(e.stroking, "a duplicate endpoint keeps the anchor active");
+    assert!(e.status.contains("切线需要两个不同的点"));
+    harness.run();
+    harness.get_by_label("矩形拖选").click();
+    harness.run();
+    harness.get_by_label("右侧").click();
+    harness.run();
+    harness.get_by_label("指定削切高度").click();
+    harness.run();
+    assert_eq!(harness.state().cliff_cut.target, Some(4));
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, "目标高度")
+        .set_value_accesskit(6.);
+    harness.run();
+    let mut e = harness.into_state();
+    assert_eq!(e.plateau_cut_method, PlateauCutMethod::TwoPoint);
+    assert_eq!(e.cliff_cut.side, CutSide::Right);
+    assert_eq!(e.cliff_cut.target, Some(6));
+    let right = e.plateau_preview_plan(&scene, end).unwrap();
+    assert_eq!(right.edits[&[32, 40]].level, 6);
+    assert!(!right.edits.contains_key(&[45, 40]));
+    assert!(Arc::ptr_eq(
+        &right,
+        &e.plateau_preview_plan(&scene, end).unwrap()
+    ));
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+
+    let mut draw_order = PreviewDrawOrder::default();
+    let cached_order = draw_order.edits(&right);
+    assert_eq!(cached_order.len(), right.edits.len());
+    assert!(cached_order.windows(2).all(|pair| {
+        let key = |[x, y]: Cell| (u32::from(x) + u32::from(y), x);
+        key(pair[0].0) < key(pair[1].0)
+    }));
+    assert!(
+        draw_order
+            .edits(&left)
+            .iter()
+            .any(|&(at, _)| at == [45, 40])
+    );
+
+    let mut alternate = scene.clone();
+    alternate.palette = self::scene().palette;
+    let error = e.plateau_preview_plan(&alternate, end).err().unwrap();
+    assert!(error.to_string().contains("地图或地形资源已变化"));
+    e.pointer(&alternate, Some(end), true, false, true, None);
+    assert!(e.stroking);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+
+    polyline_key(&mut e, &ctx, &scene, egui::Key::Escape);
+    assert!(!e.stroking);
+    assert!(e.plateau.gesture.is_none());
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.pointer(&scene, Some(start), true, false, true, None);
+    e.pointer(&scene, Some(end), true, false, true, None);
+    let doc = e.doc.as_ref().unwrap();
+    assert!(!e.stroking);
+    assert_eq!(doc.undo_name(), Some(TerrainMode::PlateauCut.name()));
+    for (&at, &v) in &right.edits {
+        assert_eq!(doc.terrain(at), Some(v));
+    }
+    let after = doc.snapshot().bytes().unwrap();
     e.history(false, &scene);
     assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
     e.history(true, &scene);

@@ -11,6 +11,10 @@ fn setup() -> (MapDocument, MapScene) {
 }
 
 fn setup_size(size: u16) -> (MapDocument, MapScene) {
+    setup_size_at(size, 4)
+}
+
+fn setup_size_at(size: u16, level: u8) -> (MapDocument, MapScene) {
     let f = Fixture::with_authoring();
     let mut i = f.install();
     i.catalog = Catalog::load(&i.manager, &i.theater);
@@ -21,7 +25,7 @@ fn setup_size(size: u16) -> (MapDocument, MapScene) {
         NewMapOptions {
             width: size,
             height: size,
-            level: 4,
+            level,
             ..Default::default()
         }
         .bytes()
@@ -655,7 +659,7 @@ fn recover_plateau_then_expand_merge_and_cut_without_old_internal_cliffs() {
     let p = cliff_tools::plan(&doc, &scene, cliff_tools::rectangle([40, 40], [50, 50]), 4).unwrap();
     p.apply(&mut doc).unwrap();
     doc.commit("original");
-    let (core, _) = existing(&doc, &scene, &BTreeSet::from([[45, 45]]), 4).unwrap();
+    let (core, _) = existing(&doc, &scene, &BTreeSet::from([[45, 45]]), 4, 2).unwrap();
     assert_eq!(
         core, p.interior,
         "recover logical interior from disk geometry"
@@ -1603,4 +1607,176 @@ fn cliff_variants_do_not_move_the_ramp_landing() {
             );
         }
     }
+}
+
+#[test]
+fn cliff_cut_rectangular_plateau_at_all_depths() {
+    let (mut doc, scene) = setup();
+    reshape(
+        &doc,
+        &scene,
+        cliff_tools::rectangle([40, 40], [64, 64]),
+        4,
+        false,
+    )
+    .unwrap()
+    .apply(&mut doc)
+    .unwrap();
+    let cliff_pick = value(&doc, &scene, [52, 39]);
+    assert!(cliff(&scene, cliff_pick, [52, 39]).is_some());
+    let from_wall = CliffCut::select(&doc, &scene, [52, 39]).unwrap();
+    let wall_plan = from_wall
+        .plan(&doc, &scene, [52, 66], CutSide::Left, None)
+        .unwrap();
+    assert_eq!(wall_plan.edits[&[59, 52]].level, 4);
+    let cut = CliffCut::select(&doc, &scene, [52, 42]).unwrap();
+    assert_eq!(cut.base(), 4);
+    for target in 4..8 {
+        for side in [CutSide::Left, CutSide::Right] {
+            let plan = cut
+                .plan(&doc, &scene, [52, 66], side, Some(target))
+                .unwrap_or_else(|e| panic!("{side:?} to {target}: {e:#}"));
+            let mut result = doc.fork();
+            plan.apply(&mut result).unwrap();
+            complete(&result, &scene, &plan);
+            let (removed, kept) = if side == CutSide::Left {
+                ([59, 52], [45, 52])
+            } else {
+                ([45, 52], [59, 52])
+            };
+            assert_eq!(value(&result, &scene, removed).level, target);
+            assert_eq!(value(&result, &scene, kept), value(&doc, &scene, kept));
+        }
+    }
+}
+
+#[test]
+fn cliff_cut_picks_one_component_and_rejects_obstructed_cuts_atomically() {
+    let (mut doc, scene) = setup_size(95);
+    for (a, b) in [([50, 50], [72, 72]), ([78, 50], [88, 72])] {
+        reshape(&doc, &scene, cliff_tools::rectangle(a, b), 4, false)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+    }
+    doc.commit("plateaus");
+    assert!(CliffCut::select(&doc, &scene, [45, 52]).is_err());
+    let start = [61, 61];
+    let cut = CliffCut::select(&doc, &scene, start).unwrap();
+    assert!(cut.plan(&doc, &scene, start, CutSide::Right, None).is_err());
+    assert!(
+        cut.plan(&doc, &scene, [70, 70], CutSide::Left, Some(8))
+            .is_err()
+    );
+    for end in [[61, 73], [70, 70], [71, 63]] {
+        let plan = cut
+            .plan(&doc, &scene, end, CutSide::Left, None)
+            .unwrap_or_else(|e| panic!("{end:?}: {e:#}"));
+        assert!(!plan.edits.is_empty());
+        assert!(plan.edits.keys().all(|&[x, _]| x < 77));
+        let mut result = doc.fork();
+        plan.apply(&mut result).unwrap();
+        complete(&result, &scene, &plan);
+        assert_eq!(value(&result, &scene, start).level, 8);
+        assert_eq!(value(&result, &scene, [82, 61]).level, 8);
+    }
+    doc.set(Target::Overlay([67, 61]), Some(Value::Overlay(102, 0)))
+        .unwrap();
+    let before = doc.snapshot().bytes().unwrap();
+    let failure = cut
+        .plan(&doc, &scene, [61, 73], CutSide::Left, None)
+        .err()
+        .unwrap();
+    assert!(failure.to_string().contains("覆盖物"));
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+fn cliff_cut_does_not_follow_touching_low_wall_tiles_into_another_plateau() {
+    let (mut doc, scene) = setup();
+    for (a, b) in [([41, 41], [54, 62]), ([58, 41], [70, 62])] {
+        cliff_tools::plan(&doc, &scene, cliff_tools::rectangle(a, b), 4)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+    }
+    let cut = CliffCut::select(&doc, &scene, [48, 50]).unwrap();
+    let second_plateau = [62, 51];
+    let (low_face_connected, _) =
+        existing(&doc, &scene, &BTreeSet::from([[48, 50]]), 4, 0).unwrap();
+    assert!(low_face_connected.contains(&second_plateau));
+    let plan = cut
+        .plan(&doc, &scene, [48, 60], CutSide::Left, None)
+        .unwrap();
+    assert!(!plan.edits.contains_key(&second_plateau));
+    assert!(plan.edits.contains_key(&[52, 51]));
+}
+
+#[test]
+fn cliff_cut_large_high_plateau_at_diamond_edge_preserves_kept_land() {
+    let base = cliff_tools::MAX_CLIFF_BASE;
+    let (mut doc, scene) = setup_size_at(220, base);
+    reshape(
+        &doc,
+        &scene,
+        cliff_tools::rectangle([120, 120], [280, 280]),
+        base,
+        false,
+    )
+    .unwrap()
+    .apply(&mut doc)
+    .unwrap();
+    doc.commit("plateau");
+    let before = doc.snapshot().bytes().unwrap();
+    let cut = CliffCut::select(&doc, &scene, [200, 200]).unwrap();
+    assert!(
+        cut.plan(&doc, &scene, [200, 420], CutSide::Left, None)
+            .is_err()
+    );
+    let plan = cut
+        .plan(&doc, &scene, [200, 419], CutSide::Left, Some(base + 3))
+        .unwrap();
+    assert!(plan.edits.len() > 12_000);
+    assert!(!plan.edits.contains_key(&[165, 200]));
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    plan.apply(&mut doc).unwrap();
+    complete(&doc, &scene, &plan);
+    assert_eq!(value(&doc, &scene, [165, 200]).level, base + 4);
+    assert_eq!(value(&doc, &scene, [235, 200]).level, base + 3);
+    doc.commit("cut");
+    doc.undo();
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+fn cliff_cut_protects_ramp_and_rejects_removing_its_high_side() {
+    let (mut doc, scene) = setup();
+    reshape(
+        &doc,
+        &scene,
+        cliff_tools::rectangle([40, 40], [64, 64]),
+        4,
+        false,
+    )
+    .unwrap()
+    .apply(&mut doc)
+    .unwrap();
+    let ramp = ramp(&doc, &scene, [46, 64], [46, 70], 4).unwrap();
+    ramp.apply(&mut doc).unwrap();
+    let before = doc.snapshot().bytes().unwrap();
+    let cut = CliffCut::select(&doc, &scene, [52, 50]).unwrap();
+    let safe = cut
+        .plan(&doc, &scene, [52, 66], CutSide::Left, None)
+        .unwrap();
+    let mut result = doc.fork();
+    safe.apply(&mut result).unwrap();
+    for &at in ramp.edits.keys() {
+        assert_eq!(doc.terrain(at), result.terrain(at), "{at:?}");
+    }
+    let error = cut
+        .plan(&doc, &scene, [52, 66], CutSide::Right, None)
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("坡道或桥头"), "{error:#}");
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
 }

@@ -349,6 +349,22 @@ fn flat_frame(
     button: Option<bool>,
     key: Option<egui::Key>,
 ) {
+    flat_frame_button(
+        view,
+        ctx,
+        at,
+        button.map(|pressed| (egui::PointerButton::Primary, pressed)),
+        key,
+    );
+}
+
+fn flat_frame_button(
+    view: &mut MapView,
+    ctx: &egui::Context,
+    at: Option<[u16; 2]>,
+    button: Option<(egui::PointerButton, bool)>,
+    key: Option<egui::Key>,
+) {
     let mut events = Vec::new();
     if let Some(at) = at {
         let rect = view.workbench.canvas_rect.unwrap();
@@ -359,10 +375,10 @@ fn flat_frame(
         let pos =
             rect.min + (crate::flat_view::position(at) - camera.world_rect(rect).min) * camera.zoom;
         events.push(egui::Event::PointerMoved(pos));
-        if let Some(pressed) = button {
+        if let Some((button, pressed)) = button {
             events.push(egui::Event::PointerButton {
                 pos,
-                button: egui::PointerButton::Primary,
+                button,
                 pressed,
                 modifiers: Default::default(),
             });
@@ -828,6 +844,78 @@ fn cliff_polyline_canvas_clicks_preview_close_enter_and_cancel_use_one_transacti
             .unwrap(),
         before
     );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn plateau_cut_canvas_right_click_cancels_before_second_click_commits() {
+    use egui_kittest::kittest::Queryable as _;
+    use ra2_map_scene::{cliff_authoring, cliff_tools, terrain_tools::TerrainMode};
+    let (mut view, scene, root) = flat_authoring_view();
+    let ctx = egui::Context::default();
+    let doc = view.editor.doc.as_mut().unwrap();
+    cliff_authoring::reshape(
+        doc,
+        &scene,
+        cliff_tools::rectangle([26, 26], [49, 49]),
+        4,
+        false,
+    )
+    .unwrap()
+    .apply(doc)
+    .unwrap();
+    view.editor.commit(&scene, TerrainMode::Plateau.name());
+    let bytes = |view: &MapView| {
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap()
+    };
+    let before = bytes(&view);
+    view.editor.activate_terrain_mode(TerrainMode::PlateauCut);
+    let mut options = egui_kittest::Harness::builder()
+        .with_context_setup(setup)
+        .with_accessibility_check(false)
+        .build_ui(|ui| view.editor.tool_options(ui, &scene));
+    options.get_by_label("两点切线").click();
+    options.run();
+    drop(options);
+    flat_frame(&mut view, &ctx, None, None, None);
+
+    let (start, end) = ([37, 32], [37, 46]);
+    flat_frame(&mut view, &ctx, Some(start), Some(true), None);
+    flat_frame(&mut view, &ctx, Some(start), Some(false), None);
+    flat_frame(&mut view, &ctx, Some(end), None, None);
+    let preview = view.editor.plateau_preview_plan(&scene, end).unwrap();
+    assert_eq!(bytes(&view), before);
+    for pressed in [true, false] {
+        flat_frame_button(
+            &mut view,
+            &ctx,
+            Some(end),
+            Some((egui::PointerButton::Secondary, pressed)),
+            None,
+        );
+    }
+    assert!(!view.editor.stroking);
+    assert_eq!(bytes(&view), before);
+
+    for at in [start, end] {
+        flat_frame(&mut view, &ctx, Some(at), Some(true), None);
+        flat_frame(&mut view, &ctx, Some(at), Some(false), None);
+    }
+    assert!(!view.editor.stroking, "{}", view.editor.status);
+    let doc = view.editor.doc.as_ref().unwrap();
+    assert_eq!(doc.undo_name(), Some(TerrainMode::PlateauCut.name()));
+    for (&at, &value) in &preview.edits {
+        assert_eq!(doc.terrain(at), Some(value));
+    }
+    view.editor.history(false, &scene);
+    assert_eq!(bytes(&view), before);
     drop(view);
     std::fs::remove_dir_all(root).unwrap();
 }

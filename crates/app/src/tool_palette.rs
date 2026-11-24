@@ -167,6 +167,7 @@ impl Editor {
                     (TerrainMode::CliffOutline, tr!("围合悬崖 C")),
                     (TerrainMode::CliffPolyline, tr!("折线悬崖")),
                     (TerrainMode::Plateau, tr!("高台 H")),
+                    (TerrainMode::PlateauCut, tr!("切除高台")),
                     (TerrainMode::HeightFill, tr!("填高地")),
                     (TerrainMode::RampEntrance, tr!("坡道")),
                     (TerrainMode::WaterOutline, tr!("水域")),

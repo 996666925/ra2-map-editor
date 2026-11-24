@@ -311,3 +311,29 @@ fn cliff_variants_skip_an_equal_shape_in_another_tileset() {
         .id += 1;
     assert!(plan(&doc, &scene, region, 4).is_err());
 }
+
+#[test]
+fn cliff_geometry_rejects_nonstandard_template_height_steps() {
+    let (doc, mut scene) = setup();
+    let region = rectangle([35, 35], [47, 47]);
+    let good = geometry(&doc, &scene, region.clone(), 4).unwrap();
+    let stamp = good
+        .cliffs
+        .iter()
+        .find(|s| {
+            scene.palette.templates[&(s.tile, 0)]
+                .cells
+                .iter()
+                .flatten()
+                .all(|c| c.height == 0)
+        })
+        .unwrap();
+    let template = Arc::get_mut(&mut scene.palette)
+        .unwrap()
+        .templates
+        .get_mut(&(stamp.tile, 0))
+        .unwrap();
+    template.cells.iter_mut().flatten().next().unwrap().height = 1;
+    let error = geometry(&doc, &scene, region, 4).err().unwrap();
+    assert!(error.to_string().contains("不是标准 4 层高差"), "{error:#}");
+}

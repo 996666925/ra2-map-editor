@@ -1354,6 +1354,64 @@ fn audit_polyline(install: &mut Install, theater: &str, out: &Path) -> Result<se
     Ok(serde_json::json!({"theater":theater,"cases":cases}))
 }
 
+fn audit_cliff_cut(install: &mut Install, theater: &str, out: &Path) -> Result<serde_json::Value> {
+    use cliff_authoring::{CliffCut, CutSide};
+    std::fs::create_dir_all(out)?;
+    let scene = load_scene_bytes(
+        install,
+        "cliff-cut.map",
+        "audit".into(),
+        NewMapOptions {
+            theater: theater.into(),
+            width: 80,
+            height: 80,
+            level: 4,
+            ..Default::default()
+        }
+        .bytes()?,
+        Instant::now(),
+    )?;
+    let mut source = document(&scene);
+    if !scene
+        .palette
+        .tile_ids
+        .is_some_and(|ids| ids.cliffs.cliff_set.is_some())
+    {
+        ensure!(CliffCut::select(&source, &scene, [66, 66]).is_err());
+        return Ok(serde_json::json!({"theater":theater,"unsupported_cliffs_rejected":true}));
+    }
+    cliff_authoring::reshape(
+        &source,
+        &scene,
+        cliff_tools::rectangle([50, 50], [78, 78]),
+        4,
+        false,
+    )?
+    .apply(&mut source)?;
+    source.commit("plateau for cutting");
+    let cut = CliffCut::select(&source, &scene, [64, 54])?;
+    let mut cases = Vec::new();
+    for (side, lower, keep) in [
+        (CutSide::Left, [72, 64], [56, 64]),
+        (CutSide::Right, [56, 64], [72, 64]),
+    ] {
+        for height in cut.base()..cut.base() + 4 {
+            let name = format!("cut-{side:?}-{height}");
+            let mut doc = source.fork();
+            let plan = cut
+                .plan(&doc, &scene, [64, 80], side, Some(height))
+                .with_context(|| name.clone())?;
+            let lowered = plan.edits.get(&lower).context("cut floor missing")?;
+            ensure!(
+                lowered.level == height && !plan.edits.contains_key(&keep),
+                "{name}: incorrect side or height"
+            );
+            cases.push(verify(install, &scene, &mut doc, &plan, out, &name, false)?);
+        }
+    }
+    Ok(serde_json::json!({"theater":theater,"cases":cases}))
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let directory = PathBuf::from(args.next().context("game directory required")?);
@@ -1372,18 +1430,21 @@ fn main() -> Result<()> {
     ensure!(
         scope
             .as_ref()
-            .is_none_or(|s| s == "--height-only" || s == "--polyline-only"),
+            .is_none_or(|s| s == "--height-only" || s == "--polyline-only" || s == "--cut-only"),
         "unknown audit scope"
     );
     let height_only = scope.as_ref().is_some_and(|s| s == "--height-only");
     let polyline_only = scope.as_ref().is_some_and(|s| s == "--polyline-only");
+    let cut_only = scope.as_ref().is_some_and(|s| s == "--cut-only");
     for (theater, _) in THEATERS {
         if filter.as_ref().is_some_and(|f| f != theater) {
             continue;
         }
         println!("Auditing {theater}...");
         reports.push(
-            (if polyline_only {
+            (if cut_only {
+                audit_cliff_cut(&mut install, theater, &out.join(theater))
+            } else if polyline_only {
                 audit_polyline(&mut install, theater, &out.join(theater))
             } else {
                 audit(&mut install, theater, &out.join(theater), height_only)
