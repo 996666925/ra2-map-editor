@@ -1716,6 +1716,7 @@
   "选中对象已不存在": "Selected object no longer exists",
   "选关前影片": "Pre-map-selection movie",
   "选区：{arg0} 格": "Selection: {arg0} cells",
+  "选区：{count} 格（长 {length} × 宽 {width}）": "Selection: {count} cells ({length} × {width})",
   "选择": "Select",
   "选择…": "Choose…",
   "选择与编辑": "Selection and editing",

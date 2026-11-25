@@ -11,17 +11,21 @@ fn region_drag_crops_outside_size_and_tracks_reentry_in_both_selection_modes() {
     let doc = e.doc.as_ref().unwrap();
     assert!(doc.contains_cell(end) && !doc.contains_cell(outside));
     let before = doc.snapshot().bytes().unwrap();
+    assert_eq!(e.region.dimensions(), None);
     for custom in [false, true] {
         e.region.custom = custom;
         e.pointer(&scene, Some(start), true, true, false, None);
         assert_eq!(e.region.cells, BTreeSet::from([start]));
+        assert_eq!(e.region.dimensions(), Some([1, 1]));
         e.pointer(&scene, Some(outside), false, true, false, None);
         assert_eq!(e.region.cells, cell_line(start, edge).into_iter().collect());
+        assert_eq!(e.region.dimensions(), Some([5, 1]));
         e.pointer(&scene, Some(end), false, false, true, None);
         assert!(!e.stroking);
         let doc = e.doc.as_ref().unwrap();
         assert!(e.region.cells.contains(&start) && e.region.cells.contains(&end));
         assert!(e.region.cells.iter().all(|&at| doc.contains_cell(at)));
+        assert_eq!(e.region.dimensions(), Some([8, 6]));
         assert_eq!(doc.snapshot().bytes().unwrap(), before);
     }
     drop(e);
@@ -394,6 +398,7 @@ fn selection_modifiers_are_temporary_and_frozen_on_mouse_down() {
     e.region_modifiers(egui::Modifiers::ALT);
     e.pointer(&scene, Some([22, 20]), true, false, true, None);
     assert_eq!(e.region.cells, BTreeSet::from([[20, 20], [23, 20]]));
+    assert_eq!(e.region.dimensions(), Some([4, 1]));
     assert!(e.region.op == SelectionOp::Replace);
     e.region_modifiers(egui::Modifiers::NONE);
     e.pointer(&scene, Some([21, 21]), true, false, true, None);

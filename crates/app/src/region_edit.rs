@@ -63,6 +63,22 @@ fn clear_tile(scene: &MapScene) -> i32 {
 }
 
 impl RegionEdit {
+    fn dimensions(&self) -> Option<[usize; 2]> {
+        let mut cells = self.cells.iter();
+        let &[x, y] = cells.next()?;
+        let (mut min_x, mut max_x, mut min_y, mut max_y) = (x, x, y, y);
+        for &[x, y] in cells {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+        Some([
+            usize::from(max_x - min_x) + 1,
+            usize::from(max_y - min_y) + 1,
+        ])
+    }
+
     pub(super) fn invalidate_preview(&mut self) {
         self.preview = None;
         self.revision += 1;
@@ -324,7 +340,17 @@ impl Editor {
         true
     }
     pub(super) fn region_options(&mut self, ui: &mut egui::Ui, scene: &MapScene) {
-        ui.label(tr!("选区：{arg0} 格", arg0 = self.region.cells.len()));
+        let count = self.region.cells.len();
+        if let Some([length, width]) = self.region.dimensions() {
+            ui.label(tr!(
+                "选区：{count} 格（长 {length} × 宽 {width}）",
+                count = count,
+                length = length,
+                width = width,
+            ));
+        } else {
+            ui.label(tr!("选区：{arg0} 格", arg0 = count));
+        }
         ui.horizontal_wrapped(|ui| {
             for (label, action) in [
                 (tr!("复制"), Action::Copy),
