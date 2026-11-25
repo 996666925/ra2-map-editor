@@ -947,6 +947,21 @@ impl Editor {
                 && (tool != Tool::Terrain || !mode.planned() && mode != TerrainMode::Fill)
     }
 
+    pub(crate) fn tracks_projected_drag(&self) -> bool {
+        self.stroking && (self.tool.brush() || self.tool == Tool::Region)
+    }
+
+    pub(crate) fn projected_drag_cell(&self, world: egui::Pos2) -> Option<Cell> {
+        let doc = self.doc.as_ref()?;
+        let (x, y) = vera20k_core::map::terrain::screen_to_iso(world.x, world.y);
+        // Bound work even if the pointer moves far beyond the canvas. The
+        // square includes the Size diamond and room for footprints at its edge.
+        let header = &doc.base.header;
+        let limit = (header.width + header.height + u32::from(self.radius.max(8)))
+            .min(u32::from(ra2_map_scene::cliff_tools::MAX_DRAG_COORD)) as f32;
+        Some([x, y].map(|v| v.round().clamp(0., limit) as u16))
+    }
+
     pub fn pointer(
         &mut self,
         scene: &MapScene,
@@ -1093,7 +1108,7 @@ impl Editor {
                 {
                     self.select_terrain_material(index, true);
                 }
-            } else if self.tool.brush() {
+            } else if self.tool.brush() && at.is_some() {
                 self.stroking = true;
             } else if let Some(at) = at {
                 let result = (|| -> Result<()> {
@@ -1201,9 +1216,14 @@ impl Editor {
                                     .brushes
                                     .get(stroke.brush)
                                     .context(tr!("请选择地形"))
-                                    .and_then(|brush| terrain_tools::footprint(scene, brush, cell));
+                                    .and_then(|brush| {
+                                        terrain_tools::drag_template_footprint(
+                                            doc, scene, brush, cell,
+                                        )
+                                    });
                                 match footprint {
-                                    Ok(cells) => {
+                                    Ok(None) => continue,
+                                    Ok(Some(cells)) => {
                                         // A dragged template must not overwrite a previous
                                         // template's interior with an offset copy.
                                         if cells

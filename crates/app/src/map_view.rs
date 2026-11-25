@@ -946,7 +946,15 @@ impl MapView {
                 egui::CursorIcon::Crosshair
             });
         }
-        self.hover = response.hover_pos().and_then(|p| {
+        let continuing_drag = editing
+            && !panning
+            && self.editor.tracks_projected_drag()
+            && !primary_press
+            && (primary_down || primary_release);
+        let drag_pos = continuing_drag
+            .then(|| ui.input(|i| i.pointer.interact_pos()))
+            .flatten();
+        let mut pick = |p| {
             let world = camera.world_point(rect, p);
             if self.editor.flat_view {
                 self.workbench.flat_view.pick(world)
@@ -956,7 +964,23 @@ impl MapView {
             } else {
                 scene.pick(world)
             }
-        });
+        };
+        self.hover = response.hover_pos().and_then(&mut pick);
+        let drag_hit = if response.hover_pos().is_some() {
+            self.hover
+        } else {
+            drag_pos.and_then(pick)
+        };
+        let cliff_polyline = self.editor.cliff_polyline_selected();
+        let projected_cliff_start = cliff_polyline && !self.editor.stroking;
+        // Keep the projection plane fixed for off-map cliff vertices so
+        // returning to the first point still closes a draft over uneven land.
+        if let Some(index) = drag_hit
+            && (!cliff_polyline || projected_cliff_start)
+            && (continuing_drag || primary_press && response.contains_pointer())
+        {
+            self.workbench.drag_level = scene.cells[index].z;
+        }
         if response.clicked() && !panning {
             self.selected = self.hover;
         }
@@ -967,6 +991,30 @@ impl MapView {
                 .draw(&painter, scene, self.editor.flat_view, rect, &camera);
         }
         let at = self.hover.map(|i| [scene.cells[i].rx, scene.cells[i].ry]);
+        // Ongoing gestures and cliff polyline starts also accept points on
+        // empty canvas. Picking for selection still uses actual terrain.
+        let drag_at = drag_hit.map(|i| [scene.cells[i].rx, scene.cells[i].ry]);
+        let pointer_at = drag_at.or_else(|| {
+            let draft_pos = (editing
+                && !panning
+                && (projected_cliff_start || self.editor.tracks_projected_hover()))
+            .then(|| response.hover_pos())
+            .flatten();
+            let mut world = camera.world_point(rect, drag_pos.or(draft_pos)?);
+            if !self.editor.flat_view {
+                let level = if projected_cliff_start {
+                    let flat = self.editor.projected_drag_cell(world)?;
+                    self.editor.cliff_polyline_reference_level(scene, flat)
+                } else {
+                    self.workbench.drag_level
+                };
+                world.y += f32::from(level as i8) * vera20k_core::map::terrain::HEIGHT_STEP;
+                if projected_cliff_start && primary_press && response.contains_pointer() {
+                    self.workbench.drag_level = level;
+                }
+            }
+            self.editor.projected_drag_cell(world)
+        });
         self.editor.brush_modifiers(ui.input(|i| i.modifiers));
         if keyboard
             && !panning
@@ -991,7 +1039,7 @@ impl MapView {
         let cut_preview = &mut self.cut_preview;
         let mut draw_terrain_preview = |editor: &mut crate::editing::Editor| {
             if let Some((slot, gpu, state, target)) = terrain_slot {
-                let patch = if let Some(plan) = editor.cut_terrain_preview(scene, at) {
+                let patch = if let Some(plan) = editor.cut_terrain_preview(scene, pointer_at) {
                     if cut_preview.as_ref().is_none_or(|cached| {
                         cached.plan.as_ptr() != Arc::as_ptr(&plan)
                             || cached.target.as_ptr() != Arc::as_ptr(target)
@@ -1027,11 +1075,11 @@ impl MapView {
                     gpu.preview_callback(rect, target.clone(), world, editor.view_options(), patch),
                 );
                 if replaced {
-                    editor.paint_terrain_preview(&painter, scene, rect, &camera, at, true);
+                    editor.paint_terrain_preview(&painter, scene, rect, &camera, pointer_at, true);
                     return;
                 }
             }
-            editor.terrain_preview(&painter, scene, rect, &camera, at);
+            editor.terrain_preview(&painter, scene, rect, &camera, pointer_at);
         };
         // These guides need the press or drag sample from the current frame.
         let preview_after_pointer = self.editor.rectangular_plateau_cut_selected()
@@ -1052,7 +1100,7 @@ impl MapView {
             if editing && !panning && !self.workbench.cancel_secondary {
                 self.editor.pointer(
                     scene,
-                    at,
+                    pointer_at,
                     primary_press && response.contains_pointer(),
                     primary_down,
                     primary_release,
@@ -1177,7 +1225,7 @@ impl MapView {
             }
             self.editor.pointer(
                 scene,
-                at,
+                pointer_at,
                 press && response.contains_pointer(),
                 down,
                 release,

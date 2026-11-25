@@ -255,7 +255,7 @@ fn snapped_water_outlines_protect_added_cells_and_reject_missing_shores() {
         assert_eq!(d.snapshot().bytes().unwrap(), before);
         d.cancel();
     }
-    // Outline expansion must not hide a height mismatch or cross map borders.
+    // Outline expansion must not hide a height mismatch.
     d.set(
         Target::Terrain(at),
         Some(Value::Terrain(TerrainValue {
@@ -268,7 +268,25 @@ fn snapped_water_outlines_protect_added_cells_and_reject_missing_shores() {
     assert!(shore_tools::outline(&d, &s, &path).is_err());
     assert_eq!(d.snapshot().bytes().unwrap(), before);
     d.cancel();
-    assert!(shore_tools::outline(&d, &s, &[[80, 1], [86, 1], [86, 7], [80, 7]]).is_err());
+    let crosses_edge = [[80, 1], [86, 1], [86, 7], [80, 7]];
+    let raw = cliff_tools::enclose(&crosses_edge).unwrap();
+    let edge_plan = shore_tools::outline(&d, &s, &crosses_edge).unwrap();
+    assert!(raw.iter().any(|&at| d.check_cell(at).is_err()));
+    assert!(
+        raw.iter()
+            .filter(|&&at| d.check_cell(at).is_ok())
+            .all(|at| edge_plan.interior.contains(at))
+    );
+    assert!(
+        edge_plan
+            .edits
+            .keys()
+            .chain(&edge_plan.interior)
+            .all(|&at| d.check_cell(at).is_ok())
+    );
+    undoable(&mut d, &edge_plan);
+    complete(&d, &s, &edge_plan);
+    d.undo();
     let base = s.palette.tile_ids.unwrap().shore;
     Arc::get_mut(&mut s.palette)
         .unwrap()
@@ -657,6 +675,98 @@ fn road_polyline_plans_all_turns_and_rejects_a_blocker_on_the_last_leg_atomicall
     let before = doc.snapshot().bytes().unwrap();
     assert!(road_tools::plan_polyline(&doc, &scene, &vertices, style).is_err());
     assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+fn road_draft_keeps_both_spans_when_the_route_leaves_and_reenters_size() {
+    let (mut doc, scene) = setup();
+    let style = road_tools::RoadStyle::Paved;
+    let [start, outside, end] = [[74, 10], [96, 10], [96, 26]];
+    assert!(doc.contains_cell(start) && !doc.contains_cell(outside) && doc.contains_cell(end));
+    let (draft, first) = road_tools::plan_route(&doc, &scene, &[start, outside], style).unwrap();
+    assert!(first.edits.keys().any(|&[x, y]| x - y == 79));
+    let (_, plan) = draft.extend(&doc, &scene, &[end]).unwrap();
+    assert!(plan.interior.contains(&start) && plan.interior.contains(&end));
+    assert!(plan.edits.contains_key(&start) && plan.edits.contains_key(&end));
+    assert!(plan.cliffs.iter().any(|stamp| !stamp.fits(&doc, &scene)));
+    assert!(
+        plan.edits
+            .keys()
+            .chain(&plan.interior)
+            .all(|&at| doc.contains_cell(at))
+    );
+    undoable(&mut doc, &plan);
+    let followup = road_tools::plan_polyline(&doc, &scene, &[end, [96, 36]], style).unwrap();
+    assert!(followup.edits.contains_key(&[96, 36]));
+}
+
+#[test]
+fn road_cut_can_end_outside_size_and_reconnects_the_kept_road() {
+    let (mut doc, scene) = setup();
+    let [start, split, last, outside] = [[74, 10], [82, 10], [89, 10], [96, 10]];
+    assert!(doc.contains_cell(last) && !doc.contains_cell(outside));
+    let road = road_tools::plan(&doc, &scene, start, outside, false).unwrap();
+    assert!(road.cliffs.iter().any(|stamp| !stamp.fits(&doc, &scene)));
+    undoable(&mut doc, &road);
+
+    let cut = road_tools::plan(&doc, &scene, split, outside, true).unwrap();
+    assert_eq!(
+        cut.edits,
+        road_tools::plan(&doc, &scene, split, last, true)
+            .unwrap()
+            .edits
+    );
+    assert!(cut.edits.keys().all(|&at| doc.contains_cell(at)));
+    undoable(&mut doc, &cut);
+    assert_eq!(
+        value(&doc, &scene, last).tile,
+        cliff_authoring::clear(&scene, value(&doc, &scene, last), 4)
+            .unwrap()
+            .tile
+    );
+    assert_ne!(
+        value(&doc, &scene, start).tile,
+        value(&doc, &scene, last).tile
+    );
+    complete(&doc, &scene, &cut);
+}
+
+#[test]
+fn clipped_road_grade_updates_all_visible_subtiles_and_rejects_partial_selection() {
+    let (mut doc, scene) = setup();
+    let tile = scene.palette.tile_ids.unwrap().paved_roads as u16;
+    let origin = [89, 9]; // A 1x3 road whose first subtile is just outside Size.
+    let cells = cliff_authoring::stamp_clipped(&doc, &scene, tile, origin, 4).unwrap();
+    assert_eq!(cells.len(), 2);
+    for (&at, &v) in &cells {
+        doc.set(Target::Terrain(at), Some(Value::Terrain(v)))
+            .unwrap();
+    }
+    doc.commit("edge road");
+    let road = road_tools::HeightRoads::new(&scene);
+    let mut goals: std::collections::BTreeMap<_, _> =
+        cells.keys().map(|&at| (at, (5, 0))).collect();
+    let mut plan = PlateauPlan {
+        edits: Default::default(),
+        overlays: Default::default(),
+        cliffs: Vec::new(),
+        interior: BTreeSet::new(),
+        base: 4,
+    };
+    road.plan(&doc, &scene, &goals, &mut plan).unwrap();
+    assert_eq!(plan.edits.len(), cells.len());
+    assert!(
+        plan.edits
+            .iter()
+            .all(|(at, v)| cells.contains_key(at) && v.level == 5)
+    );
+    undoable(&mut doc, &plan);
+    doc.undo();
+    let original = doc.snapshot().bytes().unwrap();
+    plan.edits.clear();
+    goals.pop_last();
+    assert!(road.plan(&doc, &scene, &goals, &mut plan).is_err());
+    assert_eq!(doc.snapshot().bytes().unwrap(), original);
 }
 
 #[test]
@@ -1230,6 +1340,60 @@ fn coastal_cliffs_switch_both_ways_and_are_recognized_by_height_tools() {
     let p = coastal_cliffs::plan(&d, &s, selected).unwrap();
     assert!(p.cliffs.iter().all(|c| c.tile == tile));
     undoable(&mut d, &p);
+}
+
+#[test]
+fn clipped_coastal_cliff_switches_material_and_still_checks_visible_subtiles() {
+    let (mut doc, scene) = setup();
+    let ids = scene.palette.tile_ids.unwrap();
+    // This corner crosses the right Size edge, with its visible toe
+    // adjacent to the water on the inside of that edge.
+    let tile = ids.cliffs.cliff_set.unwrap() + 8;
+    let origin = [89, 10];
+    let cells = cliff_authoring::stamp_clipped(&doc, &scene, tile, origin, 4).unwrap();
+    assert!(cells.len() >= 2);
+    assert!(cliff_authoring::stamp(&doc, &scene, tile, origin, 4).is_err());
+    for (&at, &v) in &cells {
+        doc.set(Target::Terrain(at), Some(Value::Terrain(v)))
+            .unwrap();
+    }
+    let water = [89, 12];
+    assert!(!cells.contains_key(&water));
+    let land = value(&doc, &scene, water);
+    doc.set(
+        Target::Terrain(water),
+        Some(Value::Terrain(TerrainValue {
+            tile: scene.catalog.raw_tiles[&((ids.water_base + 8) as u16)],
+            ..land
+        })),
+    )
+    .unwrap();
+    doc.commit("edge coast");
+    let selected = BTreeSet::from([origin]);
+    let wet = coastal_cliffs::plan(&doc, &scene, selected.clone()).unwrap();
+    assert!(
+        wet.cliffs
+            .iter()
+            .any(|s| coastal_cliffs::piece(&scene, s.tile).unwrap().1)
+    );
+    assert!(wet.edits.keys().all(|at| cells.contains_key(at)));
+    undoable(&mut doc, &wet);
+    doc.set(Target::Terrain(water), Some(Value::Terrain(land)))
+        .unwrap();
+    doc.commit("drain edge coast");
+    let dry = coastal_cliffs::plan(&doc, &scene, selected.clone()).unwrap();
+    assert!(!dry.edits.is_empty());
+    assert!(
+        dry.cliffs
+            .iter()
+            .all(|s| !coastal_cliffs::piece(&scene, s.tile).unwrap().1)
+    );
+    undoable(&mut doc, &dry);
+    let other = *cells.keys().find(|&&at| at != origin).unwrap();
+    let clear = cliff_authoring::clear(&scene, value(&doc, &scene, other), 4).unwrap();
+    doc.set(Target::Terrain(other), Some(Value::Terrain(clear)))
+        .unwrap();
+    assert!(coastal_cliffs::plan(&doc, &scene, selected).is_err());
 }
 
 #[test]

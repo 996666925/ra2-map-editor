@@ -25,6 +25,7 @@ pub(super) struct Workbench {
     pub(super) random_options: ra2_map_document::random_map::RandomMapOptions,
     pub(super) help: bool,
     pub(super) canvas_pan: bool,
+    pub(super) drag_level: u8,
     pub(super) cancel_secondary: bool,
     new_options: crate::new_map::NewMapOptions,
     overview: Option<egui::TextureHandle>,

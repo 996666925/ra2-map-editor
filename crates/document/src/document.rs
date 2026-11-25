@@ -875,17 +875,24 @@ impl MapDocument {
             });
         self.assign(target, value);
     }
-    pub fn check_cell(&self, at: Cell) -> Result<()> {
+    fn within_cell_grid(&self, [x, y]: Cell) -> bool {
         let side = self.base.header.cell_grid().side();
-        ensure!(at[0] < side && at[1] < side, "坐标超过地图格网");
-        ensure!(
-            vera20k_core::map::playfield::size_diamond_contains(
-                self.base.header.width as i32,
-                self.base.header.height as i32,
-                (at[0] as i16, at[1] as i16)
-            ),
-            "格子在 Size 之外"
-        );
+        x < side && y < side
+    }
+    fn within_size(&self, [x, y]: Cell) -> bool {
+        vera20k_core::map::playfield::size_diamond_contains(
+            self.base.header.width as i32,
+            self.base.header.height as i32,
+            (x as i16, y as i16),
+        )
+    }
+    /// Whether the cell lies within the editable Size diamond and cell grid.
+    pub fn contains_cell(&self, at: Cell) -> bool {
+        self.within_cell_grid(at) && self.within_size(at)
+    }
+    pub fn check_cell(&self, at: Cell) -> Result<()> {
+        ensure!(self.within_cell_grid(at), "坐标超过地图格网");
+        ensure!(self.within_size(at), "格子在 Size 之外");
         Ok(())
     }
     pub fn commit(&mut self, name: impl Into<String>) -> bool {

@@ -282,14 +282,9 @@ impl Editor {
             custom,
         }) = self.region.drag.as_mut()
             && let Some(at) = at
+            && let Some(doc) = self.doc.as_ref()
+            && (press || *last != at)
         {
-            let selected: Vec<_> = if *custom {
-                cell_line(*last, at)
-            } else {
-                (start[0].min(at[0])..=start[0].max(at[0]))
-                    .flat_map(|x| (start[1].min(at[1])..=start[1].max(at[1])).map(move |y| [x, y]))
-                    .collect()
-            };
             if !*custom {
                 self.region.cells = if *op == SelectionOp::Replace {
                     BTreeSet::new()
@@ -297,16 +292,21 @@ impl Editor {
                     before.clone()
                 };
             }
-            for cell in selected {
-                if self
-                    .doc
-                    .as_ref()
-                    .is_some_and(|doc| doc.check_cell(cell).is_ok())
-                {
+            let mut select = |cell| {
+                if doc.contains_cell(cell) {
                     if *op == SelectionOp::Subtract {
                         self.region.cells.remove(&cell);
                     } else {
                         self.region.cells.insert(cell);
+                    }
+                }
+            };
+            if *custom {
+                cell_line(*last, at).into_iter().for_each(select);
+            } else {
+                for x in start[0].min(at[0])..=start[0].max(at[0]) {
+                    for y in start[1].min(at[1])..=start[1].max(at[1]) {
+                        select([x, y]);
                     }
                 }
             }

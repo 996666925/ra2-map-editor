@@ -557,7 +557,7 @@ fn raising_a_low_only_cliff_validates_the_implied_top_before_writing() {
 }
 
 #[test]
-fn raw_cliff_height_moves_whole_templates_once_and_rejects_incomplete_or_clipped_stamps() {
+fn raw_cliff_height_moves_whole_templates_once_and_rejects_damaged_stamps() {
     let (mut doc, scene) = setup();
     let p = cliff_tools::plan(&doc, &scene, cliff_tools::rectangle([40, 40], [52, 52]), 4).unwrap();
     p.apply(&mut doc).unwrap();
@@ -667,4 +667,66 @@ fn raw_cliff_height_moves_whole_templates_once_and_rejects_incomplete_or_clipped
         )
         .is_err()
     );
+}
+
+#[test]
+fn raw_cliff_height_moves_cropped_subtiles_and_checks_the_implied_base() {
+    use crate::cliff_authoring::{stamp, stamp_clipped};
+    use terrain_tools::HeightChange;
+    let (mut doc, scene) = setup();
+    let cliff = scene.palette.tile_ids.unwrap().cliffs.cliff_set.unwrap();
+    let (corner, upper) = ([69, 10], [73, 14]);
+    let cells = stamp_clipped(&doc, &scene, cliff + 4, corner, 4).unwrap();
+    let high = stamp_clipped(&doc, &scene, cliff + 17, upper, 4).unwrap();
+    assert_eq!(cells.len(), 3);
+    assert!(stamp(&doc, &scene, cliff + 4, corner, 4).is_err());
+    assert_eq!(high.len(), 1);
+    assert_eq!(high[&upper].level, 8);
+    for (&at, &v) in cells.iter().chain(&high) {
+        doc.set(Target::Terrain(at), Some(Value::Terrain(v)))
+            .unwrap();
+    }
+    doc.commit("edge cliffs");
+    let before = doc.snapshot().bytes().unwrap();
+    let expected = cells.keys().copied().collect::<BTreeSet<_>>();
+    assert_eq!(
+        cliff_selection(&doc, &scene, corner, false)
+            .unwrap()
+            .unwrap(),
+        expected
+    );
+    let changed = terrain_tools::height(
+        &mut doc,
+        &scene,
+        &BTreeSet::from([corner]),
+        TerrainMode::Raise,
+        0,
+        false,
+    )
+    .unwrap();
+    assert_eq!(changed.into_iter().collect::<BTreeSet<_>>(), expected);
+    for (&at, &old) in &cells {
+        let v = value(&doc, &scene, at);
+        assert_eq!(
+            v,
+            TerrainValue {
+                level: old.level + 1,
+                ..old
+            }
+        );
+    }
+    doc.cancel();
+    assert!(
+        terrain_tools::height_with_change(
+            &mut doc,
+            &scene,
+            &BTreeSet::from([upper]),
+            TerrainMode::Lower,
+            0,
+            false,
+            HeightChange::Step(5),
+        )
+        .is_err()
+    );
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
 }

@@ -12,6 +12,8 @@ use vera20k_core::map::theater::TileKey;
 /// Native terrain projection and world heights interpret the level byte as i8.
 pub const MAX_CLIFF_LEVEL: u8 = i8::MAX as u8;
 pub const MAX_CLIFF_BASE: u8 = MAX_CLIFF_LEVEL - 4;
+/// Far edge of the virtual grid used before clipping terrain gestures.
+pub const MAX_DRAG_COORD: u16 = MAX_CELL_SIDE + 32;
 
 #[derive(Clone, Debug)]
 pub struct CliffStamp {
@@ -19,6 +21,21 @@ pub struct CliffStamp {
     pub origin: Cell,
     pub base: u8,
 }
+impl CliffStamp {
+    pub fn fits(&self, doc: &MapDocument, scene: &MapScene) -> bool {
+        let template = &scene.palette.templates[&(self.tile, 0)];
+        let width = usize::from(template.width);
+        template.cells.iter().enumerate().all(|(sub, cell)| {
+            if cell.is_none() {
+                return true;
+            }
+            let x = self.origin[0].checked_add((sub % width) as u16);
+            let y = self.origin[1].checked_add((sub / width) as u16);
+            x.zip(y).is_some_and(|(x, y)| doc.contains_cell([x, y]))
+        })
+    }
+}
+
 pub struct PlateauPlan {
     pub edits: BTreeMap<Cell, TerrainValue>,
     pub overlays: BTreeMap<Cell, (u8, u8)>,
@@ -63,53 +80,82 @@ pub fn enclose(path: &[Cell]) -> Result<BTreeSet<Cell>> {
         path.len() >= 3,
         "拖出闭合轮廓；松开时自动连接起点并填充内部"
     );
-    let mut wall = BTreeSet::new();
-    for (a, b) in path
-        .iter()
-        .zip(path.iter().cycle().skip(1))
-        .take(path.len())
-    {
-        wall.extend(cell_line(*a, *b));
-    }
-    let min = [
-        wall.iter().map(|p| p[0]).min().unwrap(),
-        wall.iter().map(|p| p[1]).min().unwrap(),
-    ];
-    let max = [
-        wall.iter().map(|p| p[0]).max().unwrap(),
-        wall.iter().map(|p| p[1]).max().unwrap(),
-    ];
+    let min = [0, 1].map(|axis| path.iter().map(|p| p[axis]).min().unwrap());
+    let max = [0, 1].map(|axis| path.iter().map(|p| p[axis]).max().unwrap());
     ensure!(
         max[0] > min[0] && max[1] > min[1],
         "轮廓需要围出至少 2×2 格的区域"
     );
-    let lo = [i32::from(min[0]) - 1, i32::from(min[1]) - 1];
-    let hi = [i32::from(max[0]) + 1, i32::from(max[1]) + 1];
-    let mut outside = BTreeSet::new();
-    let mut queue = VecDeque::from([lo]);
-    while let Some(p) = queue.pop_front() {
-        if p[0] < lo[0]
-            || p[1] < lo[1]
-            || p[0] > hi[0]
-            || p[1] > hi[1]
-            || wall.contains(&[p[0] as u16, p[1] as u16])
-            || !outside.insert(p)
-        {
-            continue;
-        }
-        for d in [[1, 0], [-1, 0], [0, 1], [0, -1]] {
-            queue.push_back([p[0] + d[0], p[1] + d[1]]);
+    ensure!(
+        (0..2).all(|axis| max[axis] - min[axis] <= MAX_DRAG_COORD),
+        "高台及悬崖边界超出固定格网，请留出 3 格空间"
+    );
+    // Use a local padded grid so the flood visits each exterior cell once.
+    // The surrounding row and column remain reachable even at grid coordinate 0.
+    const WALL: u8 = 1;
+    const OUTSIDE: u8 = 2;
+    let [cols, rows] = [0, 1].map(|axis| usize::from(max[axis] - min[axis]) + 3);
+    let mut marks = vec![0; cols * rows];
+    let index = |[x, y]: Cell| (usize::from(x - min[0]) + 1) * rows + usize::from(y - min[1]) + 1;
+    for (&a, &b) in path
+        .iter()
+        .zip(path.iter().cycle().skip(1))
+        .take(path.len())
+    {
+        for at in cell_line(a, b) {
+            marks[index(at)] = WALL;
         }
     }
-    let enclosed: BTreeSet<_> = rectangle(min, max)
+    let mut queue = VecDeque::from([0]);
+    marks[0] = OUTSIDE;
+    while let Some(i) = queue.pop_front() {
+        let y = i % rows;
+        for neighbor in [
+            i.checked_sub(rows),
+            (i + rows < marks.len()).then_some(i + rows),
+            (y > 0).then(|| i - 1),
+            (y + 1 < rows).then_some(i + 1),
+        ]
         .into_iter()
-        .filter(|p| !outside.contains(&p.map(i32::from)))
+        .flatten()
+        {
+            if marks[neighbor] == 0 {
+                marks[neighbor] = OUTSIDE;
+                queue.push_back(neighbor);
+            }
+        }
+    }
+    let mut has_interior = false;
+    let enclosed = (min[0]..=max[0])
+        .flat_map(|x| (min[1]..=max[1]).map(move |y| [x, y]))
+        .filter(|&at| match marks[index(at)] {
+            OUTSIDE => false,
+            WALL => true,
+            _ => {
+                has_interior = true;
+                true
+            }
+        })
         .collect();
-    ensure!(
-        enclosed.iter().any(|p| !wall.contains(p)),
-        "轮廓没有围出内部区域，请扩大轮廓"
-    );
+    ensure!(has_interior, "轮廓没有围出内部区域，请扩大轮廓");
     Ok(enclosed)
+}
+
+/// A gesture starts on the map. Its remaining vertices may lie on the
+/// bounded virtual grid while the resulting writes are clipped to Size.
+pub(crate) fn validate_polyline_coords(doc: &MapDocument, path: &[Cell]) -> Result<()> {
+    if let Some(&start) = path.first() {
+        doc.check_cell(start)?;
+    }
+    validate_virtual_coords(path)
+}
+
+pub(super) fn validate_virtual_coords(path: &[Cell]) -> Result<()> {
+    ensure!(
+        path.iter().flatten().all(|&v| v <= MAX_DRAG_COORD),
+        "坐标超过地图格网"
+    );
+    Ok(())
 }
 
 pub(crate) fn validate_polyline_path(
@@ -283,7 +329,7 @@ pub fn plan(
     Ok(result)
 }
 
-/// Materialize only complete templates along the requested open edge.
+/// Materialize templates along the requested open edge, then crop to Size.
 /// The high-side mask is virtual; surrounding ground is never written.
 pub(crate) fn open_geometry(
     doc: &MapDocument,
@@ -292,7 +338,7 @@ pub(crate) fn open_geometry(
     base: u8,
     edge: &BTreeSet<Cell>,
 ) -> Result<PlateauPlan> {
-    geometry_impl(doc, scene, interior, base, Some(edge), false, false)
+    geometry_impl(doc, scene, interior, base, Some(edge), GeometryKind::Clip)
 }
 
 /// Pure topology compiler, shared by new plateaus and existing-terrain edits.
@@ -302,7 +348,17 @@ pub(crate) fn geometry(
     interior: BTreeSet<Cell>,
     base: u8,
 ) -> Result<PlateauPlan> {
-    geometry_impl(doc, scene, interior, base, None, false, false)
+    geometry_impl(doc, scene, interior, base, None, GeometryKind::Strict)
+}
+
+/// Materialize the drag shape first, then crop its output to the map diamond.
+pub(super) fn drag_geometry(
+    doc: &MapDocument,
+    scene: &MapScene,
+    interior: BTreeSet<Cell>,
+    base: u8,
+) -> Result<PlateauPlan> {
+    geometry_impl(doc, scene, interior, base, None, GeometryKind::Clip)
 }
 
 pub(super) fn cut_geometry(
@@ -311,7 +367,7 @@ pub(super) fn cut_geometry(
     interior: BTreeSet<Cell>,
     base: u8,
 ) -> Result<PlateauPlan> {
-    geometry_impl(doc, scene, interior, base, None, false, true)
+    geometry_impl(doc, scene, interior, base, None, GeometryKind::Cut)
 }
 
 /// Inward-facing cliffs with a lowered floor; ordinary exterior ground is
@@ -322,7 +378,15 @@ pub(crate) fn pit_geometry(
     interior: BTreeSet<Cell>,
     base: u8,
 ) -> Result<PlateauPlan> {
-    geometry_impl(doc, scene, interior, base, None, true, false)
+    geometry_impl(doc, scene, interior, base, None, GeometryKind::ClipPit)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GeometryKind {
+    Strict,
+    Clip,
+    Cut,
+    ClipPit,
 }
 
 fn geometry_impl(
@@ -331,9 +395,15 @@ fn geometry_impl(
     interior: BTreeSet<Cell>,
     base: u8,
     edge: Option<&BTreeSet<Cell>>,
-    low_inside: bool,
-    cut: bool,
+    kind: GeometryKind,
 ) -> Result<PlateauPlan> {
+    let low_inside = kind == GeometryKind::ClipPit;
+    let cut = kind == GeometryKind::Cut;
+    let clip = kind != GeometryKind::Strict;
+    let in_map = |x, y| {
+        let at = [u16::try_from(x).ok()?, u16::try_from(y).ok()?];
+        doc.contains_cell(at).then_some(at)
+    };
     ensure!(
         base <= MAX_CLIFF_BASE,
         "悬崖高差为 4 层，低地基准高度须在 0～{MAX_CLIFF_BASE} 层"
@@ -358,15 +428,16 @@ fn geometry_impl(
     if edge.is_some() {
         lo = (lo.0.max(0), lo.1.max(0));
         hi = (
-            hi.0.min(i32::from(MAX_CELL_SIDE) - 1),
-            hi.1.min(i32::from(MAX_CELL_SIDE) - 1),
+            hi.0.min(i32::from(MAX_DRAG_COORD) + 3),
+            hi.1.min(i32::from(MAX_DRAG_COORD) + 3),
         );
     }
     ensure!(
-        lo.0 >= 0
-            && lo.1 >= 0
-            && hi.0 < i32::from(MAX_CELL_SIDE)
-            && hi.1 < i32::from(MAX_CELL_SIDE),
+        clip && hi.0 <= i32::from(MAX_DRAG_COORD) + 3 && hi.1 <= i32::from(MAX_DRAG_COORD) + 3
+            || lo.0 >= 0
+                && lo.1 >= 0
+                && hi.0 < i32::from(MAX_CELL_SIDE)
+                && hi.1 < i32::from(MAX_CELL_SIDE),
         "高台及悬崖边界超出固定格网，请留出 3 格空间"
     );
     let mut levels = CliffGrid::new(lo, hi, base + if low_inside { 4 } else { 0 });
@@ -378,11 +449,35 @@ fn geometry_impl(
     }
     // Process in the same (x + y, x) order as the cliff selector without
     // allocating and sorting one coordinate per cell of the bounding box.
-    let coords = (lo.0 + lo.1..=hi.0 + hi.1)
+    let dense = (lo.0 + lo.1..=hi.0 + hi.1)
         .flat_map(|sum| (lo.0.max(sum - hi.1)..=hi.0.min(sum - lo.1)).map(move |x| (x, sum - x)));
+    // A long narrow band can have a large bounding box. Every candidate
+    // needs an unstamped high neighbor, and stamping cannot add one.
+    let sparse = (clip && !low_inside && interior.len() * 16 < levels.cells.len()).then(|| {
+        let mut candidates: Vec<_> = interior
+            .iter()
+            .flat_map(|&[x, y]| {
+                DIRECTIONS
+                    .iter()
+                    .map(move |&(dx, dy, _)| (i32::from(x) - dx, i32::from(y) - dy))
+            })
+            .collect();
+        candidates.sort_unstable_by_key(|&(x, y)| (x + y, x));
+        candidates.dedup();
+        candidates
+    });
+    let dense = sparse.is_none().then_some(dense);
+    let coords = sparse
+        .iter()
+        .flatten()
+        .copied()
+        .chain(dense.into_iter().flatten());
     let mut stamped = BTreeMap::new();
     let mut cliffs = Vec::new();
     for (x, y) in coords {
+        if x < 0 || y < 0 {
+            continue;
+        }
         if edge.is_some_and(|edge| !edge.contains(&[x as u16, y as u16])) {
             continue;
         }
@@ -454,12 +549,30 @@ fn geometry_impl(
                 metadata.height == 0 || metadata.height == 4,
                 "当前悬崖模板不是标准 4 层高差，无法自动围合"
             );
-            let at = [
-                (x + sub as i32 % i32::from(t.width)) as u16,
-                (y + sub as i32 / i32::from(t.width)) as u16,
-            ];
-            doc.check_cell(at)
-                .with_context(|| format!("悬崖延伸到地图边界 {},{}，请向内移动", at[0], at[1]))?;
+            let point = (
+                x + sub as i32 % i32::from(t.width),
+                y + sub as i32 / i32::from(t.width),
+            );
+            let level = anchor
+                .checked_add(metadata.height)
+                .filter(|v| *v <= MAX_CLIFF_LEVEL)
+                .context("生成悬崖高度超出引擎正高度范围")?;
+            let at = if clip {
+                let Some(at) = in_map(point.0, point.1) else {
+                    // Outside subtiles affect neighboring faces but never become edits.
+                    if levels.index(point).is_some() {
+                        levels.set(point, level | CliffGrid::STAMPED);
+                    }
+                    continue;
+                };
+                at
+            } else {
+                let at = [point.0 as u16, point.1 as u16];
+                doc.check_cell(at).with_context(|| {
+                    format!("悬崖延伸到地图边界 {},{}，请向内移动", at[0], at[1])
+                })?;
+                at
+            };
             ensure!(
                 !stamped.contains_key(&at),
                 "轮廓过窄或拐角过密，悬崖模板在 {},{} 重叠；请加宽转角",
@@ -474,10 +587,6 @@ fn geometry_impl(
                 }),
                 "悬崖子块资源缺失"
             );
-            let level = anchor
-                .checked_add(metadata.height)
-                .filter(|v| *v <= MAX_CLIFF_LEVEL)
-                .context("生成悬崖高度超出引擎正高度范围")?;
             cells.push((
                 at,
                 TerrainValue {
@@ -487,6 +596,9 @@ fn geometry_impl(
                     ..value(doc, scene, at)
                 },
             ));
+        }
+        if clip && cells.is_empty() {
+            continue;
         }
         ensure!(!cells.is_empty(), "悬崖模板没有有效子块");
         for (at, v) in cells {
@@ -501,7 +613,7 @@ fn geometry_impl(
             base: anchor,
         });
     }
-    ensure!(!cliffs.is_empty(), "未能生成悬崖边界");
+    ensure!(clip || !cliffs.is_empty(), "未能生成悬崖边界");
     if edge.is_some() {
         return Ok(PlateauPlan {
             edits: stamped,
@@ -512,7 +624,7 @@ fn geometry_impl(
         });
     }
     for &at in &interior {
-        if low_inside {
+        if low_inside || clip && !doc.contains_cell(at) {
             continue;
         }
         ensure!(
@@ -523,34 +635,50 @@ fn geometry_impl(
             "轮廓过窄，无法保留连续高台内部；请扩大区域"
         );
     }
-    // Every height discontinuity must be covered by the complete cliff stamps.
-    // This rejects an open contour rather than leaving invisible height walls.
+    // Check only unprotected height discontinuities. Equal heights and
+    // stamped neighbors are valid without consulting the map boundary.
+    let point_at = |index| {
+        (
+            lo.0 + (index % levels.width) as i32,
+            lo.1 + (index / levels.width) as i32,
+        )
+    };
     for (i, &state) in levels.cells.iter().enumerate() {
-        for next in [
-            ((i + 1) % levels.width != 0).then_some(i + 1),
-            Some(i + levels.width),
-        ]
-        .into_iter()
-        .flatten()
-        .filter_map(|next| levels.cells.get(next).copied())
-        {
-            if (next ^ state) & MAX_CLIFF_LEVEL != 0 {
-                // Compiled terrain has just two possible heights; the stamp
-                // bit identifies which side covers the discontinuity.
-                ensure!(
-                    (state | next) & CliffGrid::STAMPED != 0,
-                    "轮廓无法闭合，请加宽狭窄区域或转角"
-                );
+        if state & CliffGrid::STAMPED != 0 {
+            continue;
+        }
+        for next_index in [i + 1, i + levels.width] {
+            if next_index == i + 1 && (i + 1) % levels.width == 0 {
+                continue;
             }
+            let Some(&next) = levels.cells.get(next_index) else {
+                continue;
+            };
+            if next == state || next & CliffGrid::STAMPED != 0 {
+                continue;
+            }
+            if clip {
+                let (x, y) = point_at(i);
+                let (nx, ny) = point_at(next_index);
+                if in_map(x, y).is_none() || in_map(nx, ny).is_none() {
+                    continue;
+                }
+            }
+            anyhow::bail!("轮廓无法闭合，请加宽狭窄区域或转角");
         }
     }
     let interior = if low_inside {
         let floor: BTreeSet<_> = interior
             .into_iter()
-            .filter(|at| !stamped.contains_key(at))
+            .filter(|&at| doc.contains_cell(at) && !stamped.contains_key(&at))
             .collect();
         ensure!(!floor.is_empty(), "坑内没有可用的平地，请扩大轮廓");
         floor
+    } else if clip {
+        interior
+            .into_iter()
+            .filter(|&at| doc.contains_cell(at))
+            .collect()
     } else {
         interior
     };

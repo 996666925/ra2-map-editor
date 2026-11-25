@@ -121,10 +121,10 @@ fn adapt_inner(
             cliffs.push(s.clone());
             continue;
         };
-        if let Some(mut halves) = cliff_variants::narrow_halves(scene, s) {
+        if let Some(halves) = cliff_variants::narrow_halves(scene, s) {
             let [first, second] = [
-                touches_water(doc, scene, &p.edits, &halves[0])?,
-                touches_water(doc, scene, &p.edits, &halves[1])?,
+                touches_water(doc, scene, &p.edits, &halves[0]),
+                touches_water(doc, scene, &p.edits, &halves[1]),
             ];
             if first != second {
                 // At a shoreline boundary, converting the wide tile as a
@@ -132,17 +132,20 @@ fn adapt_inner(
                 let narrow_index = halves[0].tile - (s.tile - index);
                 let targets = [first, second].map(|water| target(narrow_index, water));
                 if let [Some(a), Some(b)] = targets {
-                    for (half, tile) in halves.iter_mut().zip([a, b]) {
+                    for (mut half, tile) in halves.into_iter().zip([a, b]) {
                         half.tile = tile;
-                        p.edits.extend(cliff_authoring::stamp(
+                        let cells = cliff_authoring::stamp_clipped(
                             doc,
                             scene,
                             tile,
                             half.origin,
                             half.base,
-                        )?);
+                        )?;
+                        if !cells.is_empty() {
+                            p.edits.extend(cells);
+                            cliffs.push(half);
+                        }
                     }
-                    cliffs.extend(halves);
                     continue;
                 }
                 ensure!(!strict, "当前环境缺少拆分临水悬崖所需的窄模板");
@@ -150,7 +153,7 @@ fn adapt_inner(
                 continue;
             }
         }
-        let water = touches_water(doc, scene, &p.edits, s)?;
+        let water = touches_water(doc, scene, &p.edits, s);
         let Some(tile) = target(index, water) else {
             ensure!(
                 !strict,
@@ -161,8 +164,9 @@ fn adapt_inner(
             continue;
         };
         if tile != s.tile {
-            p.edits
-                .extend(cliff_authoring::stamp(doc, scene, tile, s.origin, s.base)?);
+            p.edits.extend(cliff_authoring::stamp_clipped(
+                doc, scene, tile, s.origin, s.base,
+            )?);
         }
         cliffs.push(CliffStamp { tile, ..*s });
     }
@@ -175,22 +179,24 @@ fn touches_water(
     scene: &MapScene,
     edits: &BTreeMap<Cell, TerrainValue>,
     s: &CliffStamp,
-) -> Result<bool> {
+) -> bool {
     let template = &scene.palette.templates[&(s.tile, 0)];
     for (sub, meta) in template.cells.iter().enumerate() {
         if meta.is_none_or(|m| m.height != 0) {
             continue;
         }
-        let at = offset(
+        let Some(at) = offset(
             s.origin,
             sub as i32 % i32::from(template.width),
             sub as i32 / i32::from(template.width),
         )
-        .context("悬崖越界")?;
+        .filter(|&at| doc.contains_cell(at)) else {
+            continue;
+        };
         if std::iter::once(at)
             .chain(crate::terrain_tools::neighbors(at))
             .any(|n| {
-                doc.check_cell(n).is_ok() && {
+                doc.contains_cell(n) && {
                     let v = edits
                         .get(&n)
                         .copied()
@@ -199,10 +205,10 @@ fn touches_water(
                 }
             })
         {
-            return Ok(true);
+            return true;
         }
     }
-    Ok(false)
+    false
 }
 pub(crate) fn gather(
     doc: &MapDocument,
@@ -243,7 +249,7 @@ pub(crate) fn gather(
     stamps
         .into_iter()
         .map(|(tile, origin, base)| {
-            let cells = cliff_authoring::stamp(doc, scene, tile, origin, base)?;
+            let cells = cliff_authoring::stamp_clipped(doc, scene, tile, origin, base)?;
             ensure!(
                 cells.iter().all(|(&at, &v)| value(doc, scene, at) == v),
                 "已有悬崖模板不完整，请先修复该模板"

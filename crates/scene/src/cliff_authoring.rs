@@ -51,6 +51,43 @@ fn cliff(scene: &MapScene, v: TerrainValue, at: Cell) -> Option<(u16, Cell, u8)>
     Some((id, origin, v.level.checked_sub(s.height)?))
 }
 
+// Adjacent cells and seed footprints overlap. Mark cells when enqueued so
+// each is read at most once, and preserve the order of first discovery.
+struct CellQueue {
+    side: usize,
+    queued: Vec<u64>,
+    cells: VecDeque<Cell>,
+}
+
+impl CellQueue {
+    fn new(doc: &MapDocument) -> Self {
+        let side = usize::from(doc.base.header.cell_grid().side());
+        Self {
+            side,
+            queued: vec![0; (side * side).div_ceil(64)],
+            cells: VecDeque::new(),
+        }
+    }
+
+    fn push(&mut self, at: Cell) {
+        let [x, y] = at.map(usize::from);
+        if x >= self.side || y >= self.side {
+            return;
+        }
+        let index = y * self.side + x;
+        let mask = 1 << (index % 64);
+        let word = &mut self.queued[index / 64];
+        if *word & mask == 0 {
+            *word |= mask;
+            self.cells.push_back(at);
+        }
+    }
+
+    fn pop(&mut self) -> Option<Cell> {
+        self.cells.pop_front()
+    }
+}
+
 /// Follow only the touched elevation component; unrelated plateaus are untouched.
 fn existing(
     doc: &MapDocument,
@@ -59,22 +96,31 @@ fn existing(
     base: u8,
     padding: i32,
 ) -> Result<(BTreeSet<Cell>, BTreeSet<Cell>)> {
-    let mut queue = VecDeque::new();
-    for &at in seeds {
-        for dx in -padding..=padding {
-            for dy in -padding..=padding {
-                if let Some(p) = offset(at, dx, dy) {
-                    queue.push_back(p);
-                }
+    let mut queue = CellQueue::new(doc);
+    let limit = queue.side as i32 - 1;
+    // Seeds are sorted by (x, y). Within each column, expand only the
+    // part of the y interval that the previous seed did not already cover.
+    let mut previous_x = None;
+    let mut next_y = 0;
+    for &[x, y] in seeds {
+        let [x, y] = [x, y].map(i32::from);
+        if previous_x != Some(x) {
+            previous_x = Some(x);
+            next_y = 0;
+        }
+        let last_y = (y + padding).min(limit);
+        for cy in (y - padding).max(next_y)..=last_y {
+            for cx in (x - padding).max(0)..=(x + padding).min(limit) {
+                queue.push([cx as u16, cy as u16]);
             }
         }
+        next_y = last_y + 1;
     }
-    let mut visited = BTreeSet::new();
     let mut core = BTreeSet::new();
     let mut old = BTreeSet::new();
     let mut stamps = BTreeSet::new();
-    while let Some(at) = queue.pop_front() {
-        if !visited.insert(at) || doc.check_cell(at).is_err() {
+    while let Some(at) = queue.pop() {
+        if !doc.contains_cell(at) {
             continue;
         }
         let v = value(doc, scene, at);
@@ -91,7 +137,7 @@ fn existing(
         for dx in -1..=1 {
             for dy in -1..=1 {
                 if let Some(p) = offset(at, dx, dy) {
-                    queue.push_back(p);
+                    queue.push(p);
                 }
             }
         }
@@ -99,37 +145,46 @@ fn existing(
     // The selector's high neighbours recover the logical boundary. A raised
     // TMP pixel at the stamp origin is a cliff lip, not another interior cell.
     for (id, origin) in stamps {
-        let t = &scene.palette.templates[&(id, 0)];
-        for (sub, s) in t.cells.iter().enumerate() {
-            if let Some(s) = s {
-                let p = offset(
-                    origin,
-                    sub as i32 % i32::from(t.width),
-                    sub as i32 / i32::from(t.width),
-                )
-                .context("悬崖越界")?;
-                let v = value(doc, scene, p);
-                ensure!(
-                    v.tile == scene.catalog.raw_tiles[&id]
-                        && usize::from(v.sub) == sub
-                        && v.level == base + s.height,
-                    "{},{} 的已有悬崖模板不完整，请先修复手工覆盖的子块",
-                    p[0],
-                    p[1]
-                );
-                old.insert(p);
-            }
-        }
+        collect_existing_cliff(doc, scene, id, origin, base, &mut old)?;
         core.extend(
-            cliff_rim(scene, id, origin, base).filter(|&at| {
-                doc.check_cell(at).is_ok() && value(doc, scene, at).level == base + 4
-            }),
+            cliff_rim(scene, id, origin, base)
+                .filter(|&at| doc.contains_cell(at) && value(doc, scene, at).level == base + 4),
         );
     }
     Ok((core, old))
 }
 
 /// Recover the logical high-side cells of an existing standard cliff stamp.
+fn collect_existing_cliff(
+    doc: &MapDocument,
+    scene: &MapScene,
+    id: u16,
+    origin: Cell,
+    base: u8,
+    old: &mut BTreeSet<Cell>,
+) -> Result<()> {
+    let t = &scene.palette.templates[&(id, 0)];
+    let raw = scene.catalog.raw_tiles[&id];
+    let width = usize::from(t.width);
+    for (sub, s) in t.cells.iter().enumerate() {
+        let Some(s) = s else { continue };
+        let Some(at) = offset(origin, (sub % width) as i32, (sub / width) as i32)
+            .filter(|&at| doc.contains_cell(at))
+        else {
+            continue;
+        };
+        let v = value(doc, scene, at);
+        ensure!(
+            v.tile == raw && usize::from(v.sub) == sub && v.level == base + s.height,
+            "{},{} 的已有悬崖模板不完整，请先修复手工覆盖的子块",
+            at[0],
+            at[1]
+        );
+        old.insert(at);
+    }
+    Ok(())
+}
+
 fn cliff_rim(scene: &MapScene, id: u16, origin: Cell, base: u8) -> impl Iterator<Item = Cell> {
     let piece = crate::coastal_cliffs::piece(scene, id)
         .expect("recognized cliff stamp")
@@ -168,22 +223,27 @@ pub fn infer_base(doc: &MapDocument, scene: &MapScene, at: Cell) -> u8 {
     if let Some(base) = ramp_join::infer_base(doc, scene, at) {
         return base;
     }
-    if let Some((_, _, base)) = cliff(scene, value(doc, scene, at), at) {
+    let start = value(doc, scene, at);
+    if let Some((_, _, base)) = cliff(scene, start, at) {
         return base;
     }
-    let level = value(doc, scene, at).level;
-    let mut queue = VecDeque::from([at]);
-    let mut seen = BTreeSet::new();
-    while let Some(p) = queue.pop_front() {
-        if !seen.insert(p) || doc.check_cell(p).is_err() || value(doc, scene, p).level != level {
+    let level = start.level;
+    let mut queue = CellQueue::new(doc);
+    queue.push(at);
+    while let Some(p) = queue.pop() {
+        if !doc.contains_cell(p) {
             continue;
         }
-        if let Some((_, _, base)) = cliff(scene, value(doc, scene, p), p) {
+        let v = if p == at { start } else { value(doc, scene, p) };
+        if v.level != level {
+            continue;
+        }
+        if let Some((_, _, base)) = cliff(scene, v, p) {
             return base;
         }
         for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
             if let Some(n) = offset(p, dx, dy) {
-                queue.push_back(n);
+                queue.push(n);
             }
         }
     }
@@ -387,6 +447,8 @@ pub fn reshape(
                 .copied()
                 .filter(|&at| value(doc, scene, at).level == base + 4),
         );
+    } else if core.is_empty() {
+        core = selection;
     } else {
         core.extend(selection);
     }
@@ -415,7 +477,7 @@ fn remesh(
     } else if lowered.is_some() {
         cliff_tools::cut_geometry(doc, scene, core, base)?
     } else {
-        cliff_tools::geometry(doc, scene, core, base)?
+        cliff_tools::drag_geometry(doc, scene, core, base)?
     };
     if let Some(lowered) = lowered {
         // Ordinary ground keeps its original material. Old wall pieces are
@@ -432,10 +494,22 @@ fn remesh(
         return Ok(p);
     }
     preserve_portals(scene, &mut p, protected);
-    crate::coastal_cliffs::adapt(doc, scene, &mut p)?;
-    crate::cliff_variants::apply(doc, scene, &mut p);
+    style_clipped_cliffs(doc, scene, &mut p)?;
     p.edits.retain(|&at, v| *v != value(doc, scene, at));
     Ok(p)
+}
+
+fn style_clipped_cliffs(doc: &MapDocument, scene: &MapScene, p: &mut PlateauPlan) -> Result<()> {
+    // Edge stamps have only their in-map subtiles. Coastal substitutions
+    // and wider variants require complete footprints, so keep those stamps.
+    let clipped = p
+        .cliffs
+        .extract_if(.., |stamp| !stamp.fits(doc, scene))
+        .collect::<Vec<_>>();
+    crate::coastal_cliffs::adapt(doc, scene, p)?;
+    crate::cliff_variants::apply(doc, scene, p);
+    p.cliffs.extend(clipped);
+    Ok(())
 }
 
 /// A snapped cliff stroke raises a narrow band on the selected high side.
@@ -473,21 +547,33 @@ pub fn line(
         normal = (-normal.0, -normal.1);
     }
     let norm = sx * sx + sy * sy;
-    let project = |at: Cell| {
-        let x = i32::from(at[0]) - i32::from(start[0]);
-        let y = i32::from(at[1]) - i32::from(start[1]);
-        ((x * sx + y * sy), x * normal.0 + y * normal.1)
-    };
     let mut band = BTreeSet::new();
-    for x in -length - 18..=length + 18 {
-        for y in -length - 18..=length + 18 {
-            if let Some(p) = offset(start, x, y) {
-                let (a, d) = project(p);
-                if (0..=length * norm).contains(&a) && (0..=3 * norm).contains(&d) {
-                    band.insert(p);
+    let header = &doc.base.header;
+    let limit = (header.width + header.height + 8).min(u32::from(MAX_CELL_SIDE) + 8) as i32;
+    let [start_x, start_y] = start.map(i32::from);
+    let reach = length + 6;
+    for x in (-reach).max(-start_x)..=reach.min(limit - start_x) {
+        let mut min_y = (-reach).max(-start_y);
+        let mut max_y = reach.min(limit - start_y);
+        // Intersect the two projection intervals with this column. Only
+        // visit cells in the narrow band, even for a long diagonal stroke.
+        for (fixed, y_step, end) in [
+            (x * sx, sy, length * norm),
+            (x * normal.0, normal.1, 3 * norm),
+        ] {
+            let (lo, hi) = match y_step {
+                -1 => (fixed - end, fixed),
+                1 => (-fixed, end - fixed),
+                _ if (0..=end).contains(&fixed) => continue,
+                _ => {
+                    max_y = min_y - 1;
+                    break;
                 }
-            }
+            };
+            min_y = min_y.max(lo);
+            max_y = max_y.min(hi);
         }
+        band.extend((min_y..=max_y).map(|y| [(start_x + x) as u16, (start_y + y) as u16]));
     }
     reshape(doc, scene, band, base, false)
 }
@@ -506,9 +592,9 @@ pub fn polyline(
     let mut path = path.to_vec();
     path.dedup();
     ensure!(path.len() >= 2, "请点击至少两个不同的悬崖折点");
-    for &at in &path {
-        doc.check_cell(at)?;
-    }
+    // The full path can start outside Size. The geometry planners crop
+    // the generated faces and interior before validating terrain edits.
+    cliff_tools::validate_virtual_coords(&path)?;
     let closed = path.first() == path.last();
     cliff_tools::validate_polyline_path(
         &path,
@@ -531,7 +617,7 @@ pub fn polyline(
             .iter()
             .flat_map(|&at| crate::terrain_tools::neighbors(at))
         {
-            if !interior.contains(&at) && doc.check_cell(at).is_ok() {
+            if !interior.contains(&at) && doc.contains_cell(at) {
                 ensure!(
                     value(doc, scene, at).level == base,
                     "轮廓外侧地面须统一为基准 {base} 层；请先调整地面高度"
@@ -551,7 +637,7 @@ pub fn polyline(
             let floor_cells = interior.difference(&rim).copied().collect();
             cliff_tools::pit_geometry(doc, scene, floor_cells, floor)?
         } else {
-            cliff_tools::geometry(doc, scene, interior, base)?
+            cliff_tools::drag_geometry(doc, scene, interior, base)?
         }
     } else {
         // Virtual high ground selects the facing of the cliff templates.
@@ -563,7 +649,7 @@ pub fn polyline(
             .iter()
             .fold([0; 2], |a, p| [a[0].max(p[0]), a[1].max(p[1])]);
         let lo = min.map(|v| v.saturating_sub(4));
-        let hi = max.map(|v| v.saturating_add(4).min(MAX_CELL_SIDE - 1));
+        let hi = max.map(|v| v.saturating_add(4).min(cliff_tools::MAX_DRAG_COORD));
         let mut high = BTreeSet::new();
         let mut edge = BTreeSet::new();
         for at in cliff_tools::rectangle(lo, hi) {
@@ -624,8 +710,8 @@ pub fn polyline(
         high.extend(path.windows(2).flat_map(|ab| cell_line(ab[0], ab[1])));
         cliff_tools::open_geometry(doc, scene, high, base, &edge)?
     };
-    crate::coastal_cliffs::adapt(doc, scene, &mut p)?;
-    crate::cliff_variants::apply(doc, scene, &mut p);
+    ensure!(!p.edits.is_empty(), "地图内没有可生成的悬崖地形");
+    style_clipped_cliffs(doc, scene, &mut p)?;
     if closed {
         cliff_tools::validate_polyline(doc, scene, &p.edits, p.base)?;
     } else {
@@ -656,6 +742,27 @@ pub(crate) fn stamp(
     origin: Cell,
     base: u8,
 ) -> Result<BTreeMap<Cell, TerrainValue>> {
+    stamp_impl(doc, scene, id, origin, base, false)
+}
+
+pub(crate) fn stamp_clipped(
+    doc: &MapDocument,
+    scene: &MapScene,
+    id: u16,
+    origin: Cell,
+    base: u8,
+) -> Result<BTreeMap<Cell, TerrainValue>> {
+    stamp_impl(doc, scene, id, origin, base, true)
+}
+
+fn stamp_impl(
+    doc: &MapDocument,
+    scene: &MapScene,
+    id: u16,
+    origin: Cell,
+    base: u8,
+    clip: bool,
+) -> Result<BTreeMap<Cell, TerrainValue>> {
     let t = scene
         .palette
         .templates
@@ -669,9 +776,14 @@ pub(crate) fn stamp(
                 origin,
                 sub as i32 % i32::from(t.width),
                 sub as i32 / i32::from(t.width),
-            )
-            .context("模板越界")?;
-            doc.check_cell(at)?;
+            );
+            if clip && at.is_none_or(|at| !doc.contains_cell(at)) {
+                continue;
+            }
+            let at = at.context("模板越界")?;
+            if !clip {
+                doc.check_cell(at)?;
+            }
             ensure!(
                 scene
                     .palette
@@ -736,12 +848,14 @@ pub(crate) fn complete_replacement(
         let mut missing = None;
         for (sub, c) in t.cells.iter().enumerate() {
             if c.is_some() {
-                let p = offset(
+                let Some(p) = offset(
                     origin,
                     sub as i32 % i32::from(t.width),
                     sub as i32 / i32::from(t.width),
                 )
-                .context("原模板越界")?;
+                .filter(|&p| doc.contains_cell(p)) else {
+                    continue;
+                };
                 if !plan.edits.contains_key(&p) {
                     missing = Some(p);
                 }
@@ -769,7 +883,7 @@ pub(crate) fn complete_replacement(
     }
     for s in remainders {
         plan.edits
-            .extend(stamp(doc, scene, s.tile, s.origin, s.base)?);
+            .extend(stamp_clipped(doc, scene, s.tile, s.origin, s.base)?);
         plan.cliffs.push(s);
     }
     Ok(())

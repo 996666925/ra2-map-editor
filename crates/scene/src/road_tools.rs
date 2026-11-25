@@ -1,7 +1,7 @@
 //! Road networks reconstructed from complete theater templates.
 use crate::{
     cliff_authoring,
-    cliff_tools::{CliffStamp, PlateauPlan},
+    cliff_tools::{self, CliffStamp, PlateauPlan},
     map::MapScene,
     shore_tools::{ground, id, offset, protect},
     terrain_tools::value,
@@ -62,7 +62,7 @@ fn existing_stamp(
     origin: Cell,
     base: u8,
 ) -> Result<BTreeMap<Cell, TerrainValue>> {
-    let cells = cliff_authoring::stamp(doc, scene, tile, origin, base)?;
+    let cells = cliff_authoring::stamp_clipped(doc, scene, tile, origin, base)?;
     for (&at, &expected) in &cells {
         ensure!(
             value(doc, scene, at) == expected,
@@ -261,13 +261,14 @@ impl HeightRoads {
             let mut changed = false;
             for (sub, geometry) in t.cells.iter().enumerate() {
                 let Some(g) = geometry else { continue };
-                let p = offset(
+                let Some(p) = offset(
                     origin,
                     sub as i32 % i32::from(t.width),
                     sub as i32 / i32::from(t.width),
                 )
-                .context("道路模板越界")?;
-                doc.check_cell(p)?;
+                .filter(|&p| doc.contains_cell(p)) else {
+                    continue;
+                };
                 let prev = value(doc, scene, p);
                 ensure!(
                     id(scene, prev) == Some(tile)
@@ -571,6 +572,7 @@ fn snap_endpoint(doc: &MapDocument, scene: &MapScene, kit: &RoadKit, at: Cell) -
         let template = &scene.palette.templates[&(piece.tile, 0)];
         let origin = stamp_origin(at, old, template)?;
         return Ok(stamp_points(origin, piece)
+            .filter(|&p| doc.contains_cell(p))
             .min_by_key(|p| (p[0].abs_diff(at[0]) + p[1].abs_diff(at[1]), *p))
             .unwrap_or(at));
     }
@@ -585,9 +587,9 @@ fn snap_endpoint(doc: &MapDocument, scene: &MapScene, kit: &RoadKit, at: Cell) -
             && !kit.slopes.contains_key(&piece.tile)
         {
             let origin = stamp_origin(n, v, &scene.palette.templates[&(piece.tile, 0)])?;
-            for p in stamp_points(origin, piece)
-                .filter(|p| p[0].abs_diff(at[0]) + p[1].abs_diff(at[1]) <= 1)
-            {
+            for p in stamp_points(origin, piece).filter(|&p| {
+                doc.contains_cell(p) && p[0].abs_diff(at[0]) + p[1].abs_diff(at[1]) <= 1
+            }) {
                 best = Some(best.map_or(p, |old: Cell| old.min(p)));
             }
         }
@@ -632,10 +634,13 @@ fn plan_selected(
     grades: bool,
 ) -> Result<PlateauPlan> {
     let kit = RoadKit::load(scene, style).context("当前环境没有这种道路的完整连接模板")?;
-    doc.check_cell(a)?;
-    doc.check_cell(b)?;
+    cliff_tools::validate_polyline_coords(doc, &[a, b])?;
     let a = snap_endpoint(doc, scene, &kit, a)?;
-    let mut b = snap_endpoint(doc, scene, &kit, b)?;
+    let mut b = if doc.contains_cell(b) {
+        snap_endpoint(doc, scene, &kit, b)?
+    } else {
+        b
+    };
     if axis_lock {
         b = axis_endpoint(a, b);
     }
@@ -749,9 +754,17 @@ fn plan_route_with_prefix(
     let kit = RoadKit::load(scene, style).context("当前环境没有这种道路的完整连接模板")?;
     let mut vertices = Vec::with_capacity(ends.len() + 1);
     vertices.extend(prefix.last().copied());
+    if prefix.is_empty() {
+        cliff_tools::validate_polyline_coords(doc, ends)?;
+    } else {
+        cliff_tools::validate_virtual_coords(ends)?;
+    }
     for &at in ends {
-        doc.check_cell(at)?;
-        vertices.push(snap_endpoint(doc, scene, &kit, at)?);
+        vertices.push(if doc.contains_cell(at) {
+            snap_endpoint(doc, scene, &kit, at)?
+        } else {
+            at
+        });
     }
     vertices.dedup();
     ensure!(
@@ -853,11 +866,17 @@ fn build_segment(
     cut: bool,
     grades: bool,
 ) -> Result<PlateauPlan> {
-    let selected: BTreeSet<_> = path.iter().copied().collect();
-    let base = value(doc, scene, path[0]).level;
+    // Crop the resolved staircase. A route can leave Size and come back,
+    // so only grade consecutive cells that are both still on the map.
+    let on_map = |at| doc.contains_cell(at);
+    let selected: BTreeSet<_> = path.iter().copied().filter(|&at| on_map(at)).collect();
+    let &first = path
+        .iter()
+        .find(|&&at| on_map(at))
+        .context("拖动一段距离以生成道路")?;
+    let base = value(doc, scene, first).level;
     let mut queue = VecDeque::new();
-    for &at in path {
-        doc.check_cell(at)?;
+    for &at in path.iter().filter(|&&at| on_map(at)) {
         let g = grade(scene, value(doc, scene, at));
         ensure!(
             g.slope == 0 || (grades && !cut && g.slope <= 4 && g.level < 127),
@@ -879,6 +898,9 @@ fn build_segment(
     if !cut {
         for pair in path.windows(2) {
             let [a, b] = [pair[0], pair[1]];
+            if !on_map(a) || !on_map(b) {
+                continue;
+            }
             let port = DIRS
                 .iter()
                 .find(|&&(dx, dy, _)| offset(a, dx, dy) == Some(b))
@@ -922,7 +944,11 @@ fn build_segment(
             old.insert(p);
             queue.extend(crate::terrain_tools::neighbors(p).map(|p| (p, level)));
         }
-        points.extend(stamp_points(origin, piece).map(|p| (p, Grade { level, slope: 0 })));
+        points.extend(
+            stamp_points(origin, piece)
+                .filter(|&p| on_map(p))
+                .map(|p| (p, Grade { level, slope: 0 })),
+        );
     }
     if cut {
         ensure!(
@@ -932,7 +958,8 @@ fn build_segment(
         points.retain(|p, _| !selected.contains(p));
     } else {
         points.extend(
-            path.iter()
+            selected
+                .iter()
                 .map(|&p| (p, grade(scene, value(doc, scene, p)))),
         );
     }
@@ -1014,7 +1041,7 @@ fn build_segment(
                     .context("当前道路类型缺少匹配方向的坡道素材")?;
             }
             let origin = offset(at, -piece.anchor[0], -piece.anchor[1]).context("道路模板越界")?;
-            let cells = cliff_authoring::stamp(doc, scene, piece.tile, origin, g.level)?;
+            let cells = cliff_authoring::stamp_clipped(doc, scene, piece.tile, origin, g.level)?;
             let covered: BTreeSet<_> = stamp_points(origin, piece).collect();
             for &p in cells.keys() {
                 ensure!(occupied.insert(p), "道路转角或路口相距过近，请拉开直道间距");

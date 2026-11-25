@@ -45,18 +45,17 @@ pub struct CliffCut {
 impl CliffCut {
     /// Find the first wall crossed by the segment between the two cell centers.
     pub fn first_wall(doc: &MapDocument, scene: &MapScene, start: Cell, end: Cell) -> Result<Cell> {
-        doc.check_cell(start)?;
-        doc.check_cell(end)?;
+        cliff_tools::validate_polyline_coords(doc, &[start, end])?;
         ensure!(start != end, "切线需要两个不同的点");
         let [dx, dy] = [0, 1].map(|axis| i32::from(end[axis]) - i32::from(start[axis]));
         let (mut next_x, mut next_y) = (1, 1);
         let mut at = start;
         loop {
-            if cliff(scene, value(doc, scene, at), at).is_some() && doc.check_cell(at).is_ok() {
+            if doc.contains_cell(at) && cliff(scene, value(doc, scene, at), at).is_some() {
                 return Ok(at);
             }
             if at == end {
-                anyhow::bail!("切线尚未穿过悬崖，请把第二点往高台方向移");
+                break;
             }
             // Compare the boundary crossing times in half-cell units. At an
             // exact corner only enter the diagonally adjacent cell.
@@ -70,6 +69,7 @@ impl CliffCut {
                 next_y += 2;
             }
         }
+        anyhow::bail!("切线尚未穿过悬崖，请把第二点往高台方向移")
     }
 
     pub fn select(doc: &MapDocument, scene: &MapScene, start: Cell) -> Result<Self> {
@@ -120,8 +120,7 @@ impl CliffCut {
         side: CutSide,
         target: Option<u8>,
     ) -> Result<PlateauPlan> {
-        doc.check_cell(start)?;
-        doc.check_cell(end)?;
+        cliff_tools::validate_polyline_coords(doc, &[start, end])?;
         ensure!(start != end, "切线需要两个不同的点");
         let base = self.base;
         let target = target.unwrap_or(base);
@@ -236,6 +235,9 @@ fn component(
                 let Some(p) = offset(at, dx, dy) else {
                     continue;
                 };
+                if !doc.contains_cell(p) {
+                    continue;
+                }
                 let Some((id, origin, stamp_base)) = cliff(scene, value(doc, scene, p), p) else {
                     continue;
                 };
@@ -252,26 +254,7 @@ fn component(
                         enqueue(p, &mut queue, &mut top);
                     }
                 }
-                let template = &scene.palette.templates[&(id, 0)];
-                for (sub, meta) in template.cells.iter().enumerate() {
-                    let Some(meta) = meta else {
-                        continue;
-                    };
-                    let width = usize::from(template.width);
-                    let p = offset(origin, (sub % width) as i32, (sub / width) as i32)
-                        .context("悬崖越界")?;
-                    doc.check_cell(p)?;
-                    let v = value(doc, scene, p);
-                    ensure!(
-                        v.tile == scene.catalog.raw_tiles[&id]
-                            && usize::from(v.sub) == sub
-                            && v.level == base + meta.height,
-                        "{},{} 的已有悬崖模板不完整，请先修复手工覆盖的子块",
-                        p[0],
-                        p[1]
-                    );
-                    old.insert(p);
-                }
+                super::collect_existing_cliff(doc, scene, id, origin, base, &mut old)?;
             }
         }
     }

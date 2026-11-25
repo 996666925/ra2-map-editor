@@ -442,16 +442,13 @@ fn polyline_near_grid_edge_checks_written_templates_not_virtual_padding() {
         assert!(!p.edits.is_empty());
         assert!(p.edits.keys().all(|&at| doc.check_cell(at).is_ok()));
     }
-    // Actual template cells crossing the Size diamond are still rejected.
+    // Actual template cells can cross Size even when both vertices fit.
     let path = [[2, 60], [2, 61]];
-    for at in path {
-        doc.check_cell(at).unwrap();
+    for high_left in [true, false] {
+        let p = polyline(&doc, &scene, &path, 4, high_left).unwrap();
+        assert!(!p.edits.is_empty());
+        assert!(p.edits.keys().all(|&at| doc.contains_cell(at)));
     }
-    assert!(
-        [true, false]
-            .into_iter()
-            .any(|high_left| polyline(&doc, &scene, &path, 4, high_left).is_err())
-    );
 }
 
 #[test]
@@ -1765,12 +1762,9 @@ fn cliff_cut_large_high_plateau_at_diamond_edge_preserves_kept_land() {
     doc.commit("plateau");
     let before = doc.snapshot().bytes().unwrap();
     let cut = CliffCut::select(&doc, &scene, [200, 200]).unwrap();
-    assert!(
-        cut.plan(&doc, &scene, [200, 420], CutSide::Left, None)
-            .is_err()
-    );
+    assert!(!doc.contains_cell([200, 420]));
     let plan = cut
-        .plan(&doc, &scene, [200, 419], CutSide::Left, Some(base + 3))
+        .plan(&doc, &scene, [200, 420], CutSide::Left, Some(base + 3))
         .unwrap();
     assert!(plan.edits.len() > 12_000);
     assert!(!plan.edits.contains_key(&[165, 200]));
@@ -1780,6 +1774,50 @@ fn cliff_cut_large_high_plateau_at_diamond_edge_preserves_kept_land() {
     assert_eq!(value(&doc, &scene, [165, 200]).level, base + 4);
     assert_eq!(value(&doc, &scene, [235, 200]).level, base + 3);
     doc.commit("cut");
+    doc.undo();
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+}
+
+#[test]
+fn cliff_cut_remeshes_clipped_walls_and_keeps_the_in_map_high_ground() {
+    let (mut doc, scene) = setup();
+    let plateau = reshape(
+        &doc,
+        &scene,
+        cliff_tools::rectangle([65, 20], [94, 44]),
+        4,
+        false,
+    )
+    .unwrap();
+    assert!(plateau.cliffs.iter().any(|s| !s.fits(&doc, &scene)));
+    plateau.apply(&mut doc).unwrap();
+    doc.commit("edge plateau");
+    let before = doc.snapshot().bytes().unwrap();
+
+    let (start, inside, outside) = ([72, 15], [72, 50], [72, 135]);
+    assert!(doc.contains_cell(start) && doc.contains_cell(inside));
+    assert!(!doc.contains_cell(outside));
+    let wall = CliffCut::first_wall(&doc, &scene, start, outside).unwrap();
+    assert_eq!(
+        wall,
+        CliffCut::first_wall(&doc, &scene, start, inside).unwrap()
+    );
+    let cut = CliffCut::select(&doc, &scene, wall).unwrap();
+    let plan = cut
+        .plan_line(&doc, &scene, [start, outside], CutSide::Right, None)
+        .unwrap();
+    assert_eq!(
+        plan.edits,
+        cut.plan_line(&doc, &scene, [start, inside], CutSide::Right, None)
+            .unwrap()
+            .edits
+    );
+    assert!(plan.cliffs.iter().any(|s| !s.fits(&doc, &scene)));
+    assert!(plan.edits.keys().all(|&at| doc.contains_cell(at)));
+    plan.apply(&mut doc).unwrap();
+    assert_eq!(value(&doc, &scene, [68, 30]).level, 4);
+    assert_eq!(value(&doc, &scene, [84, 30]).level, 8);
+    doc.commit("edge cut");
     doc.undo();
     assert_eq!(doc.snapshot().bytes().unwrap(), before);
 }

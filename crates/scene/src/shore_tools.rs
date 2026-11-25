@@ -277,16 +277,16 @@ pub fn polyline(doc: &MapDocument, scene: &MapScene, path: &[Cell]) -> Result<Pl
         path.pop();
     }
     ensure!(path.len() >= 3, "折线水域需要至少三个不同的折点");
-    for &at in &path {
-        doc.check_cell(at)?;
-    }
+    cliff_tools::validate_polyline_coords(doc, &path)?;
     path.push(path[0]);
     cliff_tools::validate_polyline_path(
         &path,
         "水域折线不能回折重叠，请撤回或补画折点",
         "水域轮廓不能自交或重复经过折点，请撤回或补画折点",
     )?;
-    fit_outline(doc, scene, polygon_cells(&path)?)
+    let mut selection = polygon_cells(&path)?;
+    selection.retain(|&at| doc.contains_cell(at));
+    fit_outline(doc, scene, selection)
 }
 
 /// Fill a validated, closed polygon using its actual edge crossings. A flood
@@ -329,7 +329,9 @@ fn polygon_cells(path: &[Cell]) -> Result<BTreeSet<Cell>> {
 /// blocks, adding at most one cell per axis around the enclosed selection.
 /// Only tiling failures trigger snapping; both attempts validate terrain and protection.
 pub fn outline(doc: &MapDocument, scene: &MapScene, path: &[Cell]) -> Result<PlateauPlan> {
-    fit_outline(doc, scene, cliff_tools::enclose(path)?)
+    let mut selection = cliff_tools::enclose(path)?;
+    selection.retain(|&at| doc.check_cell(at).is_ok());
+    fit_outline(doc, scene, selection)
 }
 
 fn fit_outline(
@@ -346,6 +348,7 @@ fn fit_outline(
                 let y = at[1] / 2 * 2;
                 snapped.extend([[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]);
             }
+            snapped.retain(|&at| doc.check_cell(at).is_ok());
             plan(doc, scene, snapped, Some(true))
         }
         Err(e) => Err(e),

@@ -146,6 +146,20 @@ fn flat_authoring_view() -> (MapView, MapScene, PathBuf) {
     flat_authoring_view_with(ra2_map_assets::test_support::Fixture::with_authoring())
 }
 
+fn authoring_fixture_with_pickable_ground() -> ra2_map_assets::test_support::Fixture {
+    let fixture = ra2_map_assets::test_support::Fixture::with_authoring();
+    // The default fixture uses a tiny TMP. Use a full diamond so the 3D
+    // terrain picker can hit the original cell centers.
+    let mut tmp: Vec<u8> = [1u32, 1, 60, 30, 20]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    tmp.resize(72, 0);
+    tmp.resize(72 + 900, 1);
+    std::fs::write(fixture.0.join("clear01.tem"), tmp).unwrap();
+    fixture
+}
+
 fn flat_authoring_view_with(
     fixture: ra2_map_assets::test_support::Fixture,
 ) -> (MapView, MapScene, PathBuf) {
@@ -366,15 +380,29 @@ fn flat_frame_button(
     button: Option<(egui::PointerButton, bool)>,
     key: Option<egui::Key>,
 ) {
+    canvas_frame_button(view, ctx, at.map(|at| (at, 0)), button, key);
+}
+
+fn canvas_frame_button(
+    view: &mut MapView,
+    ctx: &egui::Context,
+    at: Option<([u16; 2], u8)>,
+    button: Option<(egui::PointerButton, bool)>,
+    key: Option<egui::Key>,
+) {
     let mut events = Vec::new();
-    if let Some(at) = at {
+    if let Some((at, level)) = at {
         let rect = view.workbench.canvas_rect.unwrap();
         let camera = crate::camera::MapCamera {
             center: view.center,
             zoom: view.zoom,
         };
-        let pos =
-            rect.min + (crate::flat_view::position(at) - camera.world_rect(rect).min) * camera.zoom;
+        let world = crate::flat_view::position(at)
+            - egui::vec2(
+                0.,
+                f32::from(level) * vera20k_core::map::terrain::HEIGHT_STEP,
+            );
+        let pos = rect.min + (world - camera.world_rect(rect).min) * camera.zoom;
         events.push(egui::Event::PointerMoved(pos));
         if let Some((button, pressed)) = button {
             events.push(egui::Event::PointerButton {
@@ -759,6 +787,324 @@ fn flat_terrain_canvas_drag_preview_commit_and_history_share_exact_cells() {
 }
 
 #[test]
+fn cliff_canvas_release_beyond_map_and_viewport_crops_the_full_stroke() {
+    use ra2_map_scene::{cliff_authoring, terrain_tools::TerrainMode};
+
+    let (mut view, scene, root) = flat_authoring_view();
+    view.editor.activate_terrain_mode(TerrainMode::CliffFront);
+    view.center = crate::flat_view::position([49, 49]);
+    let ctx = egui::Context::default();
+    flat_frame(&mut view, &ctx, None, None, None);
+    let rect = view.workbench.canvas_rect.unwrap();
+    let camera = crate::camera::MapCamera {
+        center: view.center,
+        zoom: view.zoom,
+    };
+    let start = [47, 47];
+    let last_visible = [52, 52];
+    let end = [68, 68];
+    let end_pos =
+        rect.min + (crate::flat_view::position(end) - camera.world_rect(rect).min) * camera.zoom;
+    assert!(!rect.contains(end_pos));
+    let doc = view.editor.doc.as_ref().unwrap();
+    assert!(doc.check_cell(end).is_err());
+    let before = doc.snapshot().bytes().unwrap();
+    let expected = cliff_authoring::line(doc, &scene, start, end, 4, false).unwrap();
+    let short = cliff_authoring::line(doc, &scene, start, last_visible, 4, false).unwrap();
+    assert!(expected.interior.iter().any(|at| at[0] + at[1] == 120));
+    assert!(expected.edits.len() > short.edits.len());
+
+    flat_frame(&mut view, &ctx, Some(start), None, None);
+    flat_frame(&mut view, &ctx, Some(start), Some(true), None);
+    flat_frame(&mut view, &ctx, Some(last_visible), None, None);
+    assert!(view.editor.stroking);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    flat_frame(&mut view, &ctx, Some(end), Some(false), None);
+
+    assert!(view.hover.is_none());
+    assert!(!view.editor.stroking);
+    assert_eq!(
+        view.editor.feedback,
+        expected.edits.keys().copied().collect()
+    );
+    let doc = view.editor.doc.as_ref().unwrap();
+    for (&at, &value) in &expected.edits {
+        assert!(doc.check_cell(at).is_ok());
+        assert_eq!(doc.terrain(at), Some(value));
+    }
+    view.editor.history(false, &scene);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cliff_canvas_crops_each_map_edge_and_supports_cancel_reentry_and_redo() {
+    use ra2_map_scene::{cliff_authoring, terrain_tools::TerrainMode};
+
+    let (mut view, scene, root) = flat_authoring_view();
+    let ctx = egui::Context::default();
+    let start = [40, 40];
+    view.center = crate::flat_view::position(start);
+    view.zoom = 0.22;
+    flat_frame(&mut view, &ctx, None, None, None);
+    let bytes = |view: &MapView| {
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap()
+    };
+    let before = bytes(&view);
+    for (side, end) in [[16, 16], [68, 68], [14, 66], [66, 14]]
+        .into_iter()
+        .enumerate()
+    {
+        for back in [false, true] {
+            view.editor.activate_terrain_mode(if back {
+                TerrainMode::CliffBack
+            } else {
+                TerrainMode::CliffFront
+            });
+            let doc = view.editor.doc.as_ref().unwrap();
+            assert!(doc.check_cell(end).is_err());
+            let expected = cliff_authoring::line(doc, &scene, start, end, 4, back).unwrap();
+            assert!(expected.interior.iter().any(|&[x, y]| match side {
+                0 => x + y == 41,
+                1 => x + y == 120,
+                2 => y - x == 39,
+                3 => x - y == 39,
+                _ => unreachable!(),
+            }));
+            assert!(expected.edits.keys().all(|&at| doc.check_cell(at).is_ok()));
+            flat_frame(&mut view, &ctx, Some(start), None, None);
+            flat_frame(&mut view, &ctx, Some(start), Some(true), None);
+            flat_frame(&mut view, &ctx, Some(end), None, None);
+            assert!(view.hover.is_none() && view.editor.stroking);
+            assert_eq!(bytes(&view), before);
+            flat_frame(&mut view, &ctx, Some(end), Some(false), None);
+            assert_eq!(
+                view.editor.feedback,
+                expected.edits.keys().copied().collect()
+            );
+            let after = bytes(&view);
+            let (reopened, _) =
+                crate::map::SourceMap::parse("edge.map".into(), "test".into(), after.clone())
+                    .unwrap();
+            let reopened = crate::document::MapDocument::new(reopened.edit_base.unwrap());
+            for (&at, &value) in &expected.edits {
+                assert_eq!(reopened.terrain(at), Some(value), "{at:?}");
+            }
+            view.editor.history(false, &scene);
+            assert_eq!(bytes(&view), before);
+            view.editor.history(true, &scene);
+            assert_eq!(bytes(&view), after);
+            view.editor.history(false, &scene);
+        }
+    }
+
+    view.editor.activate_terrain_mode(TerrainMode::CliffFront);
+    let outside = [68, 68];
+    let inside = [48, 48];
+    flat_frame(&mut view, &ctx, Some(start), None, None);
+    flat_frame(&mut view, &ctx, Some(start), Some(true), None);
+    flat_frame(
+        &mut view,
+        &ctx,
+        Some(outside),
+        None,
+        Some(egui::Key::Escape),
+    );
+    flat_frame(&mut view, &ctx, Some(outside), Some(false), None);
+    assert_eq!(bytes(&view), before);
+    assert!(!view.editor.stroking);
+
+    let expected = cliff_authoring::line(
+        view.editor.doc.as_ref().unwrap(),
+        &scene,
+        start,
+        inside,
+        4,
+        false,
+    )
+    .unwrap();
+    flat_frame(&mut view, &ctx, Some(start), None, None);
+    flat_frame(&mut view, &ctx, Some(start), Some(true), None);
+    flat_frame(&mut view, &ctx, Some(outside), None, None);
+    flat_frame(&mut view, &ctx, Some(inside), None, None);
+    assert_eq!(
+        view.hover.map(|i| [scene.cells[i].rx, scene.cells[i].ry]),
+        Some(inside)
+    );
+    flat_frame(&mut view, &ctx, Some(inside), Some(false), None);
+    assert_eq!(
+        view.editor.feedback,
+        expected.edits.keys().copied().collect()
+    );
+    view.editor.history(false, &scene);
+    assert_eq!(bytes(&view), before);
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn whole_template_canvas_drag_skips_incomplete_edge_placements() {
+    use ra2_map_scene::terrain_tools::{self, TerrainMode};
+
+    let (mut view, scene, root) = flat_authoring_view();
+    view.editor.activate_terrain_mode(TerrainMode::Template);
+    let brush = scene
+        .brushes
+        .iter()
+        .position(|brush| {
+            let template = &scene.palette.templates[&(brush.key.tile_id, 0)];
+            brush.key.variant == 0
+                && brush.key.sub_tile == 0
+                && template.cells.iter().flatten().count() > 1
+        })
+        .unwrap();
+    view.editor.brush = brush;
+    view.editor.template_level = Some(4);
+    view.editor.auto_lat = false;
+    let ctx = egui::Context::default();
+    view.center = crate::flat_view::position([58, 58]);
+    view.zoom = 0.7;
+    flat_frame(&mut view, &ctx, None, None, None);
+
+    let start = [52, 52];
+    let edge = [60, 60];
+    let end = [64, 64];
+    let doc = view.editor.doc.as_ref().unwrap();
+    let before = doc.snapshot().bytes().unwrap();
+    let brush = &scene.brushes[brush];
+    let start_stamp =
+        terrain_tools::template_placement(doc, &scene, brush, start, Some(4)).unwrap();
+    assert!(doc.check_cell(edge).is_ok());
+    assert!(
+        terrain_tools::footprint(&scene, brush, edge)
+            .unwrap()
+            .iter()
+            .any(|&(cell, _, _)| doc.check_cell(cell).is_err())
+    );
+    flat_frame(&mut view, &ctx, Some(start), None, None);
+    flat_frame(&mut view, &ctx, Some(start), Some(true), None);
+    flat_frame(&mut view, &ctx, Some(end), Some(false), None);
+    let doc = view.editor.doc.as_ref().unwrap();
+    for (at, terrain) in start_stamp {
+        assert_eq!(doc.terrain(at), Some(terrain));
+    }
+    assert!(
+        view.editor
+            .feedback
+            .iter()
+            .all(|&at| doc.check_cell(at).is_ok())
+    );
+    view.editor.history(false, &scene);
+    assert_eq!(
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn overlay_canvas_drag_keeps_tracking_outside_the_map() {
+    let (mut view, scene, root) =
+        flat_authoring_view_with(authoring_fixture_with_pickable_ground());
+    view.editor.activate_tool(crate::editing::Tool::Erase);
+    // Erase normally has nothing to remove on a new map. Seed cells that
+    // the off-map endpoint, and not the last hovered cell, will reach.
+    let start = [54, 54];
+    let path = [[54, 54], [55, 55], [60, 60]];
+    let doc = view.editor.doc.as_mut().unwrap();
+    use crate::document::{Target, Value};
+    for at in path {
+        doc.set(Target::Overlay(at), Some(Value::Overlay(0, 0)))
+            .unwrap();
+    }
+    doc.commit("overlay fixture");
+    view.editor.flat_view = false;
+    let project = |[x, y]: [u16; 2]| {
+        let (x, y) = vera20k_core::map::terrain::iso_to_screen(x, y, 4);
+        egui::pos2(x + 30., y + 15.)
+    };
+    view.center = project([58, 58]);
+    let ctx = egui::Context::default();
+    let frame = |view: &mut MapView, events| {
+        crate::test_support::run_ui(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200., 800.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| view.canvas_inner(ui, None),
+        );
+    };
+    frame(&mut view, vec![]);
+    let rect = view.workbench.canvas_rect.unwrap();
+    let camera = crate::camera::MapCamera {
+        center: view.center,
+        zoom: view.zoom,
+    };
+    let screen_pos = |at| rect.min + (project(at) - camera.world_rect(rect).min) * camera.zoom;
+    let start_pos = screen_pos(start);
+    let end_pos = screen_pos([61, 61]);
+    assert!(rect.contains(end_pos));
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    frame(&mut view, vec![egui::Event::PointerMoved(start_pos)]);
+    frame(&mut view, vec![button(start_pos, true)]);
+    frame(&mut view, vec![egui::Event::PointerMoved(end_pos)]);
+    assert!(view.hover.is_none());
+    assert!(view.editor.stroking);
+    frame(&mut view, vec![button(end_pos, false)]);
+    for at in path {
+        assert_eq!(view.editor.doc.as_ref().unwrap().overlay(at), (255, 0));
+    }
+    view.editor.history(false, &scene);
+    for at in path {
+        assert_eq!(view.editor.doc.as_ref().unwrap().overlay(at), (0, 0));
+    }
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cliff_polyline_canvas_clicks_preview_close_enter_and_cancel_use_one_transaction() {
     use ra2_map_scene::terrain_tools::TerrainMode;
     let (mut view, scene, root) = flat_authoring_view();
@@ -867,16 +1213,7 @@ fn plateau_cut_rectangle_canvas_tracks_the_original_surface() {
     .apply(doc)
     .unwrap();
     let before = doc.snapshot().bytes().unwrap();
-    let fixture = ra2_map_assets::test_support::Fixture::with_authoring();
-    // The default fixture uses a tiny TMP. Use a full diamond so the 3D
-    // terrain picker can hit the original cell centers.
-    let mut tmp: Vec<u8> = [1u32, 1, 60, 30, 20]
-        .into_iter()
-        .flat_map(u32::to_le_bytes)
-        .collect();
-    tmp.resize(72, 0);
-    tmp.resize(72 + 900, 1);
-    std::fs::write(fixture.0.join("clear01.tem"), tmp).unwrap();
+    let fixture = authoring_fixture_with_pickable_ground();
     let mut install = fixture.install();
     install.catalog = ra2_map_assets::catalog::Catalog::load(&install.manager, &install.theater);
     let scene = ra2_map_scene::map::load_scene_bytes(
@@ -1006,9 +1343,11 @@ fn plateau_cut_canvas_right_click_cancels_before_second_click_commits() {
     options.get_by_label("两点切线").click();
     options.run();
     drop(options);
+    view.zoom = 0.4;
     flat_frame(&mut view, &ctx, None, None, None);
 
-    let (start, end) = ([37, 20], [37, 46]);
+    let (start, end) = ([37, 20], [37, 79]);
+    assert!(!view.editor.doc.as_ref().unwrap().contains_cell(end));
     flat_frame(&mut view, &ctx, Some(start), Some(true), None);
     flat_frame(&mut view, &ctx, Some(start), Some(false), None);
     flat_frame(&mut view, &ctx, Some(end), None, None);
@@ -1127,6 +1466,186 @@ fn shore_repair_canvas_brush_follows_the_drag_and_undoes_as_one_edit() {
             view.editor.history(true, &scene);
             assert_eq!(snapshot(&view), after);
         }
+    }
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn polyline_canvas_accepts_off_map_vertices_and_commits_the_cropped_preview() {
+    use ra2_map_scene::{cliff_authoring, shore_tools, terrain_tools::TerrainMode};
+    let (mut view, scene, root) =
+        flat_authoring_view_with(ra2_map_assets::test_support::Fixture::with_joining());
+    let ctx = egui::Context::default();
+    view.center = crate::flat_view::position([40, 10]);
+    view.zoom = 0.5;
+    flat_frame(&mut view, &ctx, None, None, None);
+    let click = |view: &mut MapView, at| {
+        flat_frame(view, &ctx, Some(at), Some(true), None);
+        flat_frame(view, &ctx, Some(at), Some(false), None);
+    };
+    let bytes = |view: &MapView| {
+        view.editor
+            .doc
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .bytes()
+            .unwrap()
+    };
+    let before = bytes(&view);
+    for (mode, path, close) in [
+        (
+            TerrainMode::CliffPolyline,
+            vec![[39, 5], [48, 5], [48, 15]],
+            false,
+        ),
+        (
+            TerrainMode::CliffPolyline,
+            vec![[39, 5], [48, 5], [48, 15], [39, 15]],
+            true,
+        ),
+        (
+            TerrainMode::CliffPolyline,
+            vec![[39, 15], [48, 15], [48, 5], [39, 5]],
+            true,
+        ),
+        (
+            TerrainMode::CliffPolyline,
+            vec![[48, 5], [48, 15], [56, 15]],
+            false,
+        ),
+        (
+            TerrainMode::CliffPolyline,
+            vec![[48, 5], [48, 15], [39, 15], [39, 5]],
+            true,
+        ),
+        (
+            TerrainMode::WaterPolyline,
+            vec![[40, 1], [46, 1], [46, 7], [40, 7]],
+            true,
+        ),
+        (
+            TerrainMode::RoadPolyline,
+            vec![[34, 9], [52, 9], [52, 23]],
+            false,
+        ),
+    ] {
+        view.editor.activate_terrain_mode(mode);
+        let doc = view.editor.doc.as_ref().unwrap();
+        let start = path[0];
+        let outside = *path.iter().find(|&&at| !doc.contains_cell(at)).unwrap();
+        let end = if close { start } else { *path.last().unwrap() };
+        let starts_outside = !doc.contains_cell(start);
+        if mode != TerrainMode::CliffPolyline {
+            click(&mut view, outside);
+            assert!(!view.editor.stroking);
+            assert!(view.hover.is_none());
+        }
+        for &at in &path {
+            click(&mut view, at);
+            assert!(view.editor.stroking, "{mode:?} did not accept {at:?}");
+            assert_eq!(bytes(&view), before);
+            if at == start && starts_outside {
+                assert!(view.hover.is_none());
+            }
+        }
+        let doc = view.editor.doc.as_ref().unwrap();
+        let expected = match mode {
+            TerrainMode::CliffPolyline => {
+                let mut vertices = path.clone();
+                if close {
+                    vertices.push(start);
+                }
+                cliff_authoring::polyline(doc, &scene, &vertices, 4, true)
+            }
+            TerrainMode::WaterPolyline => shore_tools::polyline(doc, &scene, &path),
+            _ => ra2_map_scene::road_tools::plan_polyline(
+                doc,
+                &scene,
+                &path,
+                ra2_map_scene::road_tools::RoadStyle::Paved,
+            ),
+        }
+        .unwrap_or_else(|e| panic!("{mode:?} {path:?}: {e:#}"));
+        assert!(!expected.edits.is_empty());
+        assert!(expected.edits.keys().all(|&at| doc.contains_cell(at)));
+        flat_frame(&mut view, &ctx, Some(end), None, None);
+        let preview = view.editor.plateau_preview_plan(&scene, end).unwrap();
+        assert_eq!(preview.edits, expected.edits);
+        if close {
+            click(&mut view, start);
+        } else {
+            flat_frame(&mut view, &ctx, Some(end), None, Some(egui::Key::Enter));
+        }
+        assert!(!view.editor.stroking, "{}", view.editor.status);
+        for (&at, &value) in &preview.edits {
+            assert_eq!(view.editor.doc.as_ref().unwrap().terrain(at), Some(value));
+        }
+        let after = bytes(&view);
+        assert_ne!(after, before);
+        view.editor.history(false, &scene);
+        assert_eq!(bytes(&view), before);
+        view.editor.history(true, &scene);
+        assert_eq!(bytes(&view), after);
+        view.editor.history(false, &scene);
+    }
+    view.editor
+        .activate_terrain_mode(TerrainMode::CliffPolyline);
+    let outside = [[52, 5], [57, 5]];
+    for at in outside {
+        click(&mut view, at);
+        assert!(view.editor.stroking);
+    }
+    flat_frame(&mut view, &ctx, None, None, Some(egui::Key::Enter));
+    assert!(view.editor.stroking);
+    assert!(view.editor.status.contains("地图内没有可生成的悬崖地形"));
+    assert_eq!(bytes(&view), before);
+    flat_frame(&mut view, &ctx, None, None, Some(egui::Key::Escape));
+    assert!(!view.editor.stroking);
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn elevated_cliff_polyline_can_start_and_close_outside_size() {
+    use ra2_map_scene::{cliff_authoring, terrain_tools::TerrainMode};
+    let (mut view, scene, root) =
+        flat_authoring_view_with(authoring_fixture_with_pickable_ground());
+    view.editor
+        .activate_terrain_mode(TerrainMode::CliffPolyline);
+    view.editor.flat_view = false;
+    view.center = crate::flat_view::position([43, 10]);
+    view.zoom = 0.5;
+    view.workbench.drag_level = 100;
+    let ctx = egui::Context::default();
+    flat_frame(&mut view, &ctx, None, None, None);
+
+    let path = [[48, 5], [48, 15], [39, 15], [39, 5], [48, 5]];
+    let doc = view.editor.doc.as_ref().unwrap();
+    assert!(!doc.contains_cell(path[0]));
+    let expected = cliff_authoring::polyline(doc, &scene, &path, 4, true).unwrap();
+    assert!(!expected.edits.is_empty());
+    for at in path {
+        for pressed in [true, false] {
+            canvas_frame_button(
+                &mut view,
+                &ctx,
+                Some((at, 4)),
+                Some((egui::PointerButton::Primary, pressed)),
+                None,
+            );
+        }
+    }
+    assert!(!view.editor.stroking, "{}", view.editor.status);
+    assert_eq!(
+        view.editor.feedback,
+        expected.edits.keys().copied().collect()
+    );
+    let doc = view.editor.doc.as_ref().unwrap();
+    for (&at, &value) in &expected.edits {
+        assert!(doc.contains_cell(at));
+        assert_eq!(doc.terrain(at), Some(value));
     }
     drop(view);
     std::fs::remove_dir_all(root).unwrap();
@@ -1652,6 +2171,31 @@ fn canvas_mode_buttons_switch_exclusively_without_moving_the_map() {
             .unwrap(),
         before
     );
+    drop(view);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn bridge_canvas_release_outside_size_does_not_use_the_last_valid_endpoint() {
+    use ra2_map_scene::{bridge_tools::BridgeKind, terrain_tools::TerrainMode};
+    let (mut view, scene, root) = flat_authoring_view();
+    view.editor.activate_terrain_mode(TerrainMode::Bridge);
+    view.editor.bridge_kind = BridgeKind::LowWood;
+    view.zoom = 0.4;
+    let ctx = egui::Context::default();
+    flat_frame(&mut view, &ctx, None, None, None);
+    let [start, valid, outside] = [[35, 35], [47, 35], [77, 35]];
+    let doc = view.editor.doc.as_ref().unwrap();
+    assert!(!doc.contains_cell(outside));
+    let before = doc.snapshot().bytes().unwrap();
+    flat_frame(&mut view, &ctx, Some(start), Some(true), None);
+    flat_frame(&mut view, &ctx, Some(valid), None, None);
+    assert!(view.editor.plateau_preview_plan(&scene, valid).is_ok());
+    flat_frame(&mut view, &ctx, Some(outside), Some(false), None);
+    assert!(!view.editor.stroking);
+    let doc = view.editor.doc.as_ref().unwrap();
+    assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    assert_eq!(doc.undo_name(), None);
     drop(view);
     std::fs::remove_dir_all(root).unwrap();
 }

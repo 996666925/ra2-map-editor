@@ -13,6 +13,12 @@ fn click_polyline(mode: TerrainMode) -> bool {
     )
 }
 
+fn clipped_rectangle(doc: &MapDocument, start: Cell, end: Cell) -> BTreeSet<Cell> {
+    let mut cells = cliff_tools::rectangle(start, end);
+    cells.retain(|&at| doc.contains_cell(at));
+    cells
+}
+
 #[derive(Default)]
 pub(super) struct PlateauEdit {
     gesture: Option<Gesture>,
@@ -415,7 +421,7 @@ impl PlateauEdit {
                     return Ok(Arc::new(ra2_map_scene::height_tools::repair(
                         doc,
                         scene,
-                        &cliff_tools::rectangle(g.start, at),
+                        &clipped_rectangle(doc, g.start, at),
                         g.base,
                     )?));
                 }
@@ -454,7 +460,7 @@ impl PlateauEdit {
                             doc, scene, &key.path,
                         )?));
                     }
-                    let cells = cliff_tools::rectangle(g.start, at);
+                    let cells = clipped_rectangle(doc, g.start, at);
                     if key.mode == TerrainMode::CoastalCliff {
                         return Ok(Arc::new(ra2_map_scene::coastal_cliffs::plan(
                             doc, scene, cells,
@@ -470,6 +476,7 @@ impl PlateauEdit {
                     )?));
                 }
                 if key.mode == TerrainMode::Bridge {
+                    doc.check_cell(at)?;
                     return Ok(Arc::new(ra2_map_scene::bridge_tools::plan(
                         doc, scene, g.start, at, key.bridge,
                     )?));
@@ -485,12 +492,17 @@ impl PlateauEdit {
                     )?));
                 }
                 if key.mode == TerrainMode::RampEntrance {
+                    doc.check_cell(at)?;
                     return Ok(Arc::new(cliff_authoring::ramp(
                         doc, scene, g.start, at, g.base,
                     )?));
                 }
                 let cells = if key.mode != TerrainMode::CliffOutline {
-                    cliff_tools::rectangle(g.start, at)
+                    if key.mode == TerrainMode::PlateauCut {
+                        clipped_rectangle(doc, g.start, at)
+                    } else {
+                        cliff_tools::rectangle(g.start, at)
+                    }
                 } else {
                     cliff_tools::enclose(&key.path)?
                 };
@@ -503,14 +515,17 @@ impl PlateauEdit {
                 )?))
             })()
             .map_err(|e| format!("{e:#}"));
-            let bridge_draft =
-                if result.is_err() && key.mode == TerrainMode::Bridge && !key.bridge.high() {
-                    ra2_map_scene::bridge_tools::preview_low(doc, scene, g.start, at, key.bridge)
-                        .ok()
-                        .map(Arc::new)
-                } else {
-                    None
-                };
+            let bridge_draft = if result.is_err()
+                && key.mode == TerrainMode::Bridge
+                && !key.bridge.high()
+                && doc.contains_cell(at)
+            {
+                ra2_map_scene::bridge_tools::preview_low(doc, scene, g.start, at, key.bridge)
+                    .ok()
+                    .map(Arc::new)
+            } else {
+                None
+            };
             self.preview = Some(Preview {
                 key,
                 result,
@@ -521,7 +536,7 @@ impl PlateauEdit {
     }
 }
 impl Editor {
-    fn two_point_cut_selected(&self) -> bool {
+    pub(super) fn two_point_cut_selected(&self) -> bool {
         self.terrain_mode == TerrainMode::PlateauCut
             && self.plateau_cut_method == PlateauCutMethod::TwoPoint
     }
@@ -532,13 +547,26 @@ impl Editor {
             && self.plateau_cut_method == PlateauCutMethod::Rectangle
     }
 
-    pub(super) fn polyline_shortcuts(&mut self, ctx: &egui::Context, scene: &MapScene) {
-        if !self
-            .plateau
+    pub(crate) fn has_polyline_draft(&self) -> bool {
+        self.plateau
             .gesture
             .as_ref()
             .is_some_and(|g| click_polyline(g.mode))
-        {
+    }
+
+    pub(crate) fn cliff_polyline_selected(&self) -> bool {
+        self.tool == Tool::Terrain && self.terrain_mode == TerrainMode::CliffPolyline
+    }
+
+    pub(crate) fn tracks_projected_hover(&self) -> bool {
+        self.plateau
+            .gesture
+            .as_ref()
+            .is_some_and(|g| g.cut.is_some() || click_polyline(g.mode))
+    }
+
+    pub(super) fn polyline_shortcuts(&mut self, ctx: &egui::Context, scene: &MapScene) {
+        if !self.has_polyline_draft() {
             return;
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
@@ -776,12 +804,40 @@ impl Editor {
         true
     }
 
+    pub(crate) fn cliff_polyline_reference_level(&self, scene: &MapScene, at: Cell) -> u8 {
+        let Some(doc) = &self.doc else {
+            return scene.source.header.level as u8;
+        };
+        if doc.contains_cell(at) {
+            return terrain_tools::value(doc, scene, at).level;
+        }
+        let width = doc.base.header.width as i32;
+        let height = doc.base.header.height as i32;
+        if width <= 0 || height <= 0 {
+            return scene.source.header.level as u8;
+        }
+        // In projected coordinates Size bounds the sum (row) and the
+        // difference (column) independently. Clamp to the nearest valid
+        // row/column pair to sample terrain at the edge, not missing data.
+        let [x, y] = at.map(i32::from);
+        let column = (x - y).clamp(1 - width, width - 1);
+        let last_row = width + 2 * height;
+        let mut row = (x + y).clamp(width + 1, last_row);
+        if (row - column) % 2 != 0 {
+            row += if row == last_row { -1 } else { 1 };
+        }
+        let edge = [((row + column) / 2) as u16, ((row - column) / 2) as u16];
+        terrain_tools::value(doc, scene, edge).level
+    }
+
     fn plateau_base_for_click(&self, doc: &MapDocument, scene: &MapScene, at: Cell) -> u8 {
         match self.terrain_mode {
             TerrainMode::HeightFill => self.flatten_level,
             TerrainMode::CliffHeightRepair => self.cliff_repair_base,
             mode => self.template_level.unwrap_or_else(|| {
-                if mode.joining() || mode == TerrainMode::CliffPolyline {
+                if mode == TerrainMode::CliffPolyline {
+                    self.cliff_polyline_reference_level(scene, at)
+                } else if mode.joining() {
                     terrain_tools::value(doc, scene, at).level
                 } else if mode == TerrainMode::Bridge {
                     terrain_tools::value(doc, scene, at)
@@ -848,7 +904,7 @@ impl Editor {
                 } else if self.two_point_cut_selected() {
                     tr!("第一点请点在悬崖下方的低地")
                 } else if self.terrain_mode == TerrainMode::CliffPolyline {
-                    tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。")
+                    tr!("地图内外均可点击添加折点。点击起点闭合，Enter 生成，Backspace 撤回折点，Esc 取消。")
                 } else if self.terrain_mode == TerrainMode::WaterPolyline {
                     tr!("点击添加折点，点击起点或按 Enter 闭合填水。Backspace 撤回折点，Esc 取消。")
                 } else if self.terrain_mode == TerrainMode::RoadPolyline {
@@ -862,6 +918,7 @@ impl Editor {
             return;
         }
         let gesture = self.plateau.gesture.as_ref().unwrap();
+        let mode = gesture.mode;
         if at == gesture.start
             && gesture
                 .cut
@@ -933,6 +990,10 @@ impl Editor {
         };
         match plan {
             Some(plan) => {
+                let subtile_preview = matches!(
+                    mode,
+                    TerrainMode::HeightFill | TerrainMode::CliffHeightRepair
+                ) || plan.cliffs.iter().any(|stamp| !stamp.fits(doc, scene));
                 if self.framework && !replaces_terrain {
                     for &(at, value) in self.plateau.draw_order.edits(&plan) {
                         self.ui_state.framework_textures.draw(
@@ -956,10 +1017,7 @@ impl Editor {
                         let Some(&tile) = scene.palette.raw_ids.get(&v.tile) else {
                             continue;
                         };
-                        if matches!(
-                            self.plateau.gesture.as_ref().unwrap().mode,
-                            TerrainMode::HeightFill | TerrainMode::CliffHeightRepair
-                        ) {
+                        if subtile_preview {
                             let key = vera20k_core::map::theater::TileKey {
                                 tile_id: tile,
                                 sub_tile: v.sub,
@@ -1041,7 +1099,7 @@ impl Editor {
                 for (&at, v) in &plan.edits {
                     outline(painter, at, v.level);
                 }
-                if !self.flat_view && !self.framework && !replaces_terrain {
+                if !self.flat_view && !self.framework && !replaces_terrain && !subtile_preview {
                     let mut stamps: Vec<_> = plan.cliffs.iter().collect();
                     stamps.sort_by_key(|s| {
                         (u32::from(s.origin[0]) + u32::from(s.origin[1]), s.origin[0])
@@ -1196,7 +1254,7 @@ impl Editor {
                             if g.cut.is_some() {
                                 tr!("削至 {arg0} 层 · {arg1} 格修改 · 点击第二点提交，Esc 取消", arg0 = self.cliff_cut.height(plan.base), arg1 = plan.edits.len())
                             } else if g.mode == TerrainMode::CliffPolyline {
-                                format!("{heights} · {}", tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。"))
+                                format!("{heights} · {}", tr!("地图内外均可点击添加折点。点击起点闭合，Enter 生成，Backspace 撤回折点，Esc 取消。"))
                             } else if g.mode == TerrainMode::WaterPolyline {
                                 tr!("点击添加折点，点击起点或按 Enter 闭合填水。Backspace 撤回折点，Esc 取消。").into()
                             } else if g.mode == TerrainMode::RoadPolyline {
@@ -1679,7 +1737,7 @@ impl Editor {
         }
         match self.terrain_mode {
             TerrainMode::CliffPolyline => {
-                ui.small(tr!("点击添加折点；点击起点闭合并统一内部高度；Enter 生成已确认折线，Backspace 撤回折点，Esc 取消。"));
+                ui.small(tr!("地图内外均可点击添加折点。点击起点闭合，Enter 生成，Backspace 撤回折点，Esc 取消。"));
                 ui.small(tr!(
                     "开放折线只沿线放置一侧崖壁，周围地面保持原高；不生成坡道、填高区域或末端封口。闭合后才统一内部高度。"
                 ));

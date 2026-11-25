@@ -278,6 +278,26 @@ fn template<'a>(scene: &'a MapScene, brush: &TerrainBrush) -> Result<&'a Terrain
 }
 
 pub fn footprint(scene: &MapScene, brush: &TerrainBrush, at: Cell) -> Result<Vec<(Cell, u8, u8)>> {
+    footprint_in_grid(scene, brush, at)?.context("完整模板越过地图边界")
+}
+
+/// Whole template placements that cross Size are skipped during a drag.
+/// A malformed or unavailable template remains an error.
+pub fn drag_template_footprint(
+    doc: &MapDocument,
+    scene: &MapScene,
+    brush: &TerrainBrush,
+    at: Cell,
+) -> Result<Option<Vec<(Cell, u8, u8)>>> {
+    Ok(footprint_in_grid(scene, brush, at)?
+        .filter(|cells| cells.iter().all(|&(at, _, _)| doc.check_cell(at).is_ok())))
+}
+
+fn footprint_in_grid(
+    scene: &MapScene,
+    brush: &TerrainBrush,
+    at: Cell,
+) -> Result<Option<Vec<(Cell, u8, u8)>>> {
     let template = template(scene, brush)?;
     ensure!(template.width > 0, "模板宽度无效");
     ensure!(
@@ -291,7 +311,7 @@ pub fn footprint(scene: &MapScene, brush: &TerrainBrush, at: Cell) -> Result<Vec
         i32::from(at[0]) - i32::from(brush.key.sub_tile) % i32::from(template.width),
         i32::from(at[1]) - i32::from(brush.key.sub_tile) / i32::from(template.width),
     ];
-    template
+    Ok(template
         .cells
         .iter()
         .enumerate()
@@ -299,14 +319,11 @@ pub fn footprint(scene: &MapScene, brush: &TerrainBrush, at: Cell) -> Result<Vec
         .map(|(sub, metadata)| {
             let x = anchor[0] + sub as i32 % i32::from(template.width);
             let y = anchor[1] + sub as i32 / i32::from(template.width);
-            ensure!(
-                (0..i32::from(MAX_CELL_SIDE)).contains(&x)
-                    && (0..i32::from(MAX_CELL_SIDE)).contains(&y),
-                "完整模板越过地图边界"
-            );
-            Ok(([x as u16, y as u16], sub as u8, metadata.height))
+            ((0..i32::from(MAX_CELL_SIDE)).contains(&x)
+                && (0..i32::from(MAX_CELL_SIDE)).contains(&y))
+            .then_some(([x as u16, y as u16], sub as u8, metadata.height))
         })
-        .collect()
+        .collect())
 }
 
 /// Keep the clicked subtile under the cursor; TMP height bytes are relative to

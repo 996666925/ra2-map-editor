@@ -48,12 +48,13 @@ pub(crate) fn cliff_geometry(scene: &MapScene, v: TerrainValue) -> Result<Option
     Ok(Some((relative, top)))
 }
 
-/// Recover a complete cliff from any of its subtiles. Never move half a stamp.
-fn cliff_cells(
-    doc: &MapDocument,
-    scene: &MapScene,
-    at: Cell,
-) -> Result<Option<Vec<(Cell, TerrainValue)>>> {
+struct CliffCells {
+    base: u8,
+    cells: Vec<(Cell, TerrainValue)>,
+}
+
+/// Recover a cliff from any subtile, requiring all its cells within Size.
+fn cliff_cells(doc: &MapDocument, scene: &MapScene, at: Cell) -> Result<Option<CliffCells>> {
     let v = value(doc, scene, at);
     let Some(&tile) = scene.palette.raw_ids.get(&v.tile) else {
         return Ok(None);
@@ -83,11 +84,16 @@ fn cliff_cells(
     let mut cells = Vec::new();
     for (sub, s) in t.cells.iter().enumerate() {
         let Some(s) = s else { continue };
-        let p = [
-            u16::try_from(x + sub as i32 % i32::from(t.width))?,
-            u16::try_from(y + sub as i32 / i32::from(t.width))?,
-        ];
-        doc.check_cell(p)?;
+        let [Ok(px), Ok(py)] = [
+            u16::try_from(x + sub as i32 % i32::from(t.width)),
+            u16::try_from(y + sub as i32 / i32::from(t.width)),
+        ] else {
+            continue;
+        };
+        let p = [px, py];
+        if !doc.contains_cell(p) {
+            continue;
+        }
         let old = value(doc, scene, p);
         ensure!(
             old.tile == v.tile
@@ -99,7 +105,7 @@ fn cliff_cells(
         );
         cells.push((p, old));
     }
-    Ok(Some(cells))
+    Ok(Some(CliffCells { base, cells }))
 }
 
 /// FA2's normal cliff click ignores brush size. Ctrl follows the connected
@@ -120,7 +126,7 @@ pub fn cliff_selection(
     let mut seen = BTreeSet::new();
     let mut selected = BTreeSet::new();
     while let Some(at) = queue.pop_front() {
-        if !seen.insert(at) || doc.check_cell(at).is_err() {
+        if !seen.insert(at) || !doc.contains_cell(at) {
             continue;
         }
         let v = value(doc, scene, at);
@@ -133,8 +139,8 @@ pub fn cliff_selection(
         if !matched {
             continue;
         }
-        if let Some(cells) = cliff_cells(doc, scene, at)? {
-            selected.extend(cells.into_iter().map(|(at, _)| at));
+        if let Some(stamp) = cliff_cells(doc, scene, at)? {
+            selected.extend(stamp.cells.into_iter().map(|(at, _)| at));
         }
         if connected {
             for dx in -1..=1 {
@@ -224,7 +230,7 @@ pub fn repair(
     })
 }
 
-/// Raw raise/lower includes complete cliffs and rejects clipping their offsets.
+/// Raw raise/lower shifts all in-map subtiles of a cliff by the same amount.
 pub(crate) fn raw(
     doc: &MapDocument,
     scene: &MapScene,
@@ -245,8 +251,9 @@ pub(crate) fn raw(
             continue;
         }
         if matches!(mode, TerrainMode::Raise | TerrainMode::Lower)
-            && let Some(cells) = cliff_cells(doc, scene, at)?
+            && let Some(stamp) = cliff_cells(doc, scene, at)?
         {
+            let top = i16::from(sample(doc, scene, at)?);
             let delta = match change {
                 terrain_tools::HeightChange::Step(amount) => {
                     if mode == TerrainMode::Raise {
@@ -256,16 +263,20 @@ pub(crate) fn raw(
                     }
                 }
                 terrain_tools::HeightChange::To(_) => {
-                    let top = sample(doc, scene, at)?;
-                    i16::from(change.target(mode, top)) - i16::from(top)
+                    i16::from(change.target(mode, top as u8)) - top
                 }
             };
-            let top = i16::from(sample(doc, scene, at)?) + delta;
             ensure!(
-                (0..=127).contains(&top),
+                (0..=127).contains(&(top + delta)),
                 "整块悬崖的崖顶将越过 0～127 层，未修改地形"
             );
-            for (p, old) in cells {
+            // A cropped toe may leave only high subtiles, but its implied
+            // base still needs to fit the engine's height range.
+            ensure!(
+                i16::from(stamp.base) + delta >= 0,
+                "整块悬崖升降将越过 0～127 层，未修改地形"
+            );
+            for (p, old) in stamp.cells {
                 let next = i16::from(old.level) + delta;
                 ensure!(
                     (0..=127).contains(&next),

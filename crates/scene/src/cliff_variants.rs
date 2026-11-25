@@ -262,7 +262,7 @@ pub(crate) fn split_remainder(
     let template = &scene.palette.templates[&(tile, 0)];
     let mut remainder = None;
     for half in halves {
-        let cells = footprint(template, half.origin);
+        let cells = footprint(template, half.origin).filter(|&(_, at, _)| doc.contains_cell(at));
         if cells.clone().all(|(_, at, _)| edits.contains_key(&at)) {
             continue;
         }

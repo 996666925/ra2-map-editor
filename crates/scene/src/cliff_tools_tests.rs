@@ -161,6 +161,17 @@ fn diagonal_and_rotated_concave_outlines_preserve_interior_without_overlapping_t
     }
 }
 #[test]
+fn outline_at_grid_origin_keeps_its_exterior_open() {
+    let path = [[0, 0], [6, 0], [6, 2], [2, 2], [2, 6], [0, 6]];
+    let expected: BTreeSet<_> = rectangle([0, 0], [6, 2])
+        .union(&rectangle([0, 0], [2, 6]))
+        .copied()
+        .collect();
+    assert_eq!(enclose(&path).unwrap(), expected);
+    assert!(enclose(&[[0, 0], [u16::MAX, 0], [u16::MAX, u16::MAX]]).is_err());
+}
+
+#[test]
 fn unsupported_environment_and_flat_or_empty_outlines_are_rejected() {
     let (doc, mut scene) = setup();
     assert!(enclose(&[[30, 30], [35, 30], [39, 30]]).is_err());

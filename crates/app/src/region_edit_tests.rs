@@ -2,6 +2,33 @@ use super::*;
 use crate::editing::tests::{editor, terrain_scene};
 
 #[test]
+fn region_drag_crops_outside_size_and_tracks_reentry_in_both_selection_modes() {
+    let (mut e, _, root) = editor();
+    let scene = terrain_scene();
+    e.attach(&scene);
+    e.activate_tool(Tool::Region);
+    let [start, edge, outside, end] = [[25, 10], [29, 10], [34, 10], [32, 15]];
+    let doc = e.doc.as_ref().unwrap();
+    assert!(doc.contains_cell(end) && !doc.contains_cell(outside));
+    let before = doc.snapshot().bytes().unwrap();
+    for custom in [false, true] {
+        e.region.custom = custom;
+        e.pointer(&scene, Some(start), true, true, false, None);
+        assert_eq!(e.region.cells, BTreeSet::from([start]));
+        e.pointer(&scene, Some(outside), false, true, false, None);
+        assert_eq!(e.region.cells, cell_line(start, edge).into_iter().collect());
+        e.pointer(&scene, Some(end), false, false, true, None);
+        assert!(!e.stroking);
+        let doc = e.doc.as_ref().unwrap();
+        assert!(e.region.cells.contains(&start) && e.region.cells.contains(&end));
+        assert!(e.region.cells.iter().all(|&at| doc.contains_cell(at)));
+        assert_eq!(doc.snapshot().bytes().unwrap(), before);
+    }
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn water_vehicle_paste_ghost_uses_the_pasted_terrain_and_overlay() {
     use ra2_map_assets::{catalog::Catalog, test_support::Fixture};
     let fixture = Fixture::with_water_vehicle();

@@ -28,8 +28,8 @@ impl BrushDirection {
     }
 
     pub fn constrain(&mut self, at: Option<Cell>, press: bool) -> Option<Cell> {
-        // Leaving the map breaks interpolation and starts a fresh constraint
-        // on re-entry, just as it does for the unconstrained brush path.
+        // A missing pointer sample breaks interpolation. Projected off-map
+        // samples keep the constraint active until the drag resumes in bounds.
         if press || at.is_none() {
             self.last = None;
             self.lock = None;

@@ -226,7 +226,7 @@ impl Editor {
         } else {
             self.terrain_hover.map_or(0, |at| {
                 if self.terrain_mode == TerrainMode::CliffPolyline {
-                    terrain_tools::value(doc, scene, at).level
+                    self.cliff_polyline_reference_level(scene, at)
                 } else {
                     ra2_map_scene::cliff_authoring::infer_base(doc, scene, at)
                 }
