@@ -380,6 +380,26 @@ impl Editor {
             }
         });
         if self.tool == Tool::Region {
+            if scene.palette.supports_ice {
+                ui.horizontal_wrapped(|ui| {
+                    for (enabled, label) in [
+                        (true, tr!("标记冰层生长")),
+                        (false, tr!("清除冰层生长标记")),
+                    ] {
+                        if ui
+                            .add_enabled(!self.stroking && count > 0, egui::Button::new(label))
+                            .clicked()
+                            && self.check_property_draft()
+                            && let Some(doc) = &mut self.doc
+                        {
+                            match region::set_ice_growth(doc, &self.region.cells, enabled) {
+                                Ok(()) => self.commit(scene, label),
+                                Err(error) => self.status = error.to_string(),
+                            }
+                        }
+                    }
+                });
+            }
             ui.small(tr!(
                 "按住 Shift 添加选区，Alt 减选；松开后恢复下方选择方式。"
             ));

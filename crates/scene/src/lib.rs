@@ -7,6 +7,7 @@ pub mod coastal_cliffs;
 pub mod fill_tools;
 pub mod flatten_tools;
 pub mod height_tools;
+pub mod ice_tools;
 pub mod map;
 pub mod placement;
 pub mod radar;

@@ -130,6 +130,9 @@ impl Workspace {
         )?;
         let mut doc = MapDocument::new(source.edit_base.map_err(anyhow::Error::msg)?);
         doc.resource_profile = self.baseline.resource_profile.clone();
+        if self.baseline.vera_ice_enabled() {
+            doc.set_ini("Map", "VeraIce", Some(b"yes".to_vec()))?;
+        }
         let waypoints: Vec<_> = doc.record_iter().map(|(id, _)| id).collect();
         for id in waypoints {
             doc.set(Target::Record(id), None)?;

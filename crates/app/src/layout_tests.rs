@@ -2926,15 +2926,19 @@ fn all_workbench_panel_layouts_fit_desktop_and_compact_viewports() {
     use super::ui_smoke::{Panel, panels};
     use crate::editing::Tool;
     use ra2_map_document::mission::{self, Kind};
+    use ra2_map_scene::terrain_tools::TerrainMode;
 
     for (language, name, panel) in crate::i18n::LANGUAGES.iter().flat_map(|info| {
-        panels()
+        panels(true)
             .into_iter()
             .map(move |(name, panel)| (info.language, name, panel))
     }) {
         let _language = crate::i18n::enter(language);
         let (mut view, root) = view();
-        let scene = terrain_scene();
+        let mut scene = terrain_scene();
+        if matches!(panel, Panel::Terrain(TerrainMode::IceFill)) {
+            Arc::get_mut(&mut scene.palette).unwrap().bundled_ice_sets = Some([4096, 4160, 4224]);
+        }
         view.editor.attach(&scene);
         mission::seed(view.editor.doc.as_mut().unwrap()).unwrap();
         match panel {

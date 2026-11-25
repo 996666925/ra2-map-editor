@@ -84,6 +84,49 @@ fn document(theater: &str) -> MapDocument {
 }
 
 #[test]
+fn vera_ice_paste_and_stitch_require_ice_resources_in_the_destination() {
+    let mut ice = document("SNOW");
+    ice.set_ini("Map", "VeraIce", Some(b"yes".to_vec()))
+        .unwrap();
+    paint(&mut ice, [20, 20], 4096, 0);
+    paint(&mut ice, [20, 21], 4288, 0);
+
+    let clip = Clipboard::capture_map(&ice, RegionLayers::default()).unwrap();
+    let mut snow = document("SNOW");
+    assert!(clip.plan(&snow, clip.origin).is_err());
+    let mut unsupported = Workspace::new(&snow, "stock snow".into()).unwrap();
+    assert!(unsupported.import("ice".into(), &ice).is_err());
+    assert_eq!(unsupported.pieces.len(), 1);
+    assert!(
+        Workspace::new(&document("TEMPERATE"), "grass".into())
+            .unwrap()
+            .import("ice".into(), &ice)
+            .is_err()
+    );
+
+    snow.set_ini("Map", "VeraIce", Some(b"yes".to_vec()))
+        .unwrap();
+    assert!(clip.plan(&snow, clip.origin).is_ok());
+    let mut supported = Workspace::new(&snow, "ice snow".into()).unwrap();
+    supported.import("ice".into(), &ice).unwrap();
+    let layer = reopen(supported.layer_bytes(1).unwrap());
+    assert!(layer.vera_ice_enabled());
+    assert_eq!(layer.terrain([20, 20]).unwrap().tile, 4096);
+    assert_eq!(layer.terrain([20, 21]).unwrap().tile, 4288);
+    let composition = supported.compose(&Default::default()).unwrap();
+    let at = [0, 1].map(|axis| (20 + composition.shift[axis]) as u16);
+    let reopened = reopen(composition.bytes);
+    assert!(reopened.vera_ice_enabled());
+    assert_eq!(reopened.terrain(at).unwrap().tile, 4096);
+    let (restored, _) = Workspace::restore(&reopened).unwrap().unwrap();
+    assert!(reopen(restored.layer_bytes(1).unwrap()).vera_ice_enabled());
+
+    // An ice-enabled source does not impose the pack on an ice-free selection.
+    let clear = Clipboard::capture(&ice, &[[21, 21]].into(), RegionLayers::default()).unwrap();
+    assert!(clear.plan(&document("SNOW"), [20, 20]).is_ok());
+}
+
+#[test]
 fn saved_layout_restores_layers_offsets_underlays_and_survives_preview_publication() {
     let mut base = document("TEMPERATE");
     paint(&mut base, [20, 20], 92, 8);

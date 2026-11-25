@@ -19,6 +19,7 @@ pub struct SourceMap {
     pub header: MapHeader,
     pub title: String,
     pub reads_ares: bool,
+    pub bundled_ice: bool,
     pub edit_base: Result<Arc<crate::document::Baseline>, String>,
 }
 impl SourceMap {
@@ -62,6 +63,10 @@ impl SourceMap {
             name,
             origin,
             reads_ares: ares,
+            bundled_ice: vera20k_core::map::theater::map_requests_bundled_ice(
+                &map.header.theater,
+                &map.ini,
+            ),
             edit_base,
         };
         Ok((source, map))

@@ -982,7 +982,7 @@ impl MapView {
                     ui.label(format!("{key}  —  {}", tool.name()))
                         .on_hover_text(tool.hint());
                 }
-                ui.label(tr!("B  —  地形画笔；G  —  框选铺地；C  —  围合悬崖；H  —  矩形高台"));
+                ui.label(tr!("B  —  地形画笔；G  —  铺地；C  —  围合悬崖；H  —  矩形高台"));
                 ui.label(tr!("[ / ]  —  缩小 / 放大子块、矿石和覆盖物画笔"));
                 ui.separator();
                 ui.heading(tr!("选择与编辑"));

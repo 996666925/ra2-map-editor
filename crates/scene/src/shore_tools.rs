@@ -4,6 +4,7 @@ use crate::{
     cliff_authoring,
     cliff_tools::{self, CliffStamp, PlateauPlan},
     cliff_variants::{available, style_score},
+    ice_tools,
     map::MapScene,
     terrain_tools::{self, value},
 };
@@ -99,6 +100,13 @@ pub fn wet(scene: &MapScene, v: TerrainValue) -> bool {
                     .is_some_and(|s| matches!(s.terrain, 9 | 10))
     })
 }
+
+fn fit_water(scene: &MapScene, v: TerrainValue, painting_water: bool) -> bool {
+    // Frozen cells still belong to the basin when painting water. Do not
+    // build a stock shoreline between the stroke and remaining ice.
+    wet(scene, v) || painting_water && ice_tools::bundled_tile(scene, v)
+}
+
 pub(crate) fn ground(scene: &MapScene, v: TerrainValue) -> bool {
     id(scene, v).is_some_and(|tile| {
         scene.palette.templates.get(&(tile, 0)).is_some_and(|t| {
@@ -596,7 +604,7 @@ fn snapped_repair(
         for &at in changes.keys() {
             // Unlike an existing height mismatch, one introduced by a
             // proposed snap only invalidates this particular contour.
-            if collect_edges(doc, scene, &logical, &mut edges, at).is_err() {
+            if collect_edges(doc, scene, &logical, &mut edges, at, false).is_err() {
                 continue 'attempt;
             }
         }
@@ -644,6 +652,7 @@ struct FitArea {
     repair: Option<BTreeSet<Cell>>,
     styles: BTreeMap<u16, Vec<u16>>,
     water: i32,
+    painting_water: bool,
     logical: HashMap<Cell, (bool, u8)>,
     edges: BTreeSet<Edge>,
     edits: BTreeMap<Cell, TerrainValue>,
@@ -705,10 +714,11 @@ fn prepare_fit_area(
     let scope = repair.as_ref().unwrap_or(&zone);
     let mut logical = HashMap::with_capacity(zone.len());
     let mut edits = BTreeMap::new();
+    let painting_water = paint == Some(true);
     for &at in &zone {
         let old = value(doc, scene, at);
         let is_shore = id(scene, old).is_some_and(|t| shore(scene, t));
-        let old_wet = wet(scene, old);
+        let old_wet = fit_water(scene, old, painting_water);
         let painted = paint.filter(|_| selection.contains(&at));
         if painted.is_some() {
             ensure!(
@@ -730,13 +740,14 @@ fn prepare_fit_area(
         .iter()
         .chain(edits.keys().filter(|&at| !selection.contains(at)))
     {
-        collect_edges(doc, scene, &logical, &mut edges, at)?;
+        collect_edges(doc, scene, &logical, &mut edges, at, painting_water)?;
     }
     Ok(FitArea {
         zone,
         repair,
         styles: shore_styles(scene, ids.shore),
         water,
+        painting_water,
         logical,
         edges,
         edits,
@@ -767,6 +778,7 @@ fn collect_edges(
     logical: &HashMap<Cell, (bool, u8)>,
     edges: &mut BTreeSet<Edge>,
     at: Cell,
+    painting_water: bool,
 ) -> Result<()> {
     let (w, level) = logical[&at];
     for n in terrain_tools::neighbors(at) {
@@ -774,7 +786,7 @@ fn collect_edges(
             neighbor
         } else if doc.check_cell(n).is_ok() {
             let v = value(doc, scene, n);
-            (wet(scene, v), v.level)
+            (fit_water(scene, v, painting_water), v.level)
         } else {
             continue;
         };
@@ -807,6 +819,10 @@ fn fit_plan(
             let old = value(doc, scene, p);
             if id(scene, old).is_some_and(|t| shore(scene, t)) {
                 scope.contains(&p)
+            } else if ice_tools::bundled_tile(scene, old) {
+                // Only an ice cell explicitly replaced by this stroke can
+                // participate in a new, complete shore template.
+                edits.contains_key(&p)
             } else {
                 ground(scene, old) || wet(scene, old)
             }
@@ -852,7 +868,18 @@ fn fit_plan(
     } else {
         ground_transitions(doc, scene, &area.zone, &mut result)?;
     }
-    result.edits.retain(|&at, v| *v != value(doc, scene, at));
+    if area.painting_water {
+        ice_tools::refresh_after_water(doc, scene, selection, area.water, &mut result.edits)?;
+    }
+    result.edits.retain(|&at, v| {
+        let old = value(doc, scene, at);
+        // A fitted shoreline template preserves the old cell's ice byte by
+        // default. Clear it too if the water stroke replaced an ice tile.
+        if selection.contains(&at) && ice_tools::bundled_tile(scene, old) {
+            v.ice = 0;
+        }
+        *v != old
+    });
     protect(doc, scene, &result.edits)?;
     Ok(result)
 }

@@ -160,7 +160,10 @@ impl Editor {
             });
         });
         if self.ui_state.tab == 0 {
-            self.terrain_tools(ui);
+            self.terrain_tools(
+                ui,
+                scene.is_some_and(|scene| scene.palette.bundled_ice_sets.is_some()),
+            );
         }
         let Some(scene) = scene else {
             ui.add_space(24.);
@@ -171,6 +174,9 @@ impl Editor {
         if self.tool != Tool::Select {
             ui.add_space(4.);
             ui.add_enabled_ui(!self.stroking, |ui| {
+                if self.tool == Tool::Terrain && self.terrain_mode == TerrainMode::Fill {
+                    self.fill_controls(ui);
+                }
                 if self.tool == Tool::Terrain
                     && matches!(
                         self.terrain_mode,
@@ -190,9 +196,13 @@ impl Editor {
         }
         if self.ui_state.tab == 0
             && self.tool == Tool::Terrain
-            && (self.terrain_mode.planned() || self.terrain_mode.edits_height())
+            && (self.terrain_mode.planned()
+                || self.terrain_mode.edits_height()
+                || self.terrain_mode == TerrainMode::IceFill)
         {
-            ui.small(tr!("此工具自动选用当前环境的地形，无需挑选素材。"));
+            if self.terrain_mode != TerrainMode::IceFill {
+                ui.small(tr!("此工具自动选用当前环境的地形，无需挑选素材。"));
+            }
             if ui
                 .add_enabled(!self.stroking, egui::Button::new(tr!("手工拼贴地形…")))
                 .on_hover_text(tr!("切换到完整模板模式，自行选择悬崖、坡面等素材"))
@@ -543,7 +553,8 @@ impl Editor {
         }
         if self.tool.brush()
             && !(self.tool == Tool::Terrain
-                && (matches!(self.terrain_mode, TerrainMode::Template | TerrainMode::Fill)
+                && (self.terrain_mode == TerrainMode::Template
+                    || self.terrain_mode.uses_fill_gesture()
                     || self.terrain_mode.planned()))
         {
             ui.add_space(4.);
@@ -552,6 +563,17 @@ impl Editor {
         }
         match self.tool {
             Tool::Terrain => {
+                if self.terrain_mode == TerrainMode::IceFill {
+                    if scene.palette.bundled_ice_sets.is_some() {
+                        self.fill_controls(ui);
+                        ui.checkbox(&mut self.ice_soften_shore, tr!("临岸碎冰过渡"))
+                            .on_hover_text(tr!(
+                                "宽阔冰面接岸时留一格碎冰水域，不改岸线。需要冰面直接接岸时可关闭。"
+                            ));
+                        ui.checkbox(&mut self.ice_fill_growth, tr!("铺冰时标记可再冻结"));
+                    }
+                    return;
+                }
                 if self.terrain_mode == TerrainMode::Fill {
                     self.prepare_fill_material(scene);
                 }
@@ -620,7 +642,6 @@ impl Editor {
                 } else if self.terrain_mode == TerrainMode::Template {
                     self.terrain_template_options(ui, scene);
                 } else if self.terrain_mode == TerrainMode::Fill {
-                    ui.small(tr!("左键拖框铺地，单击铺一格；松手提交，Esc 或右键取消。"));
                     ui.small(tr!(
                         "保留每格高度；绿色为铺地范围，橙色为保留的坡道、悬崖、道路和水岸。"
                     ));

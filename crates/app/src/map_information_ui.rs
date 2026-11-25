@@ -33,7 +33,7 @@ pub(crate) fn show(
                 ui.set_min_width(ui.available_width());
                 let help = match group {
                     Group::Listing => tr!("说明可分行输入，适用模式可多选；出生点数量同时决定地图的最大玩家人数。"),
-                    Group::Environment => tr!("冰层和藤蔓开关可保存场景状态，当前引擎尚无对应生长模拟；变异体选项仅在 Ares 生效。"),
+                    Group::Environment => tr!("冰层生长作用于具备冰面素材的雪地地图。变异体选项仅在 Ares 生效。"),
                     Group::Special => tr!("单人任务与地图编辑加载读取特殊规则；遭遇战和多人游戏的部分规则由房间设置接管。矿车免于自动索敌不等于免疫伤害。"),
                     Group::Campaign => tr!("适用于单人任务和战役。所属方和航点可从当前地图选择；继承比例按百分比调整，资金上限可选择不限。"),
                     Group::Media => tr!("从当前游戏或 Mod 的音乐、影片目录选择；地图文字说明在“基本信息”中编辑。自定义资源可手动输入。"),
@@ -50,7 +50,9 @@ pub(crate) fn show(
                         if group == Group::Listing {
                             identity_fields(ui, &mut identity, label_width);
                         }
-                        for field in FIELDS.iter().filter(|f| f.group == group) {
+                        for field in FIELDS.iter().filter(|f| {
+                            f.group == group && (f.key != "VeraIce" || doc.base.header.theater.eq_ignore_ascii_case("SNOW"))
+                        }) {
                             let label = crate::i18n::text(field.label);
                             field_label(ui, label, label_width).on_hover_text(format!("[{}] {}", field.section, field.key));
                             let value = draft.values.get_mut(&(field.section, field.key)).unwrap();

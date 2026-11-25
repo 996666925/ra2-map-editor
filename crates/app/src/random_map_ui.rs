@@ -188,8 +188,8 @@ impl MapView {
                                 tr!("生成中立且断电的废弃建筑。0 不额外放置。"));
                             percentage(ui, tr!("建筑损伤"), &mut t.damage_amount, true,
                                 tr!("提高中立建筑受损的比例和损伤程度。"));
-                            percentage(ui, tr!("额外平民"), &mut t.civilian_amount, true,
-                                tr!("在开阔地放置中立平民和车辆。"));
+                            percentage(ui, tr!("平民密度"), &mut t.civilian_amount, true,
+                                tr!("影响城镇行人和开阔地的中立平民及车辆。0 不生成平民。"));
                             percentage(ui, tr!("动物"), &mut t.animal_amount, true,
                                 tr!("按规则中可用的动物类型放置中立单位。"));
                             percentage(ui, tr!("中立守军"), &mut t.wild_amount, true,

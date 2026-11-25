@@ -118,6 +118,8 @@ pub struct Editor {
     tunnel_edit: tunnel_edit::TunnelEdit,
     plateau: cliff_edit::PlateauEdit,
     fill: fill_edit::FillEdit,
+    fill_style: fill_edit::FillStyle,
+    fill_brush_size: u16,
     flatten: flatten_edit::FlattenEdit,
     height_edit: height_edit::HeightEdit,
     object_brush: object_brush::ObjectBrush,
@@ -130,6 +132,8 @@ pub struct Editor {
     property_extra: BTreeMap<usize, String>,
     pub terrain_mode: TerrainMode,
     pub auto_lat: bool,
+    ice_fill_growth: bool,
+    ice_soften_shore: bool,
     pub smooth_heights: bool,
     pub flatten_level: u8,
     pub height_absolute: bool,
@@ -227,6 +231,8 @@ impl Editor {
             tunnel_edit: Default::default(),
             plateau: Default::default(),
             fill: Default::default(),
+            fill_style: Default::default(),
+            fill_brush_size: 3,
             flatten: Default::default(),
             height_edit: Default::default(),
             object_brush: Default::default(),
@@ -242,6 +248,8 @@ impl Editor {
             property_error: String::new(),
             terrain_mode: TerrainMode::Template,
             auto_lat: true,
+            ice_fill_growth: true,
+            ice_soften_shore: true,
             smooth_heights: true,
             flatten_level: 0,
             height_absolute: false,
@@ -944,7 +952,7 @@ impl Editor {
         };
         tool == Tool::Place
             || tool.brush()
-                && (tool != Tool::Terrain || !mode.planned() && mode != TerrainMode::Fill)
+                && (tool != Tool::Terrain || !mode.planned() && !mode.uses_fill_gesture())
     }
 
     pub(crate) fn tracks_projected_drag(&self) -> bool {
@@ -1424,7 +1432,7 @@ impl Editor {
             self.flatten_preview(painter, scene, rect, camera);
             return;
         }
-        if self.terrain_mode == TerrainMode::Fill || self.fill_active_or_requested() {
+        if self.fill_active_or_requested() {
             self.fill_preview(painter, scene, rect, camera, at);
             return;
         }

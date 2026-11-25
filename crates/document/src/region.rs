@@ -13,6 +13,26 @@ pub struct RegionLayers {
     #[serde(default)]
     pub cell_tags: bool,
 }
+/// Edit just the last byte of each existing IsoMapPack5 cell record.
+pub fn set_ice_growth(doc: &mut MapDocument, cells: &BTreeSet<Cell>, enabled: bool) -> Result<()> {
+    doc.atomic(|doc| {
+        for &at in cells {
+            if let Some(terrain) = doc.terrain(at)
+                && (terrain.ice != 0) != enabled
+            {
+                doc.set(
+                    Target::Terrain(at),
+                    Some(Value::Terrain(TerrainValue {
+                        ice: u8::from(enabled),
+                        ..terrain
+                    })),
+                )?;
+            }
+        }
+        Ok(())
+    })
+}
+
 pub const OBJECT_SECTIONS: [&str; 6] = [
     "Structures",
     "Units",
@@ -69,6 +89,8 @@ pub struct RegionCell {
 pub struct Clipboard {
     #[serde(default)]
     pub resource_profile: Option<String>,
+    #[serde(default)]
+    requires_vera_ice: bool,
     pub origin: Cell,
     pub cells: Vec<RegionCell>,
     pub records: Vec<(u64, Record)>,
@@ -107,6 +129,7 @@ impl Clipboard {
                 ..Default::default()
             },
         )?;
+        clip.validate_vera_ice(destination)?;
         clip.resource_profile = destination.resource_profile.clone();
         // Imported tile numbers are interpreted by the destination theater.
         clip.theater = destination.base.header.theater.clone();
@@ -183,7 +206,7 @@ impl Clipboard {
                 }
             }
         }
-        let cells = cells
+        let cells: Vec<_> = cells
             .iter()
             .map(|&at| RegionCell {
                 at,
@@ -201,6 +224,12 @@ impl Clipboard {
             .collect();
         Ok(Self {
             resource_profile: doc.resource_profile.clone(),
+            requires_vera_ice: layers.terrain
+                && doc.vera_ice_enabled()
+                && cells.iter().any(|cell| {
+                    cell.terrain
+                        .is_some_and(|v| crate::document::VERA_ICE_TILES.contains(&v.tile))
+                }),
             origin,
             cells,
             records,
@@ -208,6 +237,15 @@ impl Clipboard {
             theater: doc.base.header.theater.clone(),
         })
     }
+
+    fn validate_vera_ice(&self, doc: &MapDocument) -> Result<()> {
+        ensure!(
+            !self.requires_vera_ice || doc.vera_ice_enabled(),
+            "目标地图未启用 VERA 可破裂冰面，无法导入冰面或雪岸地块"
+        );
+        Ok(())
+    }
+
     pub fn plan(&self, doc: &MapDocument, anchor: Cell) -> Result<PastePlan> {
         ensure!(
             self.theater.eq_ignore_ascii_case(&doc.base.header.theater),
@@ -217,6 +255,7 @@ impl Clipboard {
             self.resource_profile == doc.resource_profile,
             "剪贴板资源版本不匹配或缺少来源；请在当前 Mod 中重新复制"
         );
+        self.validate_vera_ice(doc)?;
         let translate = |at: Cell| -> Result<Cell> {
             let [x, y] = [0, 1].map(|axis| {
                 i32::from(at[axis]) + i32::from(anchor[axis]) - i32::from(self.origin[axis])

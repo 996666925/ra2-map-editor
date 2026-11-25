@@ -20,6 +20,29 @@ fn rect() -> BTreeSet<Cell> {
     [[20, 20], [21, 20], [20, 21], [21, 21]].into()
 }
 #[test]
+fn ice_growth_flags_round_trip_without_replacing_terrain() {
+    let mut doc = setup();
+    let at = [20, 20];
+    let before = doc.terrain(at).unwrap();
+    let cells = [at, [0, 0]].into(); // A selection can include cells with no Pack5 record.
+    set_ice_growth(&mut doc, &cells, true).unwrap();
+    assert!(doc.commit("mark ice growth"));
+    let bytes = doc.snapshot().bytes().unwrap();
+    let (source, _) = SourceMap::parse("region.map".into(), "fixture".into(), bytes).unwrap();
+    let reopened = MapDocument::new(source.edit_base.unwrap());
+    assert_eq!(
+        reopened.terrain(at),
+        Some(TerrainValue { ice: 1, ..before })
+    );
+    assert_eq!(reopened.terrain([0, 0]), None);
+    set_ice_growth(&mut doc, &cells, false).unwrap();
+    assert!(doc.commit("clear ice growth"));
+    assert_eq!(doc.terrain(at), Some(before));
+    doc.undo();
+    assert_eq!(doc.terrain(at).unwrap().ice, 1);
+}
+
+#[test]
 fn same_theater_clipboards_require_matching_resource_and_schema_revision() {
     let mut doc = setup();
     doc.resource_profile = Some("schema-a:mod-a".into());

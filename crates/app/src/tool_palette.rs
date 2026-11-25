@@ -33,6 +33,7 @@ impl TerrainPage {
             TerrainMode::Water
             | TerrainMode::WaterOutline
             | TerrainMode::WaterPolyline
+            | TerrainMode::IceFill
             | TerrainMode::LandFill
             | TerrainMode::ShoreRepair
             | TerrainMode::CoastalCliff => Self::Water,
@@ -72,6 +73,7 @@ impl TerrainPage {
                 (LandFill, "回填陆地"),
                 (ShoreRepair, "修复岸线"),
                 (CoastalCliff, "临水悬崖"),
+                (IceFill, "可破裂冰面"),
             ],
             Self::Roads => &[
                 (Road, "绘制道路"),
@@ -189,12 +191,12 @@ impl Editor {
         });
     }
 
-    pub(super) fn terrain_tools(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn terrain_tools(&mut self, ui: &mut egui::Ui, ice_available: bool) {
         ui.horizontal_wrapped(|ui| {
             for (page, label) in [
                 (TerrainPage::Ground, tr!("地表")),
                 (TerrainPage::Cliffs, tr!("悬崖")),
-                (TerrainPage::Water, tr!("水岸")),
+                (TerrainPage::Water, tr!("水域")),
                 (TerrainPage::Roads, tr!("道路 / 桥")),
             ] {
                 ui.selectable_value(&mut self.ui_state.terrain_page, page, label);
@@ -208,18 +210,25 @@ impl Editor {
             )
         {
             egui::CollapsingHeader::new(tr!("画笔、填充与高度工具"))
-                .show(ui, |ui| self.terrain_mode_buttons(ui));
+                .show(ui, |ui| self.terrain_mode_buttons(ui, ice_available));
         } else {
-            self.terrain_mode_buttons(ui);
+            self.terrain_mode_buttons(ui, ice_available);
         }
     }
 
-    fn terrain_mode_buttons(&mut self, ui: &mut egui::Ui) {
+    fn terrain_mode_buttons(&mut self, ui: &mut egui::Ui, ice_available: bool) {
         let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.;
         ui.add_enabled_ui(self.doc.is_some() && !self.stroking, |ui| {
             for pair in self.ui_state.terrain_page.modes().chunks(2) {
+                let visible = |mode| mode != TerrainMode::IceFill || ice_available;
+                if !pair.iter().any(|&(mode, _)| visible(mode)) {
+                    continue;
+                }
                 ui.horizontal(|ui| {
                     for &(mode, label) in pair {
+                        if !visible(mode) {
+                            continue;
+                        }
                         if ui
                             .add_sized(
                                 [width, 28.],
@@ -227,7 +236,11 @@ impl Editor {
                                     self.tool == Tool::Terrain && self.terrain_mode == mode,
                                 ),
                             )
-                            .on_hover_text(crate::i18n::text(mode.name()))
+                            .on_hover_text(if mode == TerrainMode::IceFill {
+                                tr!("框选或涂抹冻结平坦水面，自动拼接冰缘。橙色格会保留。")
+                            } else {
+                                crate::i18n::text(mode.name())
+                            })
                             .clicked()
                         {
                             self.activate_terrain_mode(mode);

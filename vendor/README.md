@@ -4,8 +4,12 @@
 The editor pins the engine through its Git tree entry, rather than a moving branch.
 Use `git submodule status` for the revision selected by your editor checkout.
 
-The current integration targets VERA20k 0.4.1 at
-`d477ffe59e689f50a08495cb1333728b53488d90` (updated 2026-11-23).
+The current integration targets VERA20k 0.4.2 development at
+`6fdb48d492a38b4a46d8efce19dd49a4f6effc74` (updated 2026-11-25).
+Snow maps with `[Map] VeraIce=yes` load stock YR snow and the engine's verified
+ice pack. The terrain browser exposes the ice tiles, and region editing can
+mark or clear the last byte of an IsoMapPack5 cell for ice growth. Ordinary
+snow maps and random-map generation use the normal theater resources.
 The editor uses the engine's retained high-bridge deck levels for bridge art,
 placed units, placement previews and SHP vehicle depth. The engine derives one
 height for the span from the bridgeheads on map load.
@@ -28,6 +32,7 @@ lift). ZShape sampling uses the source frame offset rather than the canvas offse
 Mission audit loaders follow the engine's nonfatal Team AI diagnostics API.
 Random-map inputs share the engine's loaded Extras settings for theater fences
 and town catalogs, and allow its parallel generation to borrow tile blocks.
+The civilian slider applies to both neutral open-ground spawns and urban foot traffic.
 Unless `[Extras] Derelicts=` supplies an override, the shared generator uses
 the active Rules' `[AI]` construction yard, barracks, battle lab and war factory lists.
 Headless mission audits retain simulation resources in the engine's shared `Arc`.

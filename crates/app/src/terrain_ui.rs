@@ -3,7 +3,7 @@ use super::*;
 use crate::i18n::tr;
 use crate::ui_theme as theme;
 use egui::{RichText, TextureHandle};
-use ra2_map_assets::terrain_library::TerrainCategory;
+use ra2_map_assets::{catalog::TerrainBrush, terrain_library::TerrainCategory};
 use vera20k_core::map::theater::TileKey;
 
 fn sync_palette(state: &mut editing_ui::EditorUi, scene: &MapScene) {
@@ -76,6 +76,22 @@ pub(super) fn template_texture(
     state.template_textures.get(&id).cloned()
 }
 
+fn matches_brush(
+    scene: &MapScene,
+    brush: &TerrainBrush,
+    category: Option<TerrainCategory>,
+    group: Option<u16>,
+    filter: &str,
+) -> bool {
+    let metadata = scene.palette.groups.get(&brush.key.tile_id);
+    category.is_none_or(|c| metadata.is_some_and(|g| g.category == c))
+        && group.is_none_or(|id| metadata.is_some_and(|g| g.id == id))
+        && (filter.is_empty()
+            || brush.label.to_ascii_lowercase().contains(filter)
+            || crate::labels::terrain_brush(&brush.label).contains(filter)
+            || metadata.is_some_and(|g| g.category.name().contains(filter)))
+}
+
 /// Complete cliff templates use the lowest available subtile as their default anchor.
 pub(super) fn choices(
     scene: &MapScene,
@@ -119,20 +135,27 @@ pub(super) fn choices(
         .iter()
         .enumerate()
         .filter(|(_, b)| {
-            let metadata = scene.palette.groups.get(&b.key.tile_id);
             (variants || b.key.variant == 0)
-                && category.is_none_or(|c| metadata.is_some_and(|g| g.category == c))
-                && group.is_none_or(|id| metadata.is_some_and(|g| g.id == id))
-                && (filter.is_empty()
-                    || b.label.to_ascii_lowercase().contains(filter)
-                    || crate::labels::terrain_brush(&b.label).contains(filter)
-                    || metadata.is_some_and(|g| g.category.name().contains(filter)))
+                && matches_brush(scene, b, category, group, filter)
                 && (subtiles || seen.insert((b.key.tile_id, b.key.variant)))
         })
         .map(|(i, b)| {
             cliff_anchors
                 .get(&(b.key.tile_id, b.key.variant))
                 .map_or(i, |&(_, _, anchor)| anchor)
+        })
+        .collect()
+}
+
+fn fill_choices(scene: &MapScene) -> Vec<usize> {
+    scene
+        .brushes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, brush)| {
+            ra2_map_scene::fill_tools::material(scene, brush)
+                .is_ok()
+                .then_some(index)
         })
         .collect()
 }
@@ -273,16 +296,18 @@ impl Editor {
         sync_palette(&mut self.ui_state, scene);
         self.set_framework(self.framework);
         let filling = self.terrain_mode == TerrainMode::Fill && self.tool == Tool::Terrain;
-        let fill_groups: BTreeSet<_> = if filling {
-            scene
-                .brushes
-                .iter()
-                .filter(|b| ra2_map_scene::fill_tools::material(scene, b).is_ok())
-                .filter_map(|b| scene.palette.groups.get(&b.key.tile_id).map(|g| g.id))
-                .collect()
-        } else {
-            BTreeSet::new()
-        };
+        let fill_items = filling.then(|| fill_choices(scene));
+        let fill_groups: BTreeSet<_> = fill_items
+            .iter()
+            .flatten()
+            .filter_map(|&i| {
+                scene
+                    .palette
+                    .groups
+                    .get(&scene.brushes[i].key.tile_id)
+                    .map(|g| g.id)
+            })
+            .collect();
         egui::CollapsingHeader::new(tr!("分类与模板选项")).show(ui, |ui| {
             egui::ComboBox::from_id_salt("terrain-category")
                 .width(ui.available_width())
@@ -295,13 +320,9 @@ impl Editor {
                     let old = self.ui_state.terrain_category;
                     ui.selectable_value(&mut self.ui_state.terrain_category, None, tr!("全部地形"));
                     for category in TerrainCategory::ALL {
-                        if (!filling || category == TerrainCategory::Ground)
-                            && scene
-                                .palette
-                                .groups
-                                .values()
-                                .any(|g| g.category == category)
-                        {
+                        if scene.palette.groups.values().any(|g| {
+                            g.category == category && (!filling || fill_groups.contains(&g.id))
+                        }) {
                             ui.selectable_value(
                                 &mut self.ui_state.terrain_category,
                                 Some(category),
@@ -359,19 +380,23 @@ impl Editor {
             });
         });
         let subtiles = self.ui_state.terrain_subtiles && !filling;
-        let mut matching = choices(
-            scene,
-            self.ui_state.terrain_category,
-            self.ui_state.terrain_group,
-            subtiles,
-            self.ui_state.terrain_variants,
-            filter,
-        );
-        if filling {
-            matching.retain(|&index| {
-                ra2_map_scene::fill_tools::material(scene, &scene.brushes[index]).is_ok()
+        let category = self.ui_state.terrain_category;
+        let group = self.ui_state.terrain_group;
+        let matching = if let Some(mut items) = fill_items {
+            items.retain(|&index| {
+                matches_brush(scene, &scene.brushes[index], category, group, filter)
             });
-        }
+            items
+        } else {
+            choices(
+                scene,
+                category,
+                group,
+                subtiles,
+                self.ui_state.terrain_variants,
+                filter,
+            )
+        };
         ui.small(tr!(
             "{arg0} 个{arg1}",
             arg0 = matching.len(),
@@ -465,7 +490,7 @@ impl Editor {
                             } else {
                                 format!("#{}", key.tile_id)
                             };
-                            if self.ui_state.terrain_variants {
+                            if !filling && self.ui_state.terrain_variants {
                                 label.push_str(&format!(" v{}", key.variant));
                             }
                             p.text(
@@ -505,17 +530,22 @@ impl Editor {
                     });
                 }
             });
-        if let Some(brush) = scene.brushes.get(self.brush) {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(crate::labels::terrain_brush(&brush.label))
-                        .size(10.)
-                        .color(theme::MUTED),
+        ui.horizontal(|ui| {
+            if filling {
+                ui.set_min_height(ui.spacing().interact_size.y);
+            }
+            if let Some(brush) = scene.brushes.get(self.brush) {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(crate::labels::terrain_brush(&brush.label))
+                            .size(10.)
+                            .color(theme::MUTED),
+                    )
+                    .truncate(),
                 )
-                .truncate(),
-            )
-            .on_hover_text(&brush.label);
-        }
+                .on_hover_text(&brush.label);
+            }
+        });
     }
 
     pub(super) fn terrain_template_options(&mut self, ui: &mut egui::Ui, scene: &MapScene) {

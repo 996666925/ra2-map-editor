@@ -1090,6 +1090,103 @@ fn joining_gestures_cache_previews_freeze_the_mode_and_cancel_invalid_strokes() 
 }
 
 #[test]
+fn water_outline_repaints_ice_and_preserves_the_rest_of_the_lake() {
+    use crate::document::{Target, TerrainValue, Value};
+    use ra2_map_scene::shore_tools;
+
+    let fixture = ra2_map_assets::test_support::Fixture::with_joining();
+    let mut scene = scene_from_fixture(&fixture, 4);
+    let palette = Arc::get_mut(&mut scene.palette).unwrap();
+    palette.bundled_ice_sets = Some([4096, 4160, 4224]);
+    let tiles = [4096, 4104, 4114, 4176, 4180, 4287];
+    palette
+        .raw_ids
+        .extend(tiles.map(|tile| (i32::from(tile), tile)));
+    let art = palette.images.values().next().unwrap().clone();
+    for tile_id in tiles {
+        palette.images.insert(
+            vera20k_core::map::theater::TileKey {
+                tile_id,
+                sub_tile: 0,
+                variant: 0,
+            },
+            art.clone(),
+        );
+    }
+    Arc::make_mut(&mut scene.catalog)
+        .raw_tiles
+        .extend(tiles.map(|tile| (tile, i32::from(tile))));
+
+    let (mut e, _, root) = editor();
+    e.attach(&scene);
+    let doc = e.doc.as_mut().unwrap();
+    let lake = ra2_map_scene::cliff_tools::rectangle([26, 26], [49, 49]);
+    shore_tools::plan(doc, &scene, lake, Some(true))
+        .unwrap()
+        .apply(doc)
+        .unwrap();
+    let water = doc.terrain([32, 32]).unwrap();
+    let selected = [[32, 33], [33, 33], [34, 33], [35, 33], [34, 34]];
+    let kept = [36, 33];
+    for (at, tile) in selected
+        .into_iter()
+        .zip([4096, 4176, 4180, 4104, 4287])
+        .chain([(kept, 4104)])
+    {
+        doc.set(
+            Target::Terrain(at),
+            Some(Value::Terrain(TerrainValue {
+                tile,
+                ice: 1,
+                ..water
+            })),
+        )
+        .unwrap();
+    }
+    doc.commit("frozen lake");
+    let kept_ice = doc.terrain(kept).unwrap();
+    let before = doc.snapshot().bytes().unwrap();
+
+    e.activate_terrain_mode(TerrainMode::WaterOutline);
+    let path = [[31, 31], [35, 31], [35, 35], [31, 35]];
+    for (i, &at) in path.iter().enumerate() {
+        e.pointer(&scene, Some(at), i == 0, true, false, None);
+    }
+    let preview = e.plateau_preview_plan(&scene, path[3]).unwrap();
+    assert!(preview.cliffs.is_empty());
+    assert_eq!(preview.edits.len(), selected.len() + 1);
+    let new_edge = TerrainValue {
+        tile: 4114,
+        ..water
+    };
+    let reshaped = TerrainValue {
+        tile: 4096,
+        ..kept_ice
+    };
+    assert_eq!(preview.edits[&[35, 33]], new_edge);
+    assert_eq!(preview.edits[&kept], reshaped);
+    assert!(
+        selected
+            .into_iter()
+            .filter(|&at| at != [35, 33])
+            .all(|at| preview.edits[&at] == water)
+    );
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.pointer(&scene, Some(path[3]), false, false, true, None);
+    let doc = e.doc.as_ref().unwrap();
+    for (&at, &after) in &preview.edits {
+        assert_eq!(doc.terrain(at), Some(after));
+    }
+    let after = doc.snapshot().bytes().unwrap();
+    e.history(false, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), before);
+    e.history(true, &scene);
+    assert_eq!(e.doc.as_ref().unwrap().snapshot().bytes().unwrap(), after);
+    drop(e);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn ramp_gesture_widens_and_shrinks_preview_then_commits_once() {
     let (mut e, _, root) = editor();
     let scene = scene();

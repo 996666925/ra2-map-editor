@@ -103,20 +103,28 @@ impl ResourceView {
         self.manager_for_theater("TEMPERATE")
     }
     pub fn manager_for_theater(&self, theater: &str) -> Result<AssetManager> {
-        self.manager_with_theater(theater)
+        self.manager_with_theater(theater, false)
             .map(|(manager, _)| manager)
     }
     pub fn manager_and_theater(
         &self,
         theater: &str,
     ) -> Result<(AssetManager, vera20k_core::map::theater::TheaterData)> {
-        let (manager, loaded) = self.manager_with_theater(theater)?;
+        self.manager_and_map_theater(theater, false)
+    }
+    pub(crate) fn manager_and_map_theater(
+        &self,
+        theater: &str,
+        bundled_ice: bool,
+    ) -> Result<(AssetManager, vera20k_core::map::theater::TheaterData)> {
+        let (manager, loaded) = self.manager_with_theater(theater, bundled_ice)?;
         let data = loaded.with_context(|| format!("无法加载 {theater} 环境资源"))?;
         Ok((manager, data))
     }
     fn manager_with_theater(
         &self,
         theater: &str,
+        bundled_ice: bool,
     ) -> Result<(
         AssetManager,
         Option<vera20k_core::map::theater::TheaterData>,
@@ -132,7 +140,12 @@ impl ResourceView {
         let overlay = (root != self.directory).then_some(root.as_path());
         let mut manager =
             native_manager(&self.directory, overlay, self.ares)?.with_selected_ini_roots(roots);
-        let loaded = vera20k_core::map::theater::load_theater(&mut manager, theater);
+        let loaded = vera20k_core::map::theater::load_theater_with_bundled_ice(
+            &mut manager,
+            theater,
+            bundled_ice,
+            false,
+        )?;
         for name in self.config.ini.values() {
             ensure!(manager.get_ref(name).is_some(), "找不到 INI 入口：{name}");
         }

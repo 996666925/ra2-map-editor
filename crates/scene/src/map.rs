@@ -277,12 +277,14 @@ pub fn load_scene_controlled(
             .read_to_end(&mut bytes)?;
         (bytes, path.display().to_string())
     } else {
-        // Only a bare archive name may fall back to MIX lookup. Typos in a
-        // filesystem path should not silently load an unrelated embedded map.
+        // A bare name can come from a MIX or an engine-bundled map.
         ensure!(path.components().count() == 1, "地图文件不存在：{name}");
         let (bytes, source) = install
             .manager
             .get_with_source_ref(name)
+            .or_else(|| {
+                vera20k_core::map::source::bundled_map_bytes(name).map(|bytes| (bytes, "VERA20k"))
+            })
             .with_context(|| format!("找不到地图：{name}"))?;
         ensure!(bytes.len() <= MAX_SOURCE_BYTES, "地图超过 32 MiB");
         (bytes.to_vec(), source.to_owned())
@@ -338,7 +340,7 @@ pub fn load_scene_bytes_controlled(
         SourceMap::parse_with_ares(name.into(), origin, bytes, install.manager.ships_ares())?;
     let mut diagnostics = vec![Diagnostic { code:"EDITOR_PREVIEW", message:"静态编辑预览：SHP/VXL 与地形共享像素深度，支持 House 换色、基础地图光照和建筑阴影；尚未覆盖损伤动画、局部光源、全部桥梁及对象阴影。地形工具支持局部 LAT、连续坡面、标准陆地悬崖、高台改形、坡道及高低桥梁联动；自动道路布线、水岸与水悬崖生成尚未实现。".into(),cell:None }];
     let playfield = PlayfieldBounds::from_map_header(&map.header);
-    if let Err(error) = install.activate_theater(&map.header.theater) {
+    if let Err(error) = install.activate_scenario_theater(&map) {
         diagnostics.push(Diagnostic {
             code: "UNSUPPORTED_THEATER",
             message: format!(

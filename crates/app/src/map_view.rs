@@ -484,6 +484,7 @@ impl MapView {
                             self.editor.cache(&scene);
                         }
                     }
+                    self.editor.sync_ice_tool(&scene);
                     self.editor.structural_refresh = false;
                     self.workbench.management.preserve_view = false;
                     self.workbench.management.published_shift = [0, 0];
@@ -953,7 +954,8 @@ impl MapView {
             && (primary_down || primary_release);
         let drag_pos = continuing_drag
             .then(|| ui.input(|i| i.pointer.interact_pos()))
-            .flatten();
+            .flatten()
+            .filter(|&pos| !self.editor.fill_brushing() || rect.contains(pos));
         let mut pick = |p| {
             let world = camera.world_point(rect, p);
             if self.editor.flat_view {
@@ -1083,6 +1085,7 @@ impl MapView {
         };
         // These guides need the press or drag sample from the current frame.
         let preview_after_pointer = self.editor.rectangular_plateau_cut_selected()
+            || self.editor.fill_brushing()
             || (self.editor.tool == crate::editing::Tool::Terrain
                 && self.editor.terrain_mode
                     == ra2_map_scene::terrain_tools::TerrainMode::ShoreRepair);

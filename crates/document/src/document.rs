@@ -15,6 +15,15 @@ use vera20k_core::{
 };
 
 pub type Cell = [u16; 2];
+// Published VERA Pack5 IDs: three 64-tile ice families and 48 IceShore tiles.
+pub(crate) const VERA_ICE_TILES: std::ops::Range<i32> = 4096..4336;
+
+fn read_vera_ice_flag(value: &str) -> bool {
+    vera20k_core::rules::ini_parser::IniFile::from_str(&format!("[Map]\nVeraIce={value}\n"))
+        .section_or_empty("Map")
+        .read_bool("VeraIce", false)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerrainValue {
     pub tile: i32,
@@ -792,6 +801,17 @@ impl MapDocument {
             _ => None,
         }
     }
+    fn uses_vera_ice_tiles(&self) -> bool {
+        self.changes
+            .range(Target::Terrain([0; 2])..=Target::Terrain([u16::MAX; 2]))
+            .any(|(_, value)| {
+                matches!(value, Some(Value::Terrain(v)) if VERA_ICE_TILES.contains(&v.tile))
+            })
+            || self.base.offsets.iter().any(|(&at, &offset)| {
+                let v = TerrainValue::read(&self.base.terrain[offset + 4..offset + 11]);
+                VERA_ICE_TILES.contains(&v.tile) && !self.changes.contains_key(&Target::Terrain(at))
+            })
+    }
     pub fn overlay(&self, at: Cell) -> (u8, u8) {
         match self.value(&Target::Overlay(at)) {
             Some(Value::Overlay(id, frame)) => (id, frame),
@@ -824,6 +844,13 @@ impl MapDocument {
                             && !bytes.iter().any(|b| matches!(b, b'\r' | b'\n' | 0 | b';')),
                         "INI 值最多 480 字节，不能含换行、NUL 或分号"
                     );
+                }
+                if section == "Map" && key == "VeraIce" {
+                    let next = match &value {
+                        Some(Value::Ini(bytes)) => String::from_utf8_lossy(bytes),
+                        _ => "".into(),
+                    };
+                    self.validate_vera_ice_option(&next)?;
                 }
             }
             (Target::Terrain(_), Some(Value::Terrain(_)))
@@ -859,6 +886,30 @@ impl MapDocument {
             crate::startup_garrison::record_change(self, &old, new)?;
         }
         self.store_validated(target, value);
+        Ok(())
+    }
+
+    pub(crate) fn vera_ice_enabled(&self) -> bool {
+        self.base.header.theater.eq_ignore_ascii_case("SNOW")
+            && read_vera_ice_flag(&self.ini_text("Map", "VeraIce"))
+    }
+
+    fn validate_vera_ice_option(&self, next: &str) -> Result<()> {
+        use vera20k_core::rules::ini_parser::IniFile;
+        let snow = self.base.header.theater.eq_ignore_ascii_case("SNOW");
+        if read_vera_ice_flag(next) {
+            let format = self.ini_text("Basic", "NewINIFormat");
+            let ini = IniFile::from_str(&format!("[Basic]\nNewINIFormat={format}\n"));
+            ensure!(
+                snow && ini.section_or_empty("Basic").read_int("NewINIFormat", 0) == 4,
+                "VERA 可破裂冰面需要 SNOW 环境和 NewINIFormat=4"
+            );
+        } else if self.vera_ice_enabled() {
+            ensure!(
+                !self.uses_vera_ice_tiles(),
+                "地图仍使用 VERA 冰面或雪岸素材，请先替换这些地块再关闭"
+            );
+        }
         Ok(())
     }
     fn store_validated(&mut self, target: Target, value: Option<Value>) {

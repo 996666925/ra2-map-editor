@@ -25,8 +25,7 @@ pub fn validate_target(section: &str, key: &str) -> Result<()> {
     ensure!(
         !matches!(
             section,
-            "Map"
-                | "Units"
+            "Units"
                 | "Infantry"
                 | "Structures"
                 | "Aircraft"
@@ -39,7 +38,8 @@ pub fn validate_target(section: &str, key: &str) -> Result<()> {
                 | "Preview"
                 | "PreviewPack"
                 | "Digest"
-        ) && !(section == "Basic" && key == "NewINIFormat"),
+        ) && !(section == "Basic" && key == "NewINIFormat")
+            && (section != "Map" || key == "VeraIce"),
         "此字段须通过专用地图工具修改"
     );
     Ok(())

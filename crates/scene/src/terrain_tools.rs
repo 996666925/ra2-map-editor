@@ -63,6 +63,7 @@ pub enum TerrainMode {
     Water,
     WaterOutline,
     WaterPolyline,
+    IceFill,
     LandFill,
     ShoreRepair,
     Road,
@@ -71,7 +72,7 @@ pub enum TerrainMode {
     CoastalCliff,
 }
 impl TerrainMode {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::Subtile,
         Self::Template,
         Self::Fill,
@@ -91,6 +92,7 @@ impl TerrainMode {
         Self::Water,
         Self::WaterOutline,
         Self::WaterPolyline,
+        Self::IceFill,
         Self::LandFill,
         Self::ShoreRepair,
         Self::Road,
@@ -102,7 +104,7 @@ impl TerrainMode {
         match self {
             Self::Subtile => "子块画笔",
             Self::Template => "完整模板",
-            Self::Fill => "框选铺地",
+            Self::Fill => "铺地",
             Self::Raise => "升高",
             Self::Lower => "降低",
             Self::Flatten => "平整",
@@ -119,6 +121,7 @@ impl TerrainMode {
             Self::Water => "矩形水域（自动岸线）",
             Self::WaterOutline => "围合水域（自动岸线）",
             Self::WaterPolyline => "折线水域（自动岸线）",
+            Self::IceFill => "可破裂冰面",
             Self::LandFill => "回填陆地（修补岸线）",
             Self::ShoreRepair => "修复岸线（画笔）",
             Self::Road => "道路（自动转角 / 路口）",
@@ -129,6 +132,9 @@ impl TerrainMode {
     }
     pub fn edits_height(self) -> bool {
         matches!(self, Self::Raise | Self::Lower | Self::Flatten)
+    }
+    pub fn uses_fill_gesture(self) -> bool {
+        matches!(self, Self::Fill | Self::IceFill)
     }
     pub fn planned(self) -> bool {
         self.joining()

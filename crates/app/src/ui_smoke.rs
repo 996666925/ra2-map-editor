@@ -32,7 +32,7 @@ pub(super) enum Panel {
     MapProperties(u8),
 }
 
-pub(super) fn panels() -> Vec<(String, Panel)> {
+pub(super) fn panels(ice_available: bool) -> Vec<(String, Panel)> {
     let mut panels = vec![];
     for (tab, name) in ["terrain", "objects", "waypoints", "overlays", "animations"]
         .into_iter()
@@ -41,6 +41,9 @@ pub(super) fn panels() -> Vec<(String, Panel)> {
         panels.push((format!("library-{name}"), Panel::Library(tab as u8)));
     }
     for mode in TerrainMode::ALL {
+        if mode == TerrainMode::IceFill && !ice_available {
+            continue;
+        }
         panels.push((
             format!("terrain-{mode:?}").to_lowercase(),
             Panel::Terrain(mode),
@@ -90,7 +93,11 @@ pub(super) fn panels() -> Vec<(String, Panel)> {
 
 impl MapView {
     pub(super) fn ui_smoke_step(&mut self, ctx: &egui::Context, output: &Path) -> Result<bool> {
-        let panels = panels();
+        let panels = panels(
+            self.scene
+                .as_ref()
+                .is_some_and(|scene| scene.palette.bundled_ice_sets.is_some()),
+        );
         ensure!(
             self.ui_smoke.phase == 0
                 || self

@@ -29,6 +29,9 @@ pub fn update_records(
     let _dialect = vera20k_core::rules::ares_switch::read_ares_way(after.base.reads_ares);
     if !Arc::ptr_eq(&before.base, &after.base)
         || old.revision != install.revision
+        // A canceled load can still activate a different theater before it exits.
+        || !old.source.header.theater.eq_ignore_ascii_case(&install.theater_name)
+        || old.source.bundled_ice != install.theater.uses_bundled_ice()
         || old.resolved.is_none()
         || old.visual.profile != Some(profile)
     {

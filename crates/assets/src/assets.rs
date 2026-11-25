@@ -281,15 +281,28 @@ impl Install {
             .clone()
     }
     pub fn activate_theater(&mut self, name: &str) -> Result<()> {
-        if self.theater_name.eq_ignore_ascii_case(name) {
+        self.activate_map_theater(name, false)
+    }
+    pub fn activate_scenario_theater(
+        &mut self,
+        map: &vera20k_core::map::map_file::MapFile,
+    ) -> Result<()> {
+        let name = &map.header.theater;
+        self.activate_map_theater(name, theater::map_requests_bundled_ice(name, &map.ini))
+    }
+    fn activate_map_theater(&mut self, name: &str, bundled_ice: bool) -> Result<()> {
+        if self.theater_name.eq_ignore_ascii_case(name)
+            && self.theater.uses_bundled_ice() == bundled_ice
+        {
             return Ok(());
         }
         let (manager, theater) = if let Some(view) = &self.view {
-            view.manager_and_theater(name)?
+            view.manager_and_map_theater(name, bundled_ice)?
         } else {
             let mut manager = open_manager(&self.directory, self.resources.as_ref())?;
-            let theater = theater::load_theater(&mut manager, name)
-                .with_context(|| format!("无法加载 {name} 环境资源"))?;
+            let theater =
+                theater::load_theater_with_bundled_ice(&mut manager, name, bundled_ice, false)?
+                    .with_context(|| format!("无法加载 {name} 环境资源"))?;
             (manager, theater)
         };
         self.catalog = crate::catalog::Catalog::load_with_art(&manager, &theater, None)?;

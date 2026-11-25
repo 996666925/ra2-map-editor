@@ -14,6 +14,8 @@ pub struct TerrainBrush {
 
 #[derive(Default)]
 pub struct TerrainPalette {
+    pub supports_ice: bool,
+    pub bundled_ice_sets: Option<[u16; 3]>,
     pub brushes: Vec<TerrainBrush>,
     pub images: std::collections::HashMap<TileKey, crate::assets::DecodedImage>,
     pub depths: std::collections::HashMap<TileKey, Vec<u8>>,
@@ -260,6 +262,8 @@ impl Catalog {
         use vera20k_core::assets::tmp_file::TmpFile;
         let framework = crate::framework::Source::open(manager.ra2_dir(), theater);
         let mut palette = TerrainPalette {
+            supports_ice: theater.ice_sets.is_some(),
+            bundled_ice_sets: theater.ice_sets.filter(|_| theater.uses_bundled_ice()),
             framework_heights: crate::framework::height_tiles(
                 framework
                     .as_ref()
@@ -275,6 +279,13 @@ impl Catalog {
             .wood_bridge_set
             .and_then(|set| theater.lookup.bounds().get(usize::from(set)));
         for (&tile_id, &raw) in &self.raw_tiles {
+            let ice_water = theater.ice_sets.is_some_and(|sets| {
+                sets.iter().any(|&base| {
+                    tile_id
+                        .checked_sub(base)
+                        .is_some_and(|offset| (17..64).contains(&offset))
+                })
+            });
             if theater.lookup.is_morphable(tile_id) {
                 palette.morphable.insert(tile_id);
             }
@@ -316,11 +327,18 @@ impl Catalog {
                         cells: tmp
                             .tiles
                             .iter()
-                            .map(|cell| {
+                            .enumerate()
+                            .map(|(sub, cell)| {
                                 cell.as_ref().map(|cell| TerrainSubtile {
                                     height: cell.height,
                                     slope: cell.ramp_type,
-                                    terrain: cell.terrain_type,
+                                    // Match resolved_terrain's Ice edge/open-water land patch
+                                    // for tools and object ghosts that use provisional cells.
+                                    terrain: if variant == 0 && sub == 0 && ice_water {
+                                        9
+                                    } else {
+                                        cell.terrain_type
+                                    },
                                 })
                             })
                             .collect(),

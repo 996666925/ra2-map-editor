@@ -180,7 +180,7 @@ impl MissionUi {
             .ok_or_else(|| anyhow::anyhow!(tr!("没有地图")))?;
         anyhow::ensure!(
             self.document == doc.id && self.state == doc.state_id,
-            tr!("文档已变化，请取消本次输入后重新编辑")
+            tr!("文档已变化，请取消本次输入后重新编辑。")
         );
         let changes = draft_changes(&self.original, &self.draft);
         // A newly added empty field is only a UI placeholder. Keep it visible

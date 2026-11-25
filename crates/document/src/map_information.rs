@@ -105,6 +105,13 @@ pub const FIELDS: &[Field] = &[
         "允许矿石生长机制",
         Kind::Boolean,
     ),
+    Field {
+        group: Group::Environment,
+        section: "Map",
+        key: "VeraIce",
+        label: "使用 VERA 可破裂冰面",
+        kind: Kind::Boolean,
+    },
     basic(
         Group::Environment,
         "IceGrowthEnabled",
@@ -390,6 +397,118 @@ mod tests {
         );
         let map = map_file::load_from_bytes(bytes.clone()).unwrap();
         MapDocument::new(Baseline::parse(bytes.into(), &map).unwrap())
+    }
+
+    #[test]
+    fn bundled_ice_is_an_undoable_snow_map_option() {
+        let mut wrong_theater = document();
+        let mut draft = Draft::read(&wrong_theater);
+        let field = ("Map", "VeraIce");
+        draft.values.insert(field, "yes".into());
+        assert!(draft.apply(&mut wrong_theater).is_err());
+
+        let bytes = NewMapOptions {
+            theater: "SNOW".into(),
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap();
+        let make_doc = |bytes: Vec<u8>| {
+            let map = map_file::load_from_bytes(bytes.clone()).unwrap();
+            MapDocument::new(Baseline::parse(bytes.into(), &map).unwrap())
+        };
+        let legacy = String::from_utf8(bytes.clone())
+            .unwrap()
+            .replace("NewINIFormat=4", "NewINIFormat=3");
+        assert!(draft.apply(&mut make_doc(legacy.into_bytes())).is_err());
+        let mut doc = make_doc(bytes.clone());
+        let mut draft = Draft::read(&doc);
+        draft.values.insert(field, "yes".into());
+        draft.apply(&mut doc).unwrap();
+        assert!(doc.commit("enable ice"));
+        let enabled = doc.snapshot().bytes().unwrap();
+        let loaded = map_file::load_from_bytes(enabled.clone()).unwrap();
+        assert!(vera20k_core::map::theater::map_requests_bundled_ice(
+            &loaded.header.theater,
+            &loaded.ini
+        ));
+        assert_eq!(Draft::read(&make_doc(enabled.clone())), draft);
+        doc.undo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), bytes);
+        doc.redo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), enabled);
+
+        let mut clear = Draft::read(&doc);
+        clear.values.insert(field, String::new());
+        clear.apply(&mut doc).unwrap();
+        assert!(doc.commit("clear ice option"));
+        let cleared = make_doc(doc.snapshot().bytes().unwrap());
+        assert!(cleared.ini_value("Map", "VeraIce").is_none());
+        doc.undo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), enabled);
+    }
+
+    #[test]
+    fn bundled_ice_cannot_be_disabled_until_every_referencing_tile_is_replaced() {
+        use crate::document::{Target, TerrainValue, Value};
+
+        let stock = NewMapOptions {
+            theater: "SNOW".into(),
+            width: 20,
+            height: 20,
+            ..Default::default()
+        }
+        .bytes()
+        .unwrap();
+        let open = |bytes: Vec<u8>| {
+            let map = map_file::load_from_bytes(bytes.clone()).unwrap();
+            MapDocument::new(Baseline::parse(bytes.into(), &map).unwrap())
+        };
+        let mut doc = open(stock);
+        doc.set_ini("Map", "VeraIce", Some(b"yes".to_vec()))
+            .unwrap();
+        for (at, tile) in [([20, 20], 4096), ([20, 21], 4287), ([21, 20], 4335)] {
+            let ice = TerrainValue {
+                tile,
+                ..doc.terrain(at).unwrap()
+            };
+            doc.set(Target::Terrain(at), Some(Value::Terrain(ice)))
+                .unwrap();
+        }
+        assert!(doc.set_ini("Map", "VeraIce", None).is_err());
+
+        let mut doc = open(doc.snapshot().bytes().unwrap());
+        let before = doc.snapshot().bytes().unwrap();
+        for disabled in ["no", ""] {
+            let mut draft = Draft::read(&doc);
+            draft.values.insert(("Map", "VeraIce"), disabled.into());
+            assert!(draft.apply(&mut doc).is_err());
+            assert_eq!(doc.snapshot().bytes().unwrap(), before);
+        }
+        let replace = |doc: &mut MapDocument, at| {
+            let stock = TerrainValue {
+                tile: 0,
+                ..doc.terrain(at).unwrap()
+            };
+            doc.set(Target::Terrain(at), Some(Value::Terrain(stock)))
+                .unwrap();
+        };
+        replace(&mut doc, [20, 20]);
+        replace(&mut doc, [20, 21]);
+        assert!(doc.set_ini("Map", "VeraIce", None).is_err()); // IceShore also needs the pack.
+        replace(&mut doc, [21, 20]);
+        assert!(doc.commit("replace last ice references"));
+        doc.set_ini("Map", "VeraIce", None).unwrap();
+        assert!(doc.commit("disable ice"));
+        assert!(
+            open(doc.snapshot().bytes().unwrap())
+                .ini_value("Map", "VeraIce")
+                .is_none()
+        );
+        doc.undo();
+        doc.undo();
+        assert_eq!(doc.snapshot().bytes().unwrap(), before);
+        assert!(doc.set_ini("Map", "VeraIce", Some(b"no".to_vec())).is_err());
     }
 
     #[test]
