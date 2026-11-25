@@ -39,6 +39,7 @@ pub(crate) struct MapSettingsUi {
     worker: Option<std::sync::mpsc::Receiver<anyhow::Result<Plan>>>,
     message: String,
     completion: crate::form_edit::EditCompletion,
+    finish_close: Option<egui::Id>,
     light_editing: bool,
     crates_editing: bool,
     info_editing: bool,
@@ -74,7 +75,7 @@ impl MapSettingsUi {
     pub fn allow_leave(&mut self) -> bool {
         if self.dirty() {
             self.open = true;
-            self.message = tr!("请完成或取消地图设置中的修改。").into();
+            self.message = tr!("请完成地图设置中的修改，或关闭窗口放弃未生效的修改。").into();
             false
         } else {
             true
@@ -103,6 +104,7 @@ impl MapSettingsUi {
         self.blocked.clear();
         self.worker = None;
         self.completion = Default::default();
+        self.finish_close = None;
         self.light_editing = false;
         self.crates_editing = false;
         self.info_editing = false;
@@ -128,7 +130,7 @@ impl MapSettingsUi {
         ctx: &egui::Context,
         editor: &mut Editor,
         scene: &MapScene,
-        save: bool,
+        force: bool,
     ) {
         if self.light_editing
             && self.tab == 1
@@ -140,7 +142,9 @@ impl MapSettingsUi {
             && self.name == self.original_name
             && self.players == self.original_players
             && !editor.stroking
-            && (save || ctx.input(|i| i.viewport().close_requested()) || self.completion.ready(ctx))
+            && (force
+                || ctx.input(|i| i.viewport().close_requested())
+                || self.completion.ready(ctx))
         {
             let result = (|| -> anyhow::Result<()> {
                 let doc = editor
@@ -149,7 +153,7 @@ impl MapSettingsUi {
                     .ok_or_else(|| anyhow::anyhow!(tr!("没有地图")))?;
                 anyhow::ensure!(
                     self.identity == Some((doc.id, doc.state_id)),
-                    tr!("文档已变化，请取消本次输入后重新编辑")
+                    tr!("文档已变化，请关闭地图设置后重新编辑")
                 );
                 self.apply_lighting(doc)
             })();
@@ -176,7 +180,9 @@ impl MapSettingsUi {
             && self.name == self.original_name
             && self.players == self.original_players
             && !editor.stroking
-            && (save || ctx.input(|i| i.viewport().close_requested()) || self.completion.ready(ctx))
+            && (force
+                || ctx.input(|i| i.viewport().close_requested())
+                || self.completion.ready(ctx))
         {
             let result = (|| -> anyhow::Result<()> {
                 let doc = editor
@@ -185,7 +191,7 @@ impl MapSettingsUi {
                     .ok_or_else(|| anyhow::anyhow!(tr!("没有地图")))?;
                 anyhow::ensure!(
                     self.identity == Some((doc.id, doc.state_id)),
-                    tr!("文档已变化，请取消本次输入后重新编辑")
+                    tr!("文档已变化，请关闭地图设置后重新编辑")
                 );
                 self.crates.as_ref().unwrap().apply(doc)
             })();
@@ -217,7 +223,9 @@ impl MapSettingsUi {
             && self.light == self.original_light
             && self.crates == self.original_crates
             && !editor.stroking
-            && (save || ctx.input(|i| i.viewport().close_requested()) || self.completion.ready(ctx))
+            && (force
+                || ctx.input(|i| i.viewport().close_requested())
+                || self.completion.ready(ctx))
         {
             let result = (|| -> anyhow::Result<()> {
                 let doc = editor
@@ -226,7 +234,7 @@ impl MapSettingsUi {
                     .ok_or_else(|| anyhow::anyhow!(tr!("没有地图")))?;
                 anyhow::ensure!(
                     self.identity == Some((doc.id, doc.state_id)),
-                    tr!("文档已变化，请取消本次输入后重新编辑")
+                    tr!("文档已变化，请关闭地图设置后重新编辑")
                 );
                 doc.atomic(|doc| {
                     if self.name != self.original_name {
@@ -294,7 +302,12 @@ impl MapSettingsUi {
             self.load(doc);
         }
         let state_before = doc.state_id;
-        self.finish_edits(ctx, editor, scene);
+        let finish_close = self.finish_close.take();
+        if let Some(field) = finish_close {
+            ctx.memory_mut(|memory| memory.surrender_focus(field));
+        } else {
+            self.finish_edits(ctx, editor, scene);
+        }
         let doc = editor.doc.as_ref().unwrap();
         let scene_pending = scene_pending || doc.state_id != state_before;
         let light_before = self.light.clone();
@@ -303,25 +316,32 @@ impl MapSettingsUi {
         let author_before = self.author.clone();
         let players_before = self.players;
         let info_before = self.info.clone();
-        let old_tab = self.tab;
+        let mut requested_tab = self.tab;
         let mut open = true;
         let mut apply_map = false;
         let mut apply_production = false;
-        let mut discard = false;
         let mut changed = false;
         let mut undo = false;
         let mut redo = false;
-        crate::ui_theme::window(ctx,tr!("地图设置"),"map-properties",egui::vec2(750.,690.)).open(&mut open).show(ctx,|ui|{
+        let window = crate::ui_theme::window(ctx,tr!("地图设置"),"map-properties",egui::vec2(750.,690.)).open(&mut open).show(ctx,|ui|{
             ui.horizontal_wrapped(|ui|{
-                ui.add_enabled_ui(!self.dirty(),|ui|{
-                    changed|=ui.selectable_value(&mut self.tab,3,tr!("地图信息")).changed();
-                    changed|=ui.selectable_value(&mut self.tab,0,tr!("尺寸与可玩区域")).changed();
-                    changed|=ui.selectable_value(&mut self.tab,1,tr!("光照")).changed();
-                    changed|=ui.selectable_value(&mut self.tab,2,tr!("箱子设置")).changed();
-                    changed|=ui.selectable_value(&mut self.tab,4,tr!("生产限制")).changed();
+                ui.add_enabled_ui(!self.dirty() && finish_close.is_none(), |ui| {
+                    ui.selectable_value(&mut requested_tab, 3, tr!("地图信息"));
+                    ui.selectable_value(&mut requested_tab, 0, tr!("尺寸与可玩区域"));
+                    ui.selectable_value(&mut requested_tab, 1, tr!("光照"));
+                    ui.selectable_value(&mut requested_tab, 2, tr!("箱子设置"));
+                    ui.selectable_value(&mut requested_tab, 4, tr!("生产限制"));
                 });
                 if self.dirty(){ui.colored_label(egui::Color32::YELLOW,match self.tab{1=>tr!("光照输入待完成"),2=>tr!("箱子设置输入待完成"),3=>tr!("地图信息输入待完成"),4=>tr!("有未应用的生产限制"),_=>tr!("有未应用尺寸设置")});}
             });
+            // Finish the focused field while its page is still visible.
+            if requested_tab != self.tab
+                && ctx.text_edit_focused()
+                && let Some(field) = ctx.memory(|memory| memory.focused())
+                && ctx.read_response(field).is_some_and(|response| response.layer_id == ui.layer_id())
+            {
+                ctx.memory_mut(|memory| memory.surrender_focus(field));
+            }
             egui::ScrollArea::vertical().max_height((ui.available_height()-100.).max(140.)).show(ui,|ui|{
                 if self.tab==0 {
                     let options=self.options.as_mut().unwrap();
@@ -438,11 +458,6 @@ impl MapSettingsUi {
             });
             ui.separator();
             ui.horizontal_wrapped(|ui|{
-                if self.tab != 0 {
-                    let cancel = ui.button(tr!("取消本次输入"));
-                    self.completion.cancel_button(&cancel);
-                    discard = cancel.clicked();
-                }
                 undo=ui.add_enabled(!self.dirty(),egui::Button::new(tr!("撤销"))).clicked();
                 redo=ui.add_enabled(!self.dirty(),egui::Button::new(tr!("取消撤销"))).clicked();
             });
@@ -453,7 +468,7 @@ impl MapSettingsUi {
                 self.blocked.clear();
                 self.message.clear();
             }
-            if self.tab == 1 || old_tab == 1 {
+            if self.tab == 1 {
                 self.due = Some(Instant::now());
             }
         }
@@ -477,28 +492,48 @@ impl MapSettingsUi {
         if apply_production {
             self.apply_production(editor, scene);
         }
-        self.finish_edits(ctx, editor, scene);
-        if !open {
-            if self.tab == 0 {
-                self.load(editor.doc.as_ref().unwrap());
-                self.message.clear();
-            } else if self.dirty() {
-                self.message = tr!("请完成或取消当前输入后关闭。").into();
-                return;
-            }
+        // An accessibility click can close the window without blurring the field.
+        // Draw the numeric editor once more after surrendering focus so it can publish its value.
+        if !open
+            && finish_close.is_none()
+            && self.tab == 3
+            && ctx.text_edit_focused()
+            && let Some(field) = ctx.memory(|memory| memory.focused())
+            && let Some(window) = window
+            && ctx
+                .read_response(field)
+                .is_some_and(|response| response.layer_id == window.response.layer_id)
+        {
+            self.finish_close = Some(field);
+            ctx.request_repaint();
+            return;
+        }
+        let closing = !open || finish_close.is_some();
+        let switching_tabs = requested_tab != self.tab;
+        self.finish_edits_inner(ctx, editor, scene, closing || switching_tabs);
+        if closing {
+            self.load(editor.doc.as_ref().unwrap());
+            self.message.clear();
             self.open = false;
             self.due = None;
             editor.refresh = true;
             return;
         }
-        if discard {
-            self.load(editor.doc.as_ref().unwrap());
-            editor.refresh = true;
-            self.message.clear();
-        } else if apply_map && self.options != self.original {
+        if apply_map && self.options != self.original {
             self.start_apply(ctx, editor.doc.as_ref().unwrap(), scene);
         } else {
             self.poll_apply(ctx, editor, scene);
+        }
+        if switching_tabs && !self.dirty() {
+            if self.tab == 1 || requested_tab == 1 {
+                self.due = Some(Instant::now());
+            }
+            self.tab = requested_tab;
+            if self.tab == 0 && self.worker.is_none() {
+                self.blocked.clear();
+                self.message.clear();
+            }
+            ctx.request_repaint();
         }
         if let Some(start) = self.due {
             if start.elapsed() >= Duration::from_millis(250) {
@@ -515,7 +550,7 @@ impl MapSettingsUi {
     fn apply_production(&mut self, editor: &mut Editor, scene: &MapScene) {
         let doc = editor.doc.as_mut().unwrap();
         if self.identity != Some((doc.id, doc.state_id)) {
-            self.message = tr!("文档已变化，请取消本次输入后重新编辑").into();
+            self.message = tr!("文档已变化，请关闭地图设置后重新编辑").into();
             return;
         }
         match production_settings::apply(
@@ -654,10 +689,7 @@ fn production_fields(
     inventory: Option<&production_settings::Inventory>,
     blocked: bool,
 ) -> bool {
-    ui.label(tr!(
-        "选择当前地图禁止生产的类型。应用后可撤销，Ctrl+S 保存到地图文件。"
-    ));
-    ui.small(tr!("空军包含飞机和可飞行的步兵及载具。海军按 Naval 规则识别。预置对象和任务直接生成的对象仍可使用。"));
+    ui.small(tr!("空军包括飞机、飞行步兵和飞行载具。海军按 Naval 标记识别。预置和任务直接生成的对象仍可使用。"));
     ui.add_space(8.);
     let available = inventory.is_some_and(|types| !types.is_empty());
     for restriction in Restriction::ALL {
@@ -790,6 +822,22 @@ mod tests {
         let doc = harness.state().1.doc.as_ref().unwrap();
         assert_eq!(doc.ini_text("ORCA", "TechLevel"), "-1");
         assert_eq!(doc.ini_text("DEST", "BuildLimit"), "0");
+        let applied_state = doc.state_id;
+        harness.get_by_label("禁止生产空军").click();
+        harness.run();
+        assert!(harness.state().0.dirty());
+        assert!(harness.query_by_label("取消本次输入").is_none());
+        harness.get_by_label("Close window").click();
+        harness.run();
+        let (form, editor) = harness.state();
+        assert!(!form.open);
+        assert!(!form.dirty());
+        let doc = editor.doc.as_ref().unwrap();
+        assert_eq!(doc.state_id, applied_state);
+        assert_eq!(doc.ini_text("ORCA", "TechLevel"), "-1");
+        assert!(form.production.contains(&Restriction::Air));
+        harness.state_mut().0.open = true;
+        harness.run();
 
         let mut updated = scene.borrow_mut();
         let catalog = std::sync::Arc::make_mut(&mut updated.catalog);
@@ -1190,7 +1238,7 @@ mod tests {
     }
 
     #[test]
-    fn start_count_input_commits_on_enter_and_save_and_supports_history() {
+    fn start_count_input_commits_before_save_and_navigation_and_supports_history() {
         use egui_kittest::kittest::Queryable as _;
         let (mut editor, _, root) = crate::editing::tests::editor();
         let scene = crate::editing::tests::terrain_scene();
@@ -1288,12 +1336,66 @@ mod tests {
             vec![0, 1]
         );
         assert!(!harness.state().0.dirty());
+
+        for (via_accesskit, text, expected) in [(false, "5", 5), (true, "6", 6)] {
+            let (role, label) = (egui::accesskit::Role::SpinButton, "出生点数量");
+            harness.get_by_role_and_label(role, label).focus();
+            harness.run();
+            harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            harness.get_by_role_and_label(role, label).type_text(text);
+            harness.run();
+            let tab = harness.get_by_label("箱子设置");
+            if via_accesskit {
+                tab.click_accesskit();
+            } else {
+                tab.click();
+            }
+            harness.run();
+            let (form, editor) = harness.state();
+            assert_eq!(form.tab, 2);
+            assert!(!form.dirty());
+            assert_eq!(
+                ra2_map_document::player_starts::from_document(editor.doc.as_ref().unwrap()),
+                (0..expected).collect::<Vec<_>>(),
+                "switching tabs via AccessKit: {via_accesskit}"
+            );
+            harness.get_by_label("地图信息").click();
+            harness.run();
+        }
+
+        for via_accesskit in [false, true] {
+            harness.state_mut().0.open = true;
+            harness.run();
+            let input = || (egui::accesskit::Role::SpinButton, "出生点数量");
+            harness.get_by_role_and_label(input().0, input().1).focus();
+            harness.run();
+            harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            let (text, expected) = if via_accesskit { ("3", 3) } else { ("4", 4) };
+            harness
+                .get_by_role_and_label(input().0, input().1)
+                .type_text(text);
+            harness.run();
+            let close = harness.get_by_label("Close window");
+            if via_accesskit {
+                close.click_accesskit();
+            } else {
+                close.click();
+            }
+            harness.run();
+            let (form, editor) = harness.state();
+            assert!(!form.open);
+            assert!(!form.dirty());
+            assert_eq!(
+                ra2_map_document::player_starts::from_document(editor.doc.as_ref().unwrap()),
+                (0..expected).collect::<Vec<_>>()
+            );
+        }
         drop(harness);
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn map_name_input_commits_on_enter_and_save_and_supports_history_and_cancel() {
+    fn map_name_input_commits_on_enter_and_save_and_discards_invalid_input_on_close() {
         use egui_kittest::kittest::Queryable as _;
         let (mut editor, _, root) = crate::editing::tests::editor();
         let scene = crate::editing::tests::terrain_scene();
@@ -1406,8 +1508,10 @@ mod tests {
                 .ini_text("Basic", "Name"),
             "保存前修改"
         );
-        harness.get_by_label("取消本次输入").click();
+        assert!(harness.query_by_label("取消本次输入").is_none());
+        harness.get_by_label("Close window").click();
         harness.run();
+        assert!(!harness.state().0.open);
         assert!(!harness.state().0.dirty());
         assert_eq!(harness.state().0.name.as_deref(), Some("保存前修改"));
         drop(harness);
@@ -1509,7 +1613,7 @@ mod tests {
     }
 
     #[test]
-    fn crate_panel_typing_cancel_reset_and_undo_use_real_widgets() {
+    fn crate_panel_typing_close_reset_and_undo_use_real_widgets() {
         use egui_kittest::kittest::Queryable as _;
         let (mut editor, _ctx, root) = crate::editing::tests::editor();
         let scene = crate::editing::tests::terrain_scene();
@@ -1574,8 +1678,10 @@ mod tests {
         harness.key_press(egui::Key::Enter);
         harness.run();
         assert!(harness.state().0.dirty());
-        harness.get_by_label("取消本次输入").click();
+        assert!(harness.query_by_label("取消本次输入").is_none());
+        harness.get_by_label("Close window").click();
         harness.run();
+        assert!(!harness.state().0.open);
         assert!(!harness.state().0.dirty());
         assert!(
             harness
@@ -1587,6 +1693,8 @@ mod tests {
                 .ini_text("CrateRules", "CrateMinimum")
                 .is_empty()
         );
+        harness.state_mut().0.open = true;
+        harness.run();
         harness
             .get_by_role_and_label(egui::accesskit::Role::TextInput, "最少箱子数")
             .focus();
@@ -1595,19 +1703,23 @@ mod tests {
             .get_by_role_and_label(egui::accesskit::Role::TextInput, "最少箱子数")
             .type_text("4");
         harness.run();
-        harness.get_by_label("取消本次输入").click();
+        assert!(harness.state().0.dirty());
+        harness.get_by_label("Close window").click();
         harness.run();
+        assert!(!harness.state().0.open);
         assert!(!harness.state().0.dirty());
-        assert!(
+        assert_eq!(
             harness
                 .state()
                 .1
                 .doc
                 .as_ref()
                 .unwrap()
-                .ini_text("CrateRules", "CrateMinimum")
-                .is_empty()
+                .ini_text("CrateRules", "CrateMinimum"),
+            "4"
         );
+        harness.state_mut().0.open = true;
+        harness.run();
         harness.get_by_label("全部继承游戏 / Mod 规则").click();
         harness.run();
         assert!(!harness.state().0.dirty());

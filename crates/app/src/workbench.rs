@@ -1190,7 +1190,7 @@ impl MapView {
                 if draft {
                     ui.colored_label(
                         theme::ACCENT,
-                        tr!("请先完成或取消任务与光照输入；尺寸修改需应用或放弃。"),
+                        tr!("请完成或取消任务输入。地图设置中的修改须先应用，或关闭地图设置放弃未生效的修改。"),
                     );
                 }
                 ui.add_enabled_ui(!draft, |ui| self.editor.playtest_controls(ui));
