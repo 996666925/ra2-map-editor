@@ -5,7 +5,10 @@ The editor pins the engine through its Git tree entry, rather than a moving bran
 Use `git submodule status` for the revision selected by your editor checkout.
 
 The current integration targets VERA20k 0.4.2 development at
-`6fdb48d492a38b4a46d8efce19dd49a4f6effc74` (updated 2026-11-25).
+`e18cfccd0cc338e02b452d26419bbbe3d9852d5e` (updated 2026-11-26).
+The editor accepts waypoint IDs 0 through 18277 and encodes alphabetic mission
+references from A through ZZZ. Waypoints above 701 require VERA20k's extended
+waypoint support.
 Snow maps with `[Map] VeraIce=yes` load stock YR snow and the engine's verified
 ice pack. The terrain browser exposes the ice tiles, and region editing can
 mark or clear the last byte of an IsoMapPack5 cell for ice growth. Ordinary

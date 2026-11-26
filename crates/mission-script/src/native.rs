@@ -1391,7 +1391,10 @@ fn read_manifest(doc: &MapDocument) -> Result<Manifest> {
         result
             .waypoints
             .iter()
-            .all(|waypoint| (30..=701).contains(&waypoint.id) && waypoint_ids.insert(waypoint.id)),
+            .all(
+                |waypoint| (30..=mission::schema::MAX_WAYPOINT_INDEX).contains(&waypoint.id)
+                    && waypoint_ids.insert(waypoint.id)
+            ),
         "任务航点归属清单无效"
     );
     let mut start_owner_objects = BTreeSet::new();
@@ -1978,9 +1981,10 @@ pub fn prepare_with_context(
     };
     for waypoint in &plan.waypoints {
         ensure!(
-            (first_mission_waypoint..=701).contains(&waypoint.id)
+            (first_mission_waypoint..=mission::schema::MAX_WAYPOINT_INDEX).contains(&waypoint.id)
                 && waypoint_ids.insert(waypoint.id),
-            "新任务航点编号须唯一且位于 {first_mission_waypoint}～701"
+            "新任务航点编号须唯一且位于 {first_mission_waypoint}～{}",
+            mission::schema::MAX_WAYPOINT_INDEX
         );
         ensure!(
             !effective_catalog.waypoints.contains(&waypoint.id),

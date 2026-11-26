@@ -107,6 +107,7 @@ impl<'a> Renderer<'a> {
                         offset_y,
                         palette_indices,
                         depth: vec![0.; (width * height) as usize],
+                        hd: None,
                     }
                 } else {
                     // VoxelImage::Cpu already owns a rasterized fallback. Consuming

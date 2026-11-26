@@ -2886,7 +2886,7 @@ fn ai_trigger_definitions_encode_team_condition_weights_and_enable_state() {
 import {defineMission, MissionMode, event, action, order, AiTriggerCondition, AiTriggerComparison, Difficulty} from './sdk';
 import {map, House, Unit, Techno, Country, Movie, MapObject, Waypoint} from './map.generated';
 export default defineMission(map, {id:'ai_defs', mode:MissionMode.Multiplayer}, m => {
-  const authoredWaypoint = m.createWaypoint(30, 2, 2);
+  const authoredWaypoint = m.createWaypoint(18277, 2, 2);
   m.assignObjectToPlayer(m.object(MapObject.Units_0), 0);
   m.configureBasic({name:'AI scenario', homeCell:authoredWaypoint,
     win:m.movie(Movie.ALLWIN), endOfGame:true, skipScore:false,
@@ -2936,14 +2936,14 @@ export default defineMission(map, {id:'ai_defs', mode:MissionMode.Multiplayer}, 
     assert_eq!(&fields[15..18], &["1", "0", "1"]);
     assert!(doc.ini_value("AITriggerTypesEnable", &id).is_none());
     assert_eq!(doc.ini_text("Basic", "Name"), "AI scenario");
-    assert_eq!(doc.ini_text("Basic", "HomeCell"), "30");
+    assert_eq!(doc.ini_text("Basic", "HomeCell"), "18277");
     assert_eq!(doc.ini_text("Basic", "Win"), "ALLWIN");
     assert_eq!(doc.ini_text("Basic", "EndOfGame"), "yes");
     assert_eq!(doc.ini_text("Basic", "SkipScore"), "no");
     let map =
         vera20k_core::map::map_file::load_from_bytes(doc.snapshot().bytes().unwrap()).unwrap();
     let basic = vera20k_core::map::basic::parse_basic_section(&map.ini);
-    assert_eq!(basic.home_cell, Some(30));
+    assert_eq!(basic.home_cell, Some(18277));
     assert_eq!(basic.win.as_deref(), Some("ALLWIN"));
     assert_eq!(basic.ignore_global_ai_triggers, Some(true));
     assert_eq!(basic.timer_inherit, Some(true));
@@ -2985,7 +2985,7 @@ export default defineMission(map, {id:'ai_defs', mode:MissionMode.Multiplayer}, 
     assert_eq!(
         doc.records()
             .values()
-            .find(|record| record.section == "Waypoints" && record.key == "30")
+            .find(|record| record.section == "Waypoints" && record.key == "18277")
             .and_then(|record| record.cell()),
         Some([2, 2])
     );
@@ -3000,7 +3000,7 @@ export default defineMission(map, {id:'ai_defs', mode:MissionMode.Multiplayer}, 
     let waypoint_record = externally_moved
         .records()
         .into_iter()
-        .find(|(_, record)| record.section == "Waypoints" && record.key == "30")
+        .find(|(_, record)| record.section == "Waypoints" && record.key == "18277")
         .unwrap()
         .0;
     externally_moved
@@ -3013,7 +3013,7 @@ export default defineMission(map, {id:'ai_defs', mode:MissionMode.Multiplayer}, 
     assert!(prepare(&externally_moved, &plan, &catalog).is_err());
     let mut manual_reference = doc.fork();
     manual_reference
-        .set_ini("Basic", "AltHomeCell", Some(b"30".to_vec()))
+        .set_ini("Basic", "AltHomeCell", Some(b"18277".to_vec()))
         .unwrap();
     let mut removed_json = serde_json::to_value(&plan).unwrap();
     removed_json["startOwners"] = serde_json::json!([]);
@@ -3034,7 +3034,7 @@ export default defineMission(map, {id:'ai_defs', mode:MissionMode.Multiplayer}, 
     assert!(
         !doc.records()
             .values()
-            .any(|record| record.section == "Waypoints" && record.key == "30")
+            .any(|record| record.section == "Waypoints" && record.key == "18277")
     );
     let restored_object = doc
         .records()
@@ -3067,7 +3067,7 @@ fn scenario_definitions_reject_invalid_resources_coordinates_and_native_operands
     for definition in [
         serde_json::json!({"id":30,"x":500,"y":500}),
         serde_json::json!({"id":0,"x":2,"y":2}),
-        serde_json::json!({"id":702,"x":2,"y":2}),
+        serde_json::json!({"id":18278,"x":2,"y":2}),
     ] {
         let mut value = base.clone();
         value["waypoints"] = serde_json::json!([definition]);

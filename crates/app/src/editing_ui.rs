@@ -2,7 +2,7 @@ use super::*;
 use crate::i18n::tr;
 use crate::ui_theme::{self as theme, Icon};
 use egui::{RichText, TextureHandle};
-use ra2_map_document::region::OBJECT_SECTIONS;
+use ra2_map_document::{mission::schema::MAX_WAYPOINT_INDEX, region::OBJECT_SECTIONS};
 
 #[derive(Default)]
 pub(super) struct EditorUi {
@@ -732,7 +732,7 @@ impl Editor {
             Tool::Waypoint => {
                 ui.add(
                     egui::DragValue::new(&mut self.waypoint)
-                        .range(0..=701)
+                        .range(0..=MAX_WAYPOINT_INDEX)
                         .prefix(tr!("航点编号  ")),
                 );
                 ui.small(tr!("点击地图设置航点位置。0～7 用于出生点；9～120 人地图还使用扩展编号。可在“设置 → 地图信息”中增减数量。"));

@@ -1,4 +1,5 @@
 //! Authoring state and sparse, reversible transactions. No simulation state is serialized.
+use crate::mission::schema::MAX_WAYPOINT_INDEX;
 use crate::raw_ini::{RawIni, lcw_encode, pack_lines};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -691,7 +692,7 @@ impl MapDocument {
                 0
             };
             let end = if record.section == "Waypoints" {
-                702
+                MAX_WAYPOINT_INDEX + 1
             } else {
                 u32::MAX
             };
@@ -751,7 +752,7 @@ impl MapDocument {
                         },
                     );
                     let limit = if record.section == "Waypoints" {
-                        702
+                        MAX_WAYPOINT_INDEX + 1
                     } else {
                         u32::MAX
                     };
@@ -1184,7 +1185,10 @@ impl MapDocument {
         Ok(id)
     }
     pub fn waypoint(&mut self, index: u32, cell: Cell) -> Result<()> {
-        ensure!(index <= 701, "航点索引应为 0..701");
+        ensure!(
+            index <= MAX_WAYPOINT_INDEX,
+            "航点索引应为 0..{MAX_WAYPOINT_INDEX}"
+        );
         ensure!(cell[0] < 1000, "航点横坐标须小于 1000");
         let key = index.to_string();
         let existing = self

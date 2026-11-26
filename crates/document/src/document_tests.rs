@@ -816,11 +816,14 @@ fn moving_and_deleting_records_preserve_extra_fields_and_duplicate_undo() {
     doc.waypoint(0, [3, 2]).unwrap();
     doc.add_record("Structures", [2, 2], "Neutral", "GAPOWR")
         .unwrap();
+    let last = crate::mission::schema::MAX_WAYPOINT_INDEX;
+    doc.waypoint(last, [3, 4]).unwrap();
     doc.commit("placements");
     let map = map_file::load_from_bytes(doc.snapshot().bytes().unwrap()).unwrap();
     assert_eq!((map.waypoints[&0].rx, map.waypoints[&0].ry), (3, 2));
     assert!(map.entities.iter().any(|e| e.type_id == "GAPOWR"));
-    assert!(doc.waypoint(702, [2, 2]).is_err());
+    assert_eq!((map.waypoints[&last].rx, map.waypoints[&last].ry), (3, 4));
+    assert!(doc.waypoint(last + 1, [2, 2]).is_err());
     assert!(
         doc.add_record("Structures", [511, 511], "Neutral", "GAPOWR")
             .is_err()

@@ -1019,6 +1019,7 @@ fn merge_voxels(layers: &[VxlSprite]) -> VxlSprite {
         offset_y: min_y as f32,
         palette_indices: vec![0; (width * height) as usize],
         depth: vec![f32::NEG_INFINITY; (width * height) as usize],
+        hd: None,
     };
     for layer in layers {
         let dx = layer.offset_x as i32 - min_x;

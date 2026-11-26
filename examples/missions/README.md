@@ -270,7 +270,7 @@ Rust 还会校验伪造的引用。多人模式写入 `Basic/MultiplayerOnly=yes
 - House：`m.createHouse(id, { country, color?, credits?, techLevel?, iq?, playerControl?, allies?, basePlan? })` 新建地图 House；`m.configureHouse(m.house(...), patch)` 只更新显式字段。颜色使用生成的 `HouseColor` 枚举，`credits` 每单位为 100 游戏资金；`allies` 是单向关系。`basePlan` 按顺序声明建筑节点或 `BasePlanControl` 控制点，节点需给出地图格坐标；`percentBuilt` 为 0～100。未声明时保留地图原计划。
 - AI 小队选择：`m.aiTrigger(id, options)` 声明主/副小队、Country、条件、类型比较、权重、多人/侧别、难度和初始启用状态。`condition` 使用 `AiTriggerCondition`，比较使用 `AiTriggerComparison`；`owner` 缺省代表 `<all>`，`side` 使用原生 0～3 编号，难度缺省为全开。引擎自动招募/出队的实际条件仍由地图工厂、House AI 和游戏状态共同决定。
 - Basic 开局：`m.configureBasic(options)` 可设置名称、已有航点的 HomeCell、片头/简报/行动/计分影片、主题、Win/Lose 胜负影片与原生终局选项；未声明字段沿用地图值。HomeCell 写入数字航点编号，Win/Lose 使用 Movie 引用。任务目标/简报文本属于战役目录，不是这两个字段。
-- 任务航点：`m.createWaypoint(30..701, x, y)` 新建普通航点并返回可立即引用的 `Waypoint`；不覆盖地图原有航点和已声明的玩家起点，超过 30 人的地图需避开完整的起点编号范围。重建时会复用同一记录，外部移动会作为冲突报告。
+- 任务航点：`m.createWaypoint(30..18277, x, y)` 新建普通航点并返回可立即引用的 `Waypoint`；不覆盖地图原有航点和已声明的玩家起点，超过 30 人的地图需避开完整的起点编号范围。重建时会复用同一记录，外部移动会作为冲突报告。
 - 起点对象归属：`m.assignObjectToPlayer(m.object(...), playerStart)` 通过编辑器托管的零秒一次性触发器，在开局普通帧中把已有对象交给该起点的实际占用玩家。加载时对象先属 Neutral，多个转交规则可能分帧执行；依赖新归属的剧情应留出启动时间。要求地图有对应起点，且对象不能同时有其他 Tag 绑定。
 - 规则控制：`enabled`、`owner`（Country）、`difficulties`、`linked`、`transferOnCapture`；动作 `enableRule`、`disableRule`、`forceRule`。
 - 状态：`m.globalFlag(0..49)`、`m.localFlag(0..99)`；全局事件 `globalSet` / `globalClear`，动作 `setGlobal` / `clearGlobal`；已有局部变量仍用 `flagSet` / `flagClear` 和 `setFlag` / `clearFlag`。

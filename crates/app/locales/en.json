@@ -1547,7 +1547,6 @@
   "航点请使用航点工具新建，或随区域复制。": "Create waypoints with the waypoint tool, or copy them with a region.",
   "航点铁幕": "Iron Curtain at waypoint",
   "航点闪电风暴": "Lightning storm at waypoint",
-  "航点须在 0～701 之间": "Waypoint must be between 0 and 701",
   "航点（复制时生成新编号）": "Waypoints (new IDs when copying)",
   "节点只规划 AI 建造位置，不直接放置建筑；建造仍需施工场、资金和 AI 生产启用。": "Nodes only plan AI building locations. Construction requires a construction yard, funds, and enabled AI production.",
   "苏俄": "Russia",

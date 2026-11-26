@@ -24,10 +24,30 @@ fn schema_matches_production_operand_decoders_and_reinforcement_waypoint_source(
     let mut doc = fixture();
     let team = ids(&doc, Kind::Team)[0].clone();
     assert_eq!(doc.ini_text(&team, "Waypoint"), "B");
-    for index in 0..702 {
+    for index in 0..=schema::MAX_WAYPOINT_INDEX {
         let token = schema::waypoint_token(index).unwrap();
         assert_eq!(schema::waypoint_index(&token, true), Some(index));
     }
+    assert_eq!(schema::waypoint_token(701).unwrap(), "ZZ");
+    assert_eq!(schema::waypoint_token(702).unwrap(), "AAA");
+    assert_eq!(
+        schema::waypoint_token(schema::MAX_WAYPOINT_INDEX).unwrap(),
+        "ZZZ"
+    );
+    let cell = doc
+        .record_iter()
+        .find(|(_, record)| record.section == "Waypoints")
+        .and_then(|(_, record)| record.cell())
+        .unwrap();
+    doc.waypoint(schema::MAX_WAYPOINT_INDEX, cell).unwrap();
+    assert_eq!(
+        schema::parameter_error(
+            &doc,
+            schema::ParameterKind::Waypoint { letters: true },
+            "ZZZ"
+        ),
+        None
+    );
     let trigger = ids(&doc, Kind::Trigger)[0].clone();
     let mut normal = action(7, &team);
     normal[7] = "ZZ".into();

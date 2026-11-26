@@ -46,7 +46,8 @@ fn parse(value: &str) -> Option<Deployment> {
     let waypoint = waypoint.parse().ok()?;
     let count = count.parse().ok()?;
     (id == format!("{PREFIX}{ordinal:04}")
-        && (120..702).contains(&waypoint)
+        && (u32::from(crate::new_map::MAX_PLAYERS)..=mission::schema::MAX_WAYPOINT_INDEX)
+            .contains(&waypoint)
         && (1..=MAX_COUNT).contains(&count)
         && valid_infantry_id(infantry))
     .then(|| Deployment {

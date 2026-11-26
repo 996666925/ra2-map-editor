@@ -927,9 +927,9 @@ export class MissionBuilder<S extends MapSchema, M extends MissionMode = Mission
     this.member(this.schema.waypoints, id, "waypoint");
     return ref("waypoint", id);
   }
-  /** 声明普通任务航点 30～701；不能覆盖地图已有航点或玩家起点。 */
+  /** 声明普通任务航点 30～18277；不能覆盖地图已有航点或玩家起点。 */
   createWaypoint(id: number, x: number, y: number): Waypoint {
-    if (!Number.isInteger(id) || id < 30 || id > 701) throw new Error("新任务航点编号须为 30～701");
+    if (!Number.isInteger(id) || id < 30 || id > 18_277) throw new Error("新任务航点编号须为 30～18277");
     if (!Number.isInteger(x) || x < 0 || x > 65535 || !Number.isInteger(y) || y < 0 || y > 65535) {
       throw new Error("任务航点坐标须为非负整数");
     }

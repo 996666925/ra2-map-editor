@@ -1363,23 +1363,33 @@ pub fn row(event: bool, id: i32) -> Option<Vec<String>> {
     }
     Some(row)
 }
+/// The last map-authored waypoint is ZZZ (VERA20k map format).
+pub const MAX_WAYPOINT_INDEX: u32 = 18_277;
+
 pub fn waypoint_token(index: u32) -> Result<String> {
-    ensure!(index < 702, "航点须在 0～701 之间");
-    Ok(if index < 26 {
-        ((b'A' + index as u8) as char).to_string()
-    } else {
-        format!(
-            "{}{}",
-            (b'A' + (index / 26 - 1) as u8) as char,
-            (b'A' + (index % 26) as u8) as char
-        )
-    })
+    ensure!(
+        index <= MAX_WAYPOINT_INDEX,
+        "航点须在 0～{MAX_WAYPOINT_INDEX} 之间"
+    );
+    let mut ordinal = index + 1;
+    let mut letters = ['A'; 3];
+    let mut start = letters.len();
+    while ordinal != 0 {
+        ordinal -= 1;
+        start -= 1;
+        letters[start] = char::from(b'A' + (ordinal % 26) as u8);
+        ordinal /= 26;
+    }
+    Ok(letters[start..].iter().collect())
 }
 pub fn waypoint_index(value: &str, letters: bool) -> Option<u32> {
     if letters {
-        vera20k_core::map::actions::decode_waypoint_token(value)
+        vera20k_core::map::waypoints::decode_waypoint_token(value)
     } else {
-        value.parse().ok()
+        value
+            .parse()
+            .ok()
+            .filter(|&index| index <= MAX_WAYPOINT_INDEX)
     }
 }
 pub fn parameter_error(doc: &MapDocument, kind: ParameterKind, value: &str) -> Option<String> {
@@ -1404,7 +1414,7 @@ pub fn parameter_error(doc: &MapDocument, kind: ParameterKind, value: &str) -> O
             }
         }
         ParameterKind::Waypoint { letters } => {
-            let id = waypoint_index(value, letters).filter(|id| *id < 702);
+            let id = waypoint_index(value, letters);
             if id.is_none_or(|id| {
                 !doc.record_iter()
                     .any(|(_, r)| r.section == "Waypoints" && r.key.parse::<u32>().ok() == Some(id))
