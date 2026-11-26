@@ -29,6 +29,7 @@ mod screen_capture;
 mod ui_theme;
 mod update;
 
+mod room_options_ui;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

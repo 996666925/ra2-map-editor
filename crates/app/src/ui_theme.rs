@@ -142,6 +142,49 @@ pub fn primary(text: &str) -> egui::Button<'_> {
         .min_size(egui::vec2(90., 30.))
 }
 
+pub fn tab(text: &str, selected: bool) -> egui::Button<'_> {
+    let text = if selected {
+        RichText::new(text).strong()
+    } else {
+        RichText::new(text)
+    };
+    egui::Button::new(text)
+        .selected(selected)
+        .min_size(egui::vec2(0., 30.))
+}
+
+pub fn page_header(
+    ui: &mut egui::Ui,
+    title: &str,
+    description: &str,
+    badge: Option<(&str, Color32)>,
+) {
+    egui::Frame::new()
+        .fill(BACKGROUND)
+        .stroke(Stroke::new(1., BORDER))
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(14, 12))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(title).size(17.).strong());
+                if let Some((text, color)) = badge {
+                    self::badge(ui, text, color);
+                }
+            });
+            ui.add_space(3.);
+            ui.add(egui::Label::new(RichText::new(description).color(MUTED)).wrap());
+        });
+}
+
+pub fn section_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(SURFACE)
+        .stroke(Stroke::new(1., BORDER))
+        .corner_radius(8)
+        .inner_margin(12)
+}
+
 /// Right-align a single row without consuming the parent's remaining height.
 pub fn right_to_left<R>(
     ui: &mut egui::Ui,

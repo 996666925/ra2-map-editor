@@ -2745,7 +2745,7 @@ fn map_settings_tabs_stay_inside_the_viewport_without_document_writes() {
         crate::i18n::Language::English,
     ] {
         let _language = crate::i18n::enter(language);
-        for tab in 0..4 {
+        for tab in 0..=6 {
             settings.tab = tab;
             let mut harness = crate::test_support::harness()
                 .with_context_setup(setup)
@@ -2776,17 +2776,17 @@ fn map_settings_tabs_stay_inside_the_viewport_without_document_writes() {
                         (rect.width() - initial_width).abs() <= 1.,
                         "map information kept expanding over idle frames: {rect:?}"
                     );
-                    #[cfg(feature = "ui-test-video")]
-                    {
-                        let output = Path::new(env!("CARGO_MANIFEST_DIR"))
-                            .join("../../target/map-settings-width");
-                        std::fs::create_dir_all(&output).unwrap();
-                        harness
-                            .render()
-                            .unwrap()
-                            .save(output.join(format!("{language:?}-{}.png", size[0])))
-                            .unwrap();
-                    }
+                }
+                #[cfg(feature = "ui-test-video")]
+                {
+                    let output = Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../target/map-settings-width");
+                    std::fs::create_dir_all(&output).unwrap();
+                    harness
+                        .render()
+                        .unwrap()
+                        .save(output.join(format!("{language:?}-tab{tab}-{}.png", size[0])))
+                        .unwrap();
                 }
             }
             if tab == 3 {

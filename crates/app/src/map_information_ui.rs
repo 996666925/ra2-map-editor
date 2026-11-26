@@ -24,9 +24,7 @@ pub(crate) fn show(
 ) {
     let label_width = (ui.available_width() * 0.28).clamp(140., 210.);
     for group in Group::ALL {
-        egui::Frame::new().fill(ui.visuals().faint_bg_color)
-            .stroke(ui.visuals().window_stroke).corner_radius(6).inner_margin(10.)
-            .show(ui, |ui| {
+        crate::ui_theme::section_frame().show(ui, |ui| {
                 // Frame has already subtracted padding AND border strokes.
                 // Using the parent's width minus padding grows the outer frame
                 // by its border each pass, and Resize then grows the window.
@@ -39,7 +37,9 @@ pub(crate) fn show(
                     Group::Media => tr!("从当前游戏或 Mod 的音乐、影片目录选择；地图文字说明在“基本信息”中编辑。自定义资源可手动输入。"),
                     Group::Multiplayer => tr!("地图内的多人开局默认值；启动器、房间和试玩设置可能覆盖。"),
                 };
-                let section = egui::CollapsingHeader::new(crate::i18n::text(group.label()))
+                let section = egui::CollapsingHeader::new(
+                    egui::RichText::new(crate::i18n::text(group.label())).strong().size(13.),
+                )
                     .id_salt(("map-information-section-v2", group as u8))
                     .default_open(group == Group::Listing)
                     .show(ui, |ui| {
@@ -113,7 +113,7 @@ pub(crate) fn show(
                 });
                 section.header_response.on_hover_text(help);
             });
-        ui.add_space(4.);
+        ui.add_space(8.);
     }
     let starts = ra2_map_document::player_starts::from_document(doc);
     let mut reused: Vec<_> = doc
@@ -142,9 +142,6 @@ pub(crate) fn show(
             ),
         );
     }
-    ui.small(tr!(
-        "结束输入后自动生效，可撤销；Ctrl+S 保存。选择“使用默认值”会删除对应覆盖。"
-    ));
     if let Err(error) = draft.validate(original) {
         ui.colored_label(egui::Color32::LIGHT_RED, error.to_string());
     }
