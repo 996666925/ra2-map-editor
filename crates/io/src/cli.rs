@@ -296,6 +296,20 @@ struct BatchReport {
     error: Option<String>,
     maps: Vec<MapReport>,
 }
+// Shared by validation and output commands, including --no-dependencies.
+fn wasm_issue(bytes: &[u8]) -> Option<Issue> {
+    vera20k_core::rules::ini_parser::IniFile::from_bytes(bytes)
+        .map_err(anyhow::Error::from)
+        .and_then(|ini| crate::wasm_mission::verify_map(&ini))
+        .err()
+        .map(|error| Issue {
+            severity: "error",
+            code: "WASM_MODULE".into(),
+            location: "VeraWasm".into(),
+            message: format!("{error:#}"),
+        })
+}
+
 fn run_map(args: &Args, install: &mut Install, name: &str) -> Result<MapReport> {
     let started = std::time::Instant::now();
     let scene = map::load_scene(install, name)?;
@@ -319,6 +333,7 @@ fn run_map(args: &Args, install: &mut Install, name: &str) -> Result<MapReport> 
             message: d.issue.message,
         })
         .collect();
+    issues.extend(wasm_issue(scene.source.bytes()));
     for d in &scene.diagnostics {
         issues.push(Issue {
             severity: match d.code {
@@ -397,7 +412,8 @@ fn run_map(args: &Args, install: &mut Install, name: &str) -> Result<MapReport> 
             )?;
         } else {
             let bytes = crate::publication::embed_scene_preview(&scene)?;
-            crate::editor_io::validate(&bytes)?;
+            let map = crate::editor_io::validate(&bytes)?;
+            crate::wasm_mission::verify_map(&map.ini)?;
             crate::editor_io::replace_map_with_resources(
                 &path,
                 &bytes,
@@ -438,14 +454,8 @@ fn run_map(args: &Args, install: &mut Install, name: &str) -> Result<MapReport> 
 /// None means normal GUI arguments. A headless invocation never initializes UI.
 pub fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<Option<i32>> {
     let raw: Vec<_> = arguments.into_iter().collect();
-    if raw.first().is_some_and(|a| a == "campaign-build") {
-        return crate::mission_script::run_campaign_cli(&raw).map(Some);
-    }
-    if raw
-        .first()
-        .is_some_and(|a| a == "mission-init" || a == "mission-build")
-    {
-        return crate::mission_script::run_cli(&raw).map(Some);
+    if let Some(code) = crate::wasm_mission::run_cli(&raw)? {
+        return Ok(Some(code));
     }
     if !raw
         .first()
@@ -548,6 +558,32 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<Option<i32>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn batch_validation_reports_invalid_rules_and_ui_modules() {
+        use crate::wasm_mission::{self, ModuleKind};
+        use vera20k_core::util::ini_writer::set_ini_values;
+
+        let base = b"[Basic]\nName=Wasm validation\n";
+        assert!(wasm_issue(base).is_none());
+        for kind in [ModuleKind::Rules, ModuleKind::Ui] {
+            let valid = wasm_mission::embed_kind(kind, base, b"\0asm\x01\0\0\0").unwrap();
+            assert!(wasm_issue(&valid).is_none());
+            let unsupported = set_ini_values(&valid, "VeraWasm", &[("Api", "2.0")]);
+            let issue = wasm_issue(&unsupported).unwrap();
+            assert_eq!(issue.severity, "error");
+            assert_eq!(issue.code, "WASM_MODULE");
+            assert!(issue.message.contains("2.0"));
+
+            let mut corrupt = valid;
+            let pack = match kind {
+                ModuleKind::Rules => "VeraWasmRulesPack",
+                ModuleKind::Ui => "VeraWasmUIPack",
+            };
+            corrupt = set_ini_values(&corrupt, pack, &[("1", "broken")]);
+            assert!(wasm_issue(&corrupt).is_some());
+        }
+    }
+
     #[test]
     fn paths_protect_sources_reports_presets_and_output_aliases() {
         let parse_str =

@@ -1,0 +1,7 @@
+{
+  "kind": "rules",
+  "entry": "src/mission.ts",
+  "out": "build/rules.wasm",
+  "vars": [],
+  "notify": []
+}

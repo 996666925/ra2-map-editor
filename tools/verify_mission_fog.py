@@ -51,6 +51,7 @@ def observe(folder, cells):
 def analyze(fixture, output):
     manifest = read_json(fixture / "fixture.json")
     facts, checks = {}, {}
+    fixture_sdk = None
     for case in manifest["cases"]:
         name = case["name"]
         source = fixture / name
@@ -63,7 +64,8 @@ def analyze(fixture, output):
         cells = runtime["cells"]
         checks[name + "_independent_simulation_flags"] = runtime["tick"] == 120 and runtime["fog"] == case["fog"] and runtime["viewer"] == "Americans"
         checks[name + "_independent_sight_exploration"] = cells[0]["visible"] and cells[0]["revealed"] and not cells[1]["visible"] and cells[1]["revealed"] == case["reveal"] and not cells[2]["visible"] and not cells[2]["revealed"]
-        checks[name + "_current_sdk"] = sha256(source / "sdk.ts") == sha256(Path(__file__).resolve().parents[1] / "crates/mission-script/sdk/mission.ts")
+        fixture_sdk = sha256(source / "sdk.ts") if fixture_sdk is None else fixture_sdk
+        checks[name + "_fixture_sdk_consistent"] = sha256(source / "sdk.ts") == fixture_sdk
     sample = lambda fog, reveal, index: facts[f"fog_{str(fog).lower()}_reveal_{str(reveal).lower()}"]["samples"][index]
     energy = lambda row: sum(row["rgb_mean"])
     normal, fogged = sample(False, True, 1), sample(True, True, 1)

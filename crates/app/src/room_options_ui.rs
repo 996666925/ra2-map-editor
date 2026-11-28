@@ -75,10 +75,10 @@ impl Draft {
         let parse_section = |section: &str| {
             let mut out = BTreeMap::new();
             for (_, key, bytes) in doc.ini_entries(section) {
-                if let Some(field) = FIELDS.iter().find(|f| f.0.eq_ignore_ascii_case(&key)) {
-                    if let Some(v) = parse_value(&String::from_utf8_lossy(&bytes), field) {
-                        out.insert(field.0.to_owned(), v);
-                    }
+                if let Some(field) = FIELDS.iter().find(|f| f.0.eq_ignore_ascii_case(&key))
+                    && let Some(v) = parse_value(&String::from_utf8_lossy(&bytes), field)
+                {
+                    out.insert(field.0.to_owned(), v);
                 }
             }
             out
@@ -90,10 +90,9 @@ impl Draft {
                 .ini_entries("ForcedOptions")
                 .into_iter()
                 .find(|(_, k, _)| k.eq_ignore_ascii_case(control))
+                && let Some(v) = switch(&String::from_utf8_lossy(&bytes))
             {
-                if let Some(v) = switch(&String::from_utf8_lossy(&bytes)) {
-                    forced.insert(name.into(), v);
-                }
+                forced.insert(name.into(), v);
             }
         }
         for (control, name) in DROPS {
@@ -101,28 +100,27 @@ impl Draft {
                 .ini_entries("ForcedOptions")
                 .into_iter()
                 .find(|(_, k, _)| k.eq_ignore_ascii_case(control))
+                && let Ok(i) = String::from_utf8_lossy(&bytes).trim().parse::<usize>()
             {
-                if let Ok(i) = String::from_utf8_lossy(&bytes).trim().parse::<usize>() {
-                    let value = match name {
-                        "Credits" => CREDIT.get(i).copied(),
-                        "UnitCount" => {
-                            if i <= 10 {
-                                Some(10 - i as i32)
-                            } else {
-                                None
-                            }
+                let value = match name {
+                    "Credits" => CREDIT.get(i).copied(),
+                    "UnitCount" => {
+                        if i <= 10 {
+                            Some(10 - i as i32)
+                        } else {
+                            None
                         }
-                        _ => {
-                            if i <= 6 {
-                                Some(i as i32)
-                            } else {
-                                None
-                            }
-                        }
-                    };
-                    if let Some(v) = value {
-                        forced.insert(name.into(), v);
                     }
+                    _ => {
+                        if i <= 6 {
+                            Some(i as i32)
+                        } else {
+                            None
+                        }
+                    }
+                };
+                if let Some(v) = value {
+                    forced.insert(name.into(), v);
                 }
             }
         }
@@ -131,12 +129,11 @@ impl Draft {
         }
         for name in ["Credits", "UnitCount", "Bases"] {
             let raw = doc.ini_text("Basic", name);
-            if name == "Bases" || raw.trim() != "-1" {
-                if let Some(field) = FIELDS.iter().find(|f| f.0 == name) {
-                    if let Some(v) = parse_value(&raw, field) {
-                        forced.insert(name.into(), v);
-                    }
-                }
+            if (name == "Bases" || raw.trim() != "-1")
+                && let Some(field) = FIELDS.iter().find(|f| f.0 == name)
+                && let Some(v) = parse_value(&raw, field)
+            {
+                forced.insert(name.into(), v);
             }
         }
         let mut defaults = defaults

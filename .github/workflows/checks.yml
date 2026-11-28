@@ -55,8 +55,34 @@ jobs:
       - name: Check translations
         run: python tools/check_i18n.py
 
+      - name: Install mission build runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.3"
+
+      - name: Install mission build dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Check mission SDK source
+        run: npm run check --prefix crates/vera20k-sdk
+
+      - name: Test mission SDK
+        run: npm test --prefix crates/vera20k-sdk
+
+      - name: Test mission compiler
+        run: npm test --prefix crates/mission-wasm-build
+
+      - name: Test mission scaffolder
+        run: npm test --prefix crates/create-vera-app
+
       - name: Clippy all targets
         run: cargo clippy --locked --workspace --no-deps --all-targets -- -D warnings
 
       - name: Test workspace
         run: cargo test --locked --workspace -- --test-threads=1
+
+      - name: Build UI lifecycle fixture
+        run: node crates/mission-wasm-build/project-build.mjs crates/mission-wasm-build/engine-check/ui-fixture target/assemblyscript-ui-engine-check.wasm
+
+      - name: Check UI lifecycle with the engine runtime
+        run: cargo run --locked -p ra2-map-io --example wasm_ui_smoke -- target/assemblyscript-ui-engine-check.wasm --expect-log "ui lifecycle start=1 render=600 events=2 frame=599"

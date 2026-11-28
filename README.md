@@ -4,7 +4,7 @@
 
 支持从地形与对象编辑、任务制作，到保存、试玩和地图发布的完整流程。编辑器需要用户自行提供合法的游戏资源，仓库不包含游戏素材。
 
-[快速开始](#快速开始) · [使用指南](docs/user-guide.md) · [命令行与批处理](docs/cli.md) · [开发与验证](docs/development.md) · [任务脚本](examples/missions/README.md)
+[快速开始](#快速开始) · [使用指南](docs/user-guide.md) · [命令行与批处理](docs/cli.md) · [开发与验证](docs/development.md) · [扩展开发](crates/create-vera-app/README.md)
 
 ## 可以做什么
 
@@ -15,7 +15,7 @@
 | 隧道编辑 | 绘制、查看、重绘和删除引擎 `[Tubes]` 路径；八方向路线支持撤销与重做 |
 | 对象编辑 | 建筑、车辆、步兵、飞机、树木、污迹、覆盖物和起点；SHP/VXL 外观预览与拖动连刷 |
 | 区域操作 | 按层选择、复制、剪切、粘贴、移动、删除、克隆，以及整笔撤销和重做 |
-| 任务制作 | House、触发器、Tag/CellTag、变量、特遣部队、脚本、小队、基地节点和 AI 触发器；TypeScript 任务脚本 |
+| 任务制作 | House、触发器、Tag/CellTag、变量、特遣部队、脚本、小队、基地节点和 AI 触发器；扩展系统（AssemblyScript） |
 | 地图设置 | 名称、尺寸、可玩区域、光照、箱子规则和生产限制 |
 | 保存与交付 | 后台保存、备份、自动恢复、内嵌预览、PNG 导出、独立 VERA20k 试玩、战役目录和任务包发布 |
 | Mod 与自动化 | 资源配置、发布预设，以及无需窗口或 GPU 的地图校验、图片导出和批量发布 |
@@ -52,6 +52,18 @@ cargo run --locked
 4. 点击“试玩”，选择遭遇战或单人任务并指定 `vera20k.exe`。试玩使用当前地图快照，包含尚未保存的修改。
 
 地形工具、对象属性、任务制作、恢复与导出等详细说明见 [使用指南](docs/user-guide.md)。
+
+### 4. 构建扩展项目
+
+编辑器不附带 Node.js 或 AssemblyScript 编译器。需要构建扩展时，安装 **Node.js >=22.15**（含 npm），在扩展项目根目录运行：
+
+```sh
+npm install
+npm run check
+npm run build
+```
+
+安装依赖后，也可在编辑器“扩展系统”窗口点击“构建”；编辑器使用系统 Node.js 调用项目内的 `@ra2-map-editor/mission-wasm-build` 构建器。项目结构和嵌入操作见[使用指南](docs/user-guide.md#任务制作)。
 
 ### 常用启动命令
 
@@ -99,7 +111,7 @@ Windows 可执行文件位于 `target/release/ra2-map-editor.exe`。也可通过
 | 地图设置、任务制作与表单输入 | [地图与任务设置](docs/user-guide.md#地图与任务设置) |
 | 保存、备份、自动恢复和图片导出 | [保存与恢复](docs/user-guide.md#保存与恢复)、[预览与图片导出](docs/user-guide.md#预览与图片导出) |
 | 试玩参数、分辨率和多显示器 | [在 VERA20k 中试玩](docs/user-guide.md#在-vera20k-中试玩) |
-| 用 TypeScript 编写任务、API 和示例 | [任务脚本说明](examples/missions/README.md) |
+| 用 AssemblyScript 创建任务项目并查阅 API | [create-vera-app](crates/create-vera-app/README.md) · [引擎 TSSDK npm 包](crates/vera20k-sdk/README.md) |
 | 启动参数、Mod 配置和批量校验、导出、发布 | [命令行与批处理](docs/cli.md) |
 | 项目结构、测试、格式检查与真实资源验证 | [开发与验证](docs/development.md) |
 | 初始化、恢复或升级引擎子模块 | [引擎依赖说明](vendor/README.md) |
@@ -108,9 +120,9 @@ Windows 可执行文件位于 `target/release/ra2-map-editor.exe`。也可通过
 
 ### Ares 资源模式
 
-编辑器与 VERA20k 都无需 `ares` 编译选项。任务编辑器和 SDK 始终可创作 Ares 扩展；需要按 Ares 语法载入地图或执行扩展任务时，在「地图资源」把 Ares 设为「启用」。该选择控制归档、INI 和扩展文本表，并随地图传给试玩。默认「自动」不会仅因游戏目录里有 `ares.mix` 就切换语法；「关闭」显式禁用 Ares。资源 profile 仍只指定资源目录和试玩程序。
+编辑器与 VERA20k 都无需 `ares` 编译选项。任务编辑器支持创作 Ares 扩展；需要按 Ares 语法载入地图或执行扩展任务时，在「地图资源」把 Ares 设为「启用」。该选择控制归档、INI 和扩展文本表，并随地图传给试玩。默认「自动」不会仅因游戏目录里有 `ares.mix` 就切换语法；「关闭」显式禁用 Ares。资源 profile 仍只指定资源目录和试玩程序。
 
-Ares 模式使用引擎的 INI 解析和 include 展开。任务脚本通过 `ares.event`、`ares.action`、`ares.order` 调用已审计的扩展事件、动作与脚本，详见[任务脚本说明](examples/missions/README.md#ares-任务)。普通显式键值地图可编辑；含 `[Child]:[Base]` 或 `+` 迭代键的地图可预览和原样导出，修改前需展开为显式键值，以保留引擎实际解析的含义。
+Ares 模式使用引擎的 INI 解析和 include 展开。普通显式键值地图可编辑；含 `[Child]:[Base]` 或 `+` 迭代键的地图可预览和原样导出，修改前需展开为显式键值，以保留引擎实际解析的含义。
 
 随机地图可选择中立城镇及规模，生成当前环境的道路、民用建筑、平民和车辆；试玩速度增加 90 TPS 档，最快档仍为不限速。
 

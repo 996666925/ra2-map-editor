@@ -4,8 +4,10 @@
 The editor pins the engine through its Git tree entry, rather than a moving branch.
 Use `git submodule status` for the revision selected by your editor checkout.
 
-The current integration targets VERA20k 0.4.2 development at
-`e18cfccd0cc338e02b452d26419bbbe3d9852d5e` (updated 2026-11-26).
+The current integration targets VERA20k 0.4.3 development at
+`43edd04f10638ae921b45bc0249a1ae67b985c53` (updated 2026-11-27). The engine
+submodule includes the TypeScript/AssemblyScript TSSDK at `sdk/typescript`; editor
+mission projects build against that SDK rather than a separately maintained API.
 The editor accepts waypoint IDs 0 through 18277 and encodes alphabetic mission
 references from A through ZZZ. Waypoints above 701 require VERA20k's extended
 waypoint support.

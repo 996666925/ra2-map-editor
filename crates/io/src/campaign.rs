@@ -171,7 +171,7 @@ pub struct Prepared {
     pub payload: BTreeMap<String, Vec<u8>>,
     pub report: Report,
 }
-fn read_bounded(path: &Path) -> Result<Vec<u8>> {
+pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>> {
     ensure!(
         fs::metadata(path)?.len() <= 256 * 1024 * 1024,
         "资源超过 256 MiB：{}",
@@ -212,7 +212,6 @@ pub(crate) fn prepare_with_maps(
     let install = Install::open(directory)?;
     let reads_ares = install.manager.ships_ares();
     let _dialect = vera20k_core::rules::ares_switch::read_ares_way(reads_ares);
-    let profile = ra2_map_assets::profile::Revision::scan(directory)?.id();
     let mut payload = BTreeMap::new();
     for a in &project.assets {
         payload.insert(
@@ -222,7 +221,7 @@ pub(crate) fn prepare_with_maps(
     }
     let stock = |name: &str| install.manager.get_ref(name).unwrap_or_default();
     let mut mission_values = Vec::new();
-    let mut declared_strings = project.strings.clone();
+    let declared_strings = project.strings.clone();
     let mut maps = Vec::new();
     for m in &project.missions {
         let bytes = if let Some(bytes) = overrides.get(&m.file.to_ascii_lowercase()) {
@@ -231,25 +230,7 @@ pub(crate) fn prepare_with_maps(
             read_bounded(&root.join(&m.source))?
         };
         let map = crate::editor_io::validate(&bytes)?;
-        for (name, value) in
-            crate::mission_script::resource_payload_with_ares(&bytes, &profile, reads_ares)?
-        {
-            ensure!(
-                payload.get(&name).is_none_or(|old| old == &value),
-                "关卡资源输出冲突：{name}"
-            );
-            payload.insert(name, value);
-        }
-        for (label, value) in crate::mission_script::declared_texts_with_ares(&bytes, reads_ares)? {
-            let existing = declared_strings
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case(&label));
-            ensure!(
-                existing.is_none_or(|(_, old)| old == &value),
-                "任务文本 {label} 与战役文本或其他关卡冲突"
-            );
-            declared_strings.insert(label, value);
-        }
+        crate::wasm_mission::verify_map(&map.ini).with_context(|| m.file.clone())?;
         ensure!(
             !map.ini
                 .section_or_empty("Basic")

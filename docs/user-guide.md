@@ -1,6 +1,6 @@
 # 使用指南
 
-[返回 README](../README.md) · [命令行与批处理](cli.md) · [TypeScript 任务](../examples/missions/README.md)
+[返回 README](../README.md) · [命令行与批处理](cli.md) · [Wasm 任务 SDK](../crates/vera20k-sdk/README.md)
 
 本指南按地图制作流程组织。安装、启动命令和常用快捷键见 [README](../README.md)。
 
@@ -316,23 +316,17 @@
 
 任务编辑支持 House、触发器、Tag/CellTag、变量、特遣部队、脚本、小队、基地节点与 AI 触发器。
 
-也可从顶栏“TypeScript 任务”新建脚本，在外部代码编辑器中检查类型并保存。点击“刷新类型”同步地图引用提示，点击“应用到地图”转译、执行脚本、校验地图数据并整笔应用，然后使用现有的保存、试玩与发布流程。
+在顶栏打开“扩展系统”，点击“新建项目…”，填写项目名称并选择位置，再点击“创建项目”。不需要先打开地图。新项目使用一份根目录 `package.json` 管理依赖，并以 `"vera": { "kind": "extension" }` 标识扩展项目，逻辑入口为 `rules/src/main.ts`，界面入口为 `ui/src/main.ts`，公共协议放在 `shared/protocol.ts`；一次构建输出 `dist/rules.wasm` 和 `dist/ui.wasm`。也可以用 [create-vera-app](../crates/create-vera-app/README.md) 从命令行创建项目。
 
-编辑器内置 Rust SWC 转译器，运行不需要 Node.js 或 Deno。**类型检查由外部代码编辑器完成**，“应用到地图”不执行 TypeScript 类型检查。带中文注释的引用枚举、API、示例与限制见 [任务脚本说明](../examples/missions/README.md)。
+编辑器不附带 Node.js 或 AssemblyScript 编译器。安装 Node.js >=22.15（含 npm），在扩展项目根目录执行 `npm install`，再回到编辑器点击“构建”。编辑器使用系统 Node.js 调用项目内的 `@ra2-map-editor/mission-wasm-build` 构建器。
 
-在航点引爆武器可使用 `action.explosionAt(m.weapon(Weapon.Vulcan), at)`；先刷新类型并从 `map.generated.ts` 导入 `Weapon`。该动作读取武器伤害和弹头，直接造成范围伤害，不发射弹体。只需创建动画时使用 `playAnimationAt(m.animation(Animation.EXPLOSML), at)`。体素碎片动画使用独立的 `action.playVoxelAnimAt(m.voxelAnim(VoxelAnim.TIRE), at)`；刷新类型后从 `map.generated.ts` 导入 `VoxelAnim`，其中成员来自当前规则的 `[VoxelAnims]`。
+打开地图后，窗口分别显示 `rules.wasm` 和 `ui.wasm`，可独立导入、导出或移除；“构建并嵌入”会将联合项目的两个模块一起校验并提交，任一失败均不更新地图，一次撤销即可恢复两个模块。单模块项目根据 `vera.json` 类型只更新对应模块，保留另一模块。导入时使用固定引擎的模拟或客户端沙箱校验，更新可整笔撤销。保存地图后，模块随地图进入 VERA20k 的试玩流程。逻辑模块负责同步游戏状态，界面模块只在本机运行；界面要修改游戏状态时，应向逻辑模块发送请求，由逻辑模块校验并执行。
 
-小队行为支持 `order.startLightningStorm(frames)`、`order.stopLightningStorm()` 和 `order.scoutHouses()`。前两项请求开始或结束全局闪电风暴，开始时间按有符号逻辑帧传入引擎，随后推进脚本。`scoutHouses()` 选择 House 建筑并移动、抵达后记录已侦察，支持多人；它与仅单人可用的 `order.scout()`（按玩家迷雾选点）含义不同。
+成功导入或“构建并嵌入”后，编辑器会在本次会话中监听对应的 Wasm 源文件。文件内容稳定且校验通过后，提示是否重新导入；选择“暂不导入”后，同一版内容不会重复提示，后续修改仍会提示。关闭扩展窗口不影响监听；移除模块、撤销导致模块被替换、切换或关闭地图后停止对应监听。重新打开地图时需再次导入源文件以建立监听。
 
-小队气泡使用 `action.talkBubble(team, 1)`，可选图形编号1～3；全局只能显示一个，`clearTalkBubble()` 清除。小队必须已有活动实例，资源安装须提供 `talkbubl.shp` 和 `palette.pal`，也可通过 `m.asset()` 发布图形。气泡按墙钟超时，不用于显示自定义文本。
+安装依赖后，也可在扩展项目根目录运行 `npm run check` 检查类型、`npm run build` 构建两个 Wasm，或用 `npm run build:rules`、`npm run build:ui` 单独构建。详见[命令行构建](cli.md#wasm-扩展命令)。
 
-脚本可通过 `action.centerCamera(航点, 速度)` 平滑移动镜头；速度支持 0～4 档，默认 1，数值越大越快。`action.jumpCamera(航点)` 立即跳转，`action.homeCamera()` 返回本地基地。速度档位不是持续秒数，无效值在构建时会被拒绝。
-
-持续定时出兵可使用 `when: event.sinceEnabled(30)` 和 `once: false`，每隔 30 个游戏秒触发增援；完整代码见 [重复增援示例](../examples/missions/README.md#每隔-30-秒增援小队)。
-
-要在右下角同步显示时间，可用 `action.setCountdown(30)` 启动任务倒计时，再通过 `event.countdownElapsed()` 触发增援和下一轮倒数。也支持 CSF 标题、停止/继续及增减时间，见 [任务倒计时示例](../examples/missions/README.md#在右下角显示出兵倒计时)。
-
-SDK 也支持规则启停/强制触发、原生多条件 `all()`、一次性分支 `any()`、全局变量与已有局部变量引用，以及对象/格子/小队共享 Tag。条件组合和原生锁存的边界见 [规则启停与条件组合](../examples/missions/README.md#规则启停与条件组合)，绑定方式见 [共享 Tag 与绑定](../examples/missions/README.md#共享-tag-与绑定)。
+原生任务表单可创建地图内的 House、航点、触发器、小队和 AI 定义。Wasm 模块可调用现有小队执行增援，也可写入 Local 变量供地图触发器读取。接口和示例见 [引擎 TSSDK 发布包](../crates/vera20k-sdk/README.md)。
 
 ## 保存与恢复
 
@@ -397,27 +391,6 @@ SDK 也支持规则启停/强制触发、原生多条件 `all()`、一次性分�
 
 原生界面已启用 AccessKit，并为引用、数值和光照等表单输入补充可访问名称。
 
-## TypeScript 文本、媒体和战役
+## 战役目录和任务发布
 
-`m.crateLottery()` 支持单人“建筑栏购买补给箱 → 选点放置 → Ctrl 强制攻击拆毁 → 在 `rewardAt` 航点随机获得车辆”。它生成原生存在/不存在触发器和奖励小队，不修改引擎与普通箱子奖励，不再需要拾取木箱。同一时间一座，奖励固定归任务玩家，短暂延迟后到达航点；示例仍用机枪碉堡外观。完整用法与限制见[补给箱示例](../examples/missions/README.md#购买补给箱建筑攻击拆开领取车辆)。
-
-生成的 TS 战役可通过游戏正常的“Save Game / Load Game”浏览器保存和继续任务。已验证倒计时、活动小队脚本与重复增援规则在加载后继续；当前客户端使用 VERA 自有存档格式，真实联机不提供该存取入口，原版 SAV 兼容不在此范围内。
-
-两栖运输船可使用同一组小队装载、移动和卸载命令渡水，详见[运输脚本](../examples/missions/README.md#运输脚本的满载条件)。`waitLoaded()` 等待类型容量全满，原版 LCRF、SAPC 和 YHVR 为 12 人；水域、海岸及两岸航点需在地图上正确安排。
-
-`m.configureHouse()` 和 `m.createHouse()` 可用 `uiName: m.defineText(...)` 设置地图 House 显示名，用 `edge: HouseEdge.West` 等指定读取该字段的增援入场边缘。显式运输航点优先；当前战役保留该CSF元数据，但普通战役外交/简报/结算没有House名称列表，不能据此保证文字可见；多人参赛者仍用房间昵称或电脑名，Neutral/Special使用类型名。固定 House 的小队按有效 Country 归属，同国后续 House 无法由原生小队表达时构建会报错，详见 [House 示例](../examples/missions/README.md#house-显示名与增援方向)。
-
-小队脚本可用 `order.playSound()`、`order.playMusic()` 和 `order.playMovie()`；它们均推进下一行，播放与恢复由客户端处理，详见[小队媒体示例](../examples/missions/README.md#小队声音音乐与影片)。
-
-任务可用 `m.defineText('id', '中文内容')` 创建文本引用，传给消息或倒计时标题。媒体用 `m.asset('输出名', '相对入口目录的路径')` 声明；应用只修改地图，试玩/发布时统一校验和输出资源。影片字幕支持声明 `subtitlemd.txt`（带 BOM 的 UTF-16LE）；格式与战役雷达影片暂停用法见[任务示例](../examples/missions/README.md)。源码、SDK、资源或原生注册顺序变化后需要重新构建；任务窗口后台显示待构建状态，重开地图会恢复上次入口路径。
-
-“战役目录与任务发布”中的“构建并发布 TS 战役…”读取 `defineCampaign()` 入口，先构建各关任务，再生成中文 CSF、战役目录及媒体。任一关卡失败不会发布半套文件。无窗口命令为 `ra2-map-editor campaign-build --game-dir DIR --script campaign.ts --output NEW_DIRECTORY`，与 GUI 共用实现。
-
-战役生成的地图还保存所属关卡和战役入口。重开后重建当前任务，会沿用战役根目录以解析共享模块和关内媒体，并从战役声明恢复跳转字段；若已更换或移除该关脚本关联，需要重新构建整个战役。
-
-单人开局可用 `m.configureSpecialFlags()` 设置伤害冻结、战争迷雾、矿车自动选敌保护、桥梁可破坏性和矿石增长／扩散；多人只开放地图控制的起始部队精英配置。两种模式均可用 `m.configureLighting()` 声明普通、闪电风暴和心灵控制器的开局光照及淡变间隔；光照分量使用地图比例值（1 表示 100%），配置本身不会启动超武。
-
-胜利结算页可用 `m.configureRanking()` 设置三难度的基准秒数，以及达标/超时的标题和评语；中文文案用 `m.defineText()` 声明。用时等于基准时按达标处理，省略字段保留地图现值。完整接口、单位/模式限制和可复制示例见 [TS 任务说明](../examples/missions/README.md)；逐项实现与验收边界见 [扩展计划](mission-sdk-plan.zh-CN.md)。
-
-
-奖励专用车辆可使用 `m.rewardUnit('prize', { base: m.unit(Unit.HTNK), name: '奖励天启', rules: { Strength: 1500, Speed: 8 } })`，再将返回值放入 `m.crateLottery(...).rewards`。它复制基础车辆的规则并生成独立类型，只改变抽奖奖励；普通天启保持原属性。完整分组属性示例见 [reward-unit/mission.ts](../examples/missions/reward-unit/mission.ts)。`rules` 是单位 RULES 字段，伤害、射程、弹头等武器字段需由已有武器定义提供；美术仍须引用已有 ART。每种特殊能力仍受原生机制与资源限制，单纯新增一个键不保证获得对应机制。构建后不需要为这个功能修改或重编引擎。
+单人任务通过“任务制作”里的“战役目录与任务发布”编辑项目 JSON。项目保存关卡顺序、简报、文本和资源。各关地图可分别内嵌 `rules.wasm`，共享状态可通过原生 Global 变量传递。

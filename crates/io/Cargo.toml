@@ -9,13 +9,15 @@ publish.workspace = true
 ra2-map-document.workspace = true
 ra2-map-scene.workspace = true
 ra2-map-assets.workspace = true
-ra2-map-mission-script.workspace = true
+vera20k-wasm-ext.workspace = true
 image.workspace = true
 anyhow.workspace = true
 egui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 vera20k-core.workspace = true
+
+tempfile = "3"
 
 [dev-dependencies]
 # Headless audit examples restore internal checkpoints, not player save files.

@@ -681,27 +681,9 @@ impl SessionResources {
         let reads_ares = view.ares == vera20k_core::util::ares_launch::AresSetting::On;
         let _dialect = vera20k_core::rules::ares_switch::read_ares_way(reads_ares);
         let map = validate(bytes)?;
+        crate::wasm_mission::verify_map(&map.ini)?;
         let root = view.materialize(&map.header.theater, &|| false)?;
-        let mut payload = crate::mission_script::scoped_playtest_payload(
-            bytes,
-            &self.directory,
-            self.map.as_ref(),
-            &self.revision.id(),
-            reads_ares,
-        )?;
-        if let Some(override_art) = payload.get("artmd.ini") {
-            let manager = view.manager_for_theater(&map.header.theater)?;
-            let name = manager.ini_roots().art();
-            let mut art = ra2_map_assets::assets::read_ini(&manager, name)?;
-            art.merge(&vera20k_core::rules::ini_parser::IniFile::from_bytes(
-                override_art,
-            )?);
-            let name = name.to_ascii_lowercase();
-            if name != "artmd.ini" {
-                payload.remove("artmd.ini");
-            }
-            payload.insert(name, encode_art(&art));
-        }
+        let payload = std::collections::BTreeMap::new();
         let directory = prepare_playtest_files(
             folder,
             &self.directory,
@@ -747,21 +729,6 @@ impl SessionResources {
             map,
         })
     }
-}
-
-pub(super) fn encode_art(art: &vera20k_core::rules::ini_parser::IniFile) -> Vec<u8> {
-    use std::fmt::Write as _;
-    let mut text = String::new();
-    let mut written = std::collections::HashSet::new();
-    for name in art.section_names() {
-        if written.insert(name) {
-            let _ = writeln!(text, "[{name}]");
-            for (key, value) in art.section_or_empty(name).raw_entries() {
-                let _ = writeln!(text, "{key}={value}");
-            }
-        }
-    }
-    vera20k_core::util::native_string::narrow_widened(&text)
 }
 
 pub(crate) fn prepare_playtest_files(

@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = ["."]
+
+[package]
+name = "vera-mission-engine-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+vera20k-wasm-ext = { path = "../../../vendor/vera20k/wasm-ext" }

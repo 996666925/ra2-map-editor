@@ -17,3 +17,4 @@
 *.vxl binary
 *.hva binary
 *.pal binary
+*.wasm binary

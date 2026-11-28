@@ -368,26 +368,6 @@ fn playtest_stages_map_assets_with_case_insensitive_precedence_and_write_isolati
 }
 
 #[test]
-fn staged_art_retains_base_definitions_and_merged_properties() {
-    use vera20k_core::rules::ini_parser::IniFile;
-
-    let _dialect = vera20k_core::rules::ares_switch::read_ares_way(false);
-    let mut art =
-        IniFile::from_bytes(b"[BASE]\nHeight=3\nShadow=yes\n[Shared]\nHeight=1\nShadow=yes\n")
-            .unwrap();
-    art.merge(&IniFile::from_bytes(b"[Shared]\nHeight=7\n[Custom]\nHeight=11\n").unwrap());
-    let decoded = IniFile::from_bytes(&encode_art(&art)).unwrap();
-    assert_eq!(decoded.section_or_empty("BASE").read_int("Height", 0), 3);
-    assert_eq!(decoded.section_or_empty("Shared").read_int("Height", 0), 7);
-    assert!(
-        decoded
-            .section_or_empty("Shared")
-            .read_bool("Shadow", false)
-    );
-    assert_eq!(decoded.section_or_empty("Custom").read_int("Height", 0), 11);
-}
-
-#[test]
 fn embedded_preview_export_preserves_custom_pixels_and_rejects_missing_or_broken_pack() {
     let root = root();
     let path = root.join("自定义预览.png");
@@ -743,4 +723,61 @@ fn session_config_uses_selected_ini_roots_and_keeps_original_art_available() {
     );
     drop(manager);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn wasm_cli_round_trip_carries_the_resource_sidecar() {
+    let dir = root();
+    let input = dir.join("input.map");
+    let output = dir.join("embedded.map");
+    let cleaned = dir.join("cleaned.map");
+    let module = dir.join("rules.wasm");
+    let extracted = dir.join("extracted.wasm");
+    let wasm = b"\0asm\x01\0\0\0";
+    fs::write(
+        &input,
+        ra2_map_document::new_map::NewMapOptions::default()
+            .bytes()
+            .unwrap(),
+    )
+    .unwrap();
+    fs::write(&module, wasm).unwrap();
+    let resources = ra2_map_assets::map_resources::MapResources {
+        ares: ra2_map_assets::map_resources::AresMode::Off,
+        ..Default::default()
+    };
+    resources.write(&input).unwrap();
+    let run = |command: &str, paths: &[&std::path::Path]| {
+        crate::cli::run(
+            std::iter::once(command.into()).chain(paths.iter().map(|p| p.as_os_str().to_owned())),
+        )
+    };
+    assert_eq!(
+        run("wasm-embed", &[&input, &module, &output]).unwrap(),
+        Some(0)
+    );
+    assert_eq!(run("wasm-check", &[&output]).unwrap(), Some(0));
+    assert_eq!(
+        run("wasm-extract", &[&output, &extracted]).unwrap(),
+        Some(0)
+    );
+    assert!(run("wasm-extract", &[&output, &extracted]).is_err());
+    assert_eq!(fs::read(&extracted).unwrap(), wasm);
+    assert_eq!(run("wasm-remove", &[&output, &cleaned]).unwrap(), Some(0));
+    assert!(
+        crate::wasm_mission::extract(&fs::read(&cleaned).unwrap())
+            .unwrap()
+            .is_none()
+    );
+    for map in [&input, &output, &cleaned] {
+        assert_eq!(
+            ra2_map_assets::map_resources::MapResources::read(map).unwrap(),
+            Some(resources.clone())
+        );
+        fs::remove_file(ra2_map_assets::map_resources::MapResources::sidecar(map)).unwrap();
+        fs::remove_file(map).unwrap();
+    }
+    fs::remove_file(module).unwrap();
+    fs::remove_file(extracted).unwrap();
+    fs::remove_dir(dir).unwrap();
 }

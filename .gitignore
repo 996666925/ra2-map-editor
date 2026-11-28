@@ -32,3 +32,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# npm SDK build and local dependencies
+/crates/*/node_modules/
+/crates/*/*.tgz
+
+/node_modules/

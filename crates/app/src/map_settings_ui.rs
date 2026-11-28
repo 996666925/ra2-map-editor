@@ -828,7 +828,11 @@ fn production_fields(
     let available = inventory.is_some_and(|types| !types.is_empty());
     crate::ui_theme::section_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        crate::ui_theme::section(ui, tr!("限制类型"), &tr!("{count} 项", count = selected.len()));
+        crate::ui_theme::section(
+            ui,
+            tr!("限制类型"),
+            &tr!("{count} 项", count = selected.len()),
+        );
         ui.add_space(8.);
         for restriction in Restriction::ALL {
             let mut enabled = selected.contains(&restriction);
@@ -878,7 +882,8 @@ fn production_fields(
         }
         let outdated = !blocked
             && selected == original
-            && inventory.is_some_and(|types| production_settings::needs_apply(doc, selected, types));
+            && inventory
+                .is_some_and(|types| production_settings::needs_apply(doc, selected, types));
         if outdated {
             ui.colored_label(
                 egui::Color32::YELLOW,
@@ -887,7 +892,6 @@ fn production_fields(
         }
     });
 }
-
 
 pub(crate) fn footprints(scene: &MapScene, doc: &MapDocument) -> Footprints {
     doc.records()

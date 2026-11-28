@@ -1,0 +1,7 @@
+{
+  "kind": "rules",
+  "entry": "src/main.ts",
+  "out": "../dist/rules.wasm",
+  "vars": [],
+  "notify": []
+}

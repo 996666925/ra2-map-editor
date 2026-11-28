@@ -1,0 +1,27 @@
+{
+  "name": "vera-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vera": {
+    "kind": "extension"
+  },
+  "engines": {
+    "node": ">=22.15"
+  },
+  "scripts": {
+    "build": "ra2-mission-project .",
+    "build:rules": "ra2-mission-project rules dist/rules.wasm",
+    "build:ui": "ra2-mission-project ui dist/ui.wasm",
+    "check": "vera20k generate rules && vera20k generate ui && tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@ra2-map-editor/mission-sdk": "0.1.3",
+    "@vera20k/sdk": "0.1.0"
+  },
+  "devDependencies": {
+    "@ra2-map-editor/mission-wasm-build": "0.1.3",
+    "assemblyscript": "0.28.20",
+    "typescript": "5.9.3"
+  }
+}

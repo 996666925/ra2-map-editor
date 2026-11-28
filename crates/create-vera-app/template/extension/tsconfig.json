@@ -1,0 +1,14 @@
+{
+  "extends": "@ra2-map-editor/mission-sdk/tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "rules/src/**/*.ts",
+    "ui/src/**/*.ts",
+    "shared/**/*.ts"
+  ]
+}

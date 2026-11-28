@@ -1,0 +1,7 @@
+{
+  "kind": "ui",
+  "entry": "src/main.ts",
+  "out": "../dist/ui.wasm",
+  "vars": [],
+  "notify": []
+}

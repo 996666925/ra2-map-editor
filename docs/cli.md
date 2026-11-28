@@ -1,6 +1,6 @@
 # 命令行与批处理
 
-[返回 README](../README.md) · [使用指南](user-guide.md) · [任务脚本命令](../examples/missions/README.md#无窗口命令)
+[返回 README](../README.md) · [使用指南](user-guide.md) · [Wasm 扩展命令](#wasm-扩展命令)
 
 以下示例从仓库根目录执行。开发时使用 `cargo run --locked -- <参数>`，Windows 发布版本使用 `target/release/ra2-map-editor.exe <参数>`。
 
@@ -127,8 +127,40 @@ target/release/ra2-map-editor.exe publish --preset examples/presets/publish.exam
 
 可用 `validate --help`、`export --help`、`publish --help` 查看批处理帮助。
 
-## TypeScript 任务命令
+## Wasm 扩展命令
 
-`mission-init` 创建任务源码和辅助类型文件，`mission-build` 转译、执行并校验任务后输出完整地图。运行不需要 Node.js 或 Deno。
+编辑器“扩展系统”与 `create-vera-app` 创建的项目都包含 `package.json`。安装 Node.js >=22.15（含 npm），在扩展项目根目录安装依赖、检查和构建：
 
-这两个命令的参数和输出规则见 [任务脚本说明](../examples/missions/README.md#无窗口命令)，不适用上面的批处理选项表。
+```sh
+cd my-extension
+npm install
+npm run check
+npm run build
+```
+
+新建时统一创建联合扩展项目，根目录 `package.json` 通过 `"vera": { "kind": "extension" }` 标识项目，`rules/` 和 `ui/` 各自保留 `vera.json` 与源码入口，依赖统一安装在根目录。`npm run build` 一次输出 `dist/rules.wasm`、`dist/ui.wasm`，`npm run build:rules` 和 `npm run build:ui` 可分别构建。两次编译全部成功后才更新联合构建的最终产物。`shared/` 用于双方共享的协议、常量和纯数据结构。
+
+`vera.json` 的 `kind` 指定模块类型：`rules` 使用逻辑 ABI，输出 `dist/rules.wasm`；`ui` 使用本机界面 ABI，输出 `dist/ui.wasm`。编辑器创建的联合项目会分别设置 `rules/src/main.ts`、`ui/src/main.ts`，并在模块配置中设置 `out`，根 `package.json` 提供 npm 构建脚本。
+
+编辑器不附带 Node.js 或编译器。`wasm-build` 使用系统 Node.js 调用项目内的 `@ra2-map-editor/mission-wasm-build` 构建器，需要先在扩展项目根目录执行 `npm install`。命令按项目配置构建一个或两个模块，校验后输出 `<extension-project>/dist/rules.wasm`、`dist/ui.wasm` 中对应的产物；联合项目两者全部校验成功后才发布。构建期间若项目配置发生变化，命令会拒绝替换原有产物，需重新构建。也可用 [独立构建工具](../crates/mission-wasm-build/README.md)。
+
+`wasm-check`、`wasm-embed`、`wasm-extract` 和 `wasm-remove` 默认操作 `rules`，用 `--kind ui` 操作界面模块。校验分别使用引擎的逻辑沙箱和客户端沙箱，并遵守地图模块限制。两个模块存放在独立地图区块中，嵌入、提取或移除其中一个不会修改另一个模块。内嵌命令按当前引擎设置最低版本门槛，并保留地图原有的更高要求；最后一个模块移除时，若最低版本仍是编辑器设置的值，则恢复原值。地图输出携带原地图的资源配置，保存期间若输出文件被其他程序修改则拒绝覆盖。提取命令要求使用新的输出文件名。
+
+```powershell
+# 按项目配置构建；联合项目一次生成两个 Wasm
+ra2-map-editor wasm-build my-extension
+
+# 逻辑模块
+ra2-map-editor wasm-check rules.wasm
+ra2-map-editor wasm-embed input.map rules.wasm output.map
+ra2-map-editor wasm-check output.map
+ra2-map-editor wasm-extract output.map extracted-rules.wasm
+
+# 界面模块，可与逻辑模块嵌入同一张地图
+ra2-map-editor wasm-check --kind ui ui.wasm
+ra2-map-editor wasm-embed --kind ui output.map ui.wasm both-modules.map
+ra2-map-editor wasm-check --kind ui both-modules.map
+ra2-map-editor wasm-extract --kind ui both-modules.map extracted-ui.wasm
+ra2-map-editor wasm-remove --kind ui both-modules.map rules-only.map
+ra2-map-editor wasm-remove rules-only.map without-modules.map
+```

@@ -1,0 +1,7 @@
+{
+  "extends": "@vera20k/sdk/tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  }
+}

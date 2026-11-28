@@ -19,7 +19,7 @@ pub(super) struct Workbench {
     resource_error: String,
     pub(super) playtest: bool,
     pub(super) mission: crate::mission_ui::MissionUi,
-    pub(super) mission_script: crate::mission_script_ui::ScriptUi,
+    pub(super) wasm_mission: crate::wasm_mission_ui::WasmMissionUi,
     pub(super) new_map: bool,
     pub(super) random_map: bool,
     pub(super) random_options: ra2_map_document::random_map::RandomMapOptions,
@@ -155,7 +155,7 @@ impl MapView {
             || self.workbench.playtest
             || self.workbench.help
             || self.workbench.mission.open
-            || self.workbench.mission_script.open
+            || self.workbench.wasm_mission.open
             || self.workbench.mission.campaign.open
             || self.workbench.map_settings.open
             || self.editor.structural_refresh
@@ -329,7 +329,7 @@ impl MapView {
                 {
                     if self.editor.check_property_draft() {
                         self.workbench.mission.open = false;
-                        self.workbench.mission_script.open = false;
+                        self.workbench.wasm_mission.open = false;
                         self.workbench.mission.campaign.open = false;
                         self.workbench.map_settings.tab = tab;
                         self.workbench.map_settings.open = true;
@@ -356,23 +356,21 @@ impl MapView {
             .clicked()
         {
             self.workbench.mission.open = true;
-            self.workbench.mission_script.open = false;
+            self.workbench.wasm_mission.open = false;
         }
         if ui
             .add_enabled(
-                self.editor.doc.is_some()
-                    && !self.loading
-                    && !self.editor.stroking
+                !self.editor.stroking
                     && !self.workbench.mission.has_draft()
                     && !self.workbench.map_settings.open,
-                egui::Button::new(tr!("TypeScript 任务")),
+                egui::Button::new(tr!("扩展系统")),
             )
             .clicked()
             && self.editor.check_property_draft()
         {
             self.workbench.mission.open = false;
             self.workbench.mission.campaign.open = false;
-            self.workbench.mission_script.open = true;
+            self.workbench.wasm_mission.open = true;
         }
         if !self.editor.recoveries.is_empty()
             && ui
@@ -942,7 +940,7 @@ impl MapView {
             && (self.workbench.help
                 || self.workbench.playtest
                 || self.workbench.settings
-                || self.workbench.mission_script.open
+                || self.workbench.wasm_mission.open
                 || self.workbench.mission.open && !self.workbench.mission.picking())
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
@@ -952,8 +950,8 @@ impl MapView {
                 self.workbench.playtest = false;
             } else if self.workbench.settings {
                 self.workbench.settings = false;
-            } else if self.workbench.mission_script.open {
-                self.workbench.mission_script.open = false;
+            } else if self.workbench.wasm_mission.open {
+                self.workbench.wasm_mission.open = false;
             } else {
                 self.workbench.mission.open = false;
             }
@@ -1198,10 +1196,10 @@ impl MapView {
                 ui.add_enabled_ui(!draft, |ui| self.editor.playtest_controls(ui));
             });
         }
+        self.workbench
+            .wasm_mission
+            .show(ctx, &mut self.editor, self.scene.as_ref());
         if let Some(scene) = &self.scene {
-            self.workbench
-                .mission_script
-                .show(ctx, &mut self.editor, scene);
             let cell = self
                 .selected
                 .and_then(|i| scene.cells.get(i))

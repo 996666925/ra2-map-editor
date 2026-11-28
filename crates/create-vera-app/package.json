@@ -1,0 +1,22 @@
+{
+  "name": "create-vera-app",
+  "version": "0.1.3",
+  "description": "Scaffold a combined AssemblyScript VERA20k extension project",
+  "type": "module",
+  "bin": {
+    "create-vera-app": "./cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "cli.mjs",
+    "template",
+    "README.md",
+    "test"
+  ],
+  "engines": {
+    "node": ">=22.15"
+  },
+  "license": "GPL-3.0-or-later"
+}
