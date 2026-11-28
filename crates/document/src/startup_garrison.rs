@@ -79,9 +79,12 @@ fn team_house(doc: &MapDocument, record: &Record) -> Result<String> {
     Ok(owner)
 }
 
-// Script 64 seeks the nearest eligible structure, including neutral buildings.
-// An empty civilian building can revert to its civilian owner before the team arrives.
+// Script 64 seeks the nearest eligible structure, including neutral buildings,
+// but advances even when it finds none. Eligibility can change during startup
+// (for example, an empty civilian building reverting ownership), so retry.
 const ENTER_ORDER: &str = "64,0";
+const RETRY_DELAY: &str = "5,1";
+const RETRY: &str = "6,1";
 
 fn other_team_references(doc: &MapDocument, team: &str, field: &str, definition: &str) -> bool {
     mission::ids(doc, Kind::Team).iter().any(|other| {
@@ -102,7 +105,7 @@ fn legacy_script(doc: &MapDocument, record: &Record) -> Option<String> {
         && doc.ini_text(&team, "Name") == name(&deployment.id)
         && entries.len() == 3
         && doc.ini_text(&script, "Name") == name(&deployment.id)
-        && doc.ini_text(&script, "0") == "63,0"
+        && matches!(doc.ini_text(&script, "0").as_str(), "63,0" | "64,0")
         && doc.ini_text(&script, "1") == "2,0"
         && !other_team_references(doc, &team, "Script", &script))
     .then_some(script)
@@ -113,6 +116,8 @@ pub fn update_legacy_script(doc: &mut MapDocument, record: &Record) -> Result<bo
         return Ok(false);
     };
     put(doc, &script, "0", ENTER_ORDER)?;
+    put(doc, &script, "1", RETRY_DELAY)?;
+    put(doc, &script, "2", RETRY)?;
     Ok(true)
 }
 
@@ -225,7 +230,8 @@ pub fn set(doc: &mut MapDocument, record_id: u64, garrison: Option<(&str, u16)>)
             put(doc, &team, key, value)?;
         }
         put(doc, &script, "0", ENTER_ORDER)?;
-        put(doc, &script, "1", "2,0")?;
+        put(doc, &script, "1", RETRY_DELAY)?;
+        put(doc, &script, "2", RETRY)?;
         put(doc, &force, "0", &format!("{count},{infantry}"))?;
         put(
             doc,
@@ -360,15 +366,22 @@ mod tests {
         assert_eq!(reopened.ini_text(&format!("{id}F"), "0"), "5,E2");
         let script = format!("{id}S");
         assert_eq!(reopened.ini_text(&script, "0"), ENTER_ORDER);
+        assert_eq!(reopened.ini_text(&script, "1"), RETRY_DELAY);
+        assert_eq!(reopened.ini_text(&script, "2"), RETRY);
         let mut legacy = reopened;
-        put(&mut legacy, &script, "0", "63,0").unwrap();
+        put(&mut legacy, &script, "0", "64,0").unwrap();
+        put(&mut legacy, &script, "1", "2,0").unwrap();
+        legacy.set_ini(&script, "2", None).unwrap();
         legacy.commit("older generated script");
         assert!(has_legacy_script(&legacy, &before));
         assert!(update_legacy_script(&mut legacy, &before).unwrap());
         legacy.commit("update script");
         assert_eq!(legacy.ini_text(&script, "0"), ENTER_ORDER);
+        assert_eq!(legacy.ini_text(&script, "1"), RETRY_DELAY);
+        assert_eq!(legacy.ini_text(&script, "2"), RETRY);
         assert!(legacy.undo());
-        assert_eq!(legacy.ini_text(&script, "0"), "63,0");
+        assert_eq!(legacy.ini_text(&script, "0"), "64,0");
+        assert_eq!(legacy.ini_text(&script, "1"), "2,0");
         put(&mut legacy, &script, "1", "5,0").unwrap();
         assert!(!update_legacy_script(&mut legacy, &before).unwrap());
         assert!(doc.undo());
