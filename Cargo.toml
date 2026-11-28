@@ -9,7 +9,7 @@ exclude = ["vendor/vera20k"]
 [workspace.package]
 version = "0.3.5"
 edition = "2024"
-rust-version = "1.98"
+rust-version = "1.100"
 publish = false
 
 [workspace.dependencies]

@@ -49,7 +49,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.98.0
+          toolchain: 1.100.1
           targets: ${{ matrix.target }}
 
       - name: Install Linux build dependencies

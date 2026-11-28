@@ -26,7 +26,7 @@
 
 ### 1. 准备环境
 
-- Rust **1.98.0**（含 Cargo），版本由 [rust-toolchain.toml](rust-toolchain.toml) 固定。
+- Rust **1.100.1**（含 Cargo），版本由 [rust-toolchain.toml](rust-toolchain.toml) 固定。
 - Git 和对应平台的编译工具；Windows 需要 **MSVC C++ 构建工具**。
 - 本机《尤里的复仇》或相应 Mod 的游戏资源目录。
 - 如需试玩，另行准备 `vera20k.exe`。
